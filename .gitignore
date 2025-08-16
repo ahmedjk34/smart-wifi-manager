@@ -1,0 +1,26 @@
+# Ignore CMake build folders and cache
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake-cache/
+*.cmake
+
+# IDE files
+.vscode/
+.idea/
+
+# Compiled source
+*.out
+*.o
+*.obj
+*.so
+*.a
+*.dll
+*.exe
+
+# Log files
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
