@@ -25,13 +25,13 @@
   */
  struct SmartWifiRemoteStation : public WifiRemoteStation
  {
-     uint32_t m_timer;
-     uint32_t m_success;
-     uint32_t m_failed;
-     bool m_recovery;
-     uint32_t m_timerTimeout;
-     uint32_t m_successThreshold;
-     uint8_t m_rate;
+    uint32_t m_timer;            // counts transmissions since last rate change attempt
+    uint32_t m_success;          // consecutive successes (resets on failure or rate change)
+    uint32_t m_failed;           // consecutive failures since last success
+    bool     m_recovery;         // true after we’ve just increased rate until the first success
+    uint32_t m_timerTimeout;     // dynamic timer threshold to trigger rate-up
+    uint32_t m_successThreshold; // dynamic success threshold to trigger rate-up
+    uint8_t  m_rate;             // index into the supported-rate table (0 = lowest)
  };
  
  NS_OBJECT_ENSURE_REGISTERED(SmartWifiManager);
