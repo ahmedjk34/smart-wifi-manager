@@ -1,0 +1,53 @@
+
+================================================================================
+PROTOCOL COMPARISON SUMMARY
+AARF vs SmartV3
+================================================================================
+Analysis Date: 2025-08-17 12:21:45
+User: ahmedjk34
+
+OVERALL PERFORMANCE COMPARISON
+--------------------------------------------------
+THROUGHPUT WINNER: AARF
+   • AARF: 2.626 Mbps (avg)
+   • SmartV3: 2.452 Mbps (avg)
+   • Improvement: 7.1% better
+
+PACKET LOSS WINNER: AARF
+   • AARF: 69.847% loss (avg)
+   • SmartV3: 70.691% loss (avg)
+   • Improvement: 1.2% better
+
+DELAY WINNER: AARF
+   • AARF: 266.953 ms (avg)
+   • SmartV3: 291.623 ms (avg)
+   • Improvement: 8.5% better
+
+SCENARIO-SPECIFIC ANALYSIS
+--------------------------------------------------
+Performance by Distance:
+   • 1m: AARF wins (4.57 vs 4.36 Mbps)
+   • 40m: AARF wins (3.31 vs 3.00 Mbps)
+   • 120m: Tie (0.00 Mbps)
+
+Performance by Traffic Rate:
+   • 11Mbps: AARF wins (2.04 vs 1.99 Mbps)
+   • 1Mbps: Tie (0.19 Mbps)
+   • 54Mbps: AARF wins (5.65 vs 5.18 Mbps)
+
+KEY INSIGHTS
+--------------------------------------------------
+Overall Scenario Performance:
+   • AARF: 3/12 scenarios won (25.0%)
+   • SmartV3: 3/12 scenarios won (25.0%)
+   • Ties: 6/12 scenarios (50.0%)
+
+RECOMMENDATIONS
+--------------------------------------------------
+Both protocols show similar performance
+   • Choice may depend on specific use case requirements
+   • Consider other factors like complexity, power consumption, etc.
+
+Detailed results and plots available in:
+   \\wsl.localhost\Debian\home\ahmedjk34\ns-allinone-3.41\ns-3.41\python_files\test_side_by_side\AARF_vs_SmartV3
+================================================================================
