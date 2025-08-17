@@ -100,6 +100,7 @@ set(source_files
     model/rate-control/rrpaa-wifi-manager.cc
     model/rate-control/thompson-sampling-wifi-manager.cc
     model/rate-control/smart-wifi-manager-v1.cc
+    model/rate-control/smart-wifi-manager-v2.cc
     model/recipient-block-ack-agreement.cc
     model/reduced-neighbor-report.cc
     model/simple-frame-capture-model.cc
@@ -254,6 +255,7 @@ set(header_files
     model/rate-control/rrpaa-wifi-manager.h
     model/rate-control/thompson-sampling-wifi-manager.h
     model/rate-control/smart-wifi-manager-v1.h
+    model/rate-control/smart-wifi-manager-v2.h
     model/recipient-block-ack-agreement.h
     model/reduced-neighbor-report.h
     model/reference/error-rate-tables.h
