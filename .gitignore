@@ -24,3 +24,7 @@ cmake-cache/
 # OS files
 .DS_Store
 Thumbs.db
+
+logged-results
+
+smart-v3-logged-ALL.csv
