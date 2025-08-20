@@ -237,41 +237,80 @@ SmartWifiManagerXgb::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWi
     
     SmartWifiManagerXgbState* station = static_cast<SmartWifiManagerXgbState*>(st);
     
-    // Check if it's time for ML inference
-    Time now = Simulator::Now();
-    if ((now - station->lastInferenceTime).GetMilliSeconds() > m_inferencePeriod ||
-        station->lastInferenceTime == Seconds(0))
+    // Get maximum available rate index
+    uint32_t maxRateIndex = GetNSupported(st) - 1;
+    
+    // Ensure current rate index is valid
+    if (station->currentRateIndex > maxRateIndex)
     {
+        station->currentRateIndex = std::min(m_fallbackRate, maxRateIndex);
+        std::cout << "[WARN] Reset invalid rate index to fallback: " << station->currentRateIndex << std::endl;
+    }
+    
+    // Check if it's time for ML inference (but limit frequency to prevent hanging)
+    Time now = Simulator::Now();
+    static Time lastGlobalInference = Seconds(0);
+    
+    // Only do ML inference every 100ms globally to prevent overload
+    if ((now - lastGlobalInference).GetMilliSeconds() > 100 &&
+        (now - station->lastInferenceTime).GetMilliSeconds() > m_inferencePeriod)
+    {
+        lastGlobalInference = now;
+        
+        std::cout << "[INFO] Starting ML inference at " << now.GetSeconds() << "s" << std::endl;
+        
         // Extract features and run ML inference
         std::vector<double> features = ExtractFeatures(st);
         InferenceResult result = RunMLInference(features);
         
         m_mlInferences++;
         
-        if (result.success && result.rateIdx < GetNSupported(st))
+        if (result.success)
         {
-            station->currentRateIndex = result.rateIdx;
-            station->lastInferenceTime = now;
-            NS_LOG_DEBUG("ML predicted rate index: " << result.rateIdx 
-                        << " latency: " << result.latencyMs << "ms");
+            // Validate rate index bounds
+            if (result.rateIdx <= maxRateIndex)
+            {
+                station->currentRateIndex = result.rateIdx;
+                station->lastInferenceTime = now;
+                std::cout << "[SUCCESS] ML predicted rate index: " << result.rateIdx 
+                          << " (max available: " << maxRateIndex << ")" << std::endl;
+            }
+            else
+            {
+                // Rate index out of bounds, use fallback
+                m_mlFailures++;
+                station->currentRateIndex = std::min(m_fallbackRate, maxRateIndex);
+                std::cout << "[WARN] ML predicted invalid rate index " << result.rateIdx 
+                          << " (max=" << maxRateIndex << "), using fallback: " << station->currentRateIndex << std::endl;
+            }
         }
         else
         {
             m_mlFailures++;
             if (m_enableFallback)
             {
-                station->currentRateIndex = std::min(m_fallbackRate, static_cast<uint32_t>(GetNSupported(st) - 1));
+                station->currentRateIndex = std::min(m_fallbackRate, maxRateIndex);
             }
-            NS_LOG_WARN("ML inference failed: " << result.error 
-                       << " using fallback rate: " << station->currentRateIndex);
+            std::cout << "[ERROR] ML inference failed: " << result.error 
+                      << ", using fallback rate: " << station->currentRateIndex << std::endl;
         }
+    }
+    
+    // Final safety check
+    if (station->currentRateIndex > maxRateIndex)
+    {
+        station->currentRateIndex = maxRateIndex;
+        std::cout << "[EMERGENCY] Rate index correction to: " << station->currentRateIndex << std::endl;
     }
     
     WifiMode mode = GetSupported(st, station->currentRateIndex);
     uint64_t rate = mode.GetDataRate(allowedWidth);
     
+    // Update traced value
     if (m_currentRate != rate)
     {
+        std::cout << "[INFO] Rate changed from " << m_currentRate << " to " << rate 
+                  << " (index " << station->currentRateIndex << ")" << std::endl;
         m_currentRate = rate;
     }
     
@@ -320,11 +359,13 @@ SmartWifiManagerXgb::RunMLInference(const std::vector<double>& features) const
         return result;
     }
     
-    // Build command
+    // Build command with timeout and consistent format
     std::ostringstream cmd;
-    cmd << "python3 " << m_pythonScript
+    cmd << "timeout 3s /home/ahmedjk34/myenv/bin/python3 " << m_pythonScript
         << " --model " << m_modelPath
         << " --scaler " << m_scalerPath
+        << " --output-format json"  // Use JSON consistently
+        << " --validate-range"
         << " --features";
     
     for (const auto& feature : features)
@@ -332,81 +373,109 @@ SmartWifiManagerXgb::RunMLInference(const std::vector<double>& features) const
         cmd << " " << feature;
     }
     
-    cmd << " --output-format json";
-    
     if (m_enableProbabilities)
     {
         cmd << " --probabilities";
     }
     
-    if (m_enableValidation)
-    {
-        cmd << " --validate-range";
-    }
+    // Redirect stderr to stdout to capture all output
+    cmd << " 2>&1";
+    
+    // Debug output
+    std::cout << "[DEBUG ML] Executing: " << cmd.str() << std::endl;
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
     
     // Execute command
     FILE* pipe = popen(cmd.str().c_str(), "r");
     if (!pipe)
     {
         result.error = "Failed to execute Python command";
+        std::cout << "[ERROR ML] " << result.error << std::endl;
         return result;
     }
     
     std::string output;
-    char buffer[256];
+    char buffer[1024];
+    
+    // Read with timeout simulation (basic approach)
+    int chars_read = 0;
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
     {
         output += buffer;
+        chars_read++;
+        
+        // Simple protection against infinite loops
+        if (chars_read > 100) {
+            std::cout << "[WARNING ML] Too much output, breaking" << std::endl;
+            break;
+        }
     }
     
     int status = pclose(pipe);
     
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    std::cout << "[DEBUG ML] Command completed in " << duration.count() 
+              << "ms with status: " << status << std::endl;
+    std::cout << "[DEBUG ML] Raw output: '" << output << "'" << std::endl;
+    
     if (status != 0)
     {
-        result.error = "Python script failed with status: " + std::to_string(status);
+        result.error = "Python script failed with status: " + std::to_string(status) + ", output: " + output;
+        std::cout << "[ERROR ML] " << result.error << std::endl;
         return result;
     }
     
-    // Parse JSON output (simplified parsing)
-    size_t rateIdxPos = output.find("\"rateIdx\":");
-    size_t latencyPos = output.find("\"latencyMs\":");
-    
-    if (rateIdxPos != std::string::npos && latencyPos != std::string::npos)
+    // Try to parse JSON output
+    try
     {
-        // Extract rateIdx
-        size_t start = output.find(":", rateIdxPos) + 1;
-        size_t end = output.find(",", start);
-        if (end == std::string::npos) end = output.find("}", start);
+        // Look for JSON structure
+        size_t json_start = output.find("{");
+        size_t json_end = output.rfind("}");
         
-        try
+        if (json_start == std::string::npos || json_end == std::string::npos)
         {
-            result.rateIdx = std::stoi(output.substr(start, end - start));
-        }
-        catch (const std::exception& e)
-        {
-            result.error = "Failed to parse rateIdx from JSON";
+            result.error = "No JSON found in output: " + output;
+            std::cout << "[ERROR ML] " << result.error << std::endl;
             return result;
         }
         
-        // Extract latency
-        start = output.find(":", latencyPos) + 1;
-        end = output.find(",", start);
-        if (end == std::string::npos) end = output.find("}", start);
+        std::string json_str = output.substr(json_start, json_end - json_start + 1);
+        std::cout << "[DEBUG ML] Extracted JSON: " << json_str << std::endl;
         
-        try
-        {
-            result.latencyMs = std::stod(output.substr(start, end - start));
-        }
-        catch (const std::exception& e)
-        {
-            result.latencyMs = 0.0; // Non-critical
-        }
+        // Parse JSON manually (simple approach)
+        size_t rateIdxPos = json_str.find("\"rateIdx\":");
         
-        result.success = true;
+        if (rateIdxPos != std::string::npos)
+        {
+            // Extract rateIdx
+            size_t start = json_str.find(":", rateIdxPos) + 1;
+            size_t end = json_str.find(",", start);
+            if (end == std::string::npos) end = json_str.find("}", start);
+            
+            std::string rate_str = json_str.substr(start, end - start);
+            // Remove whitespace
+            rate_str.erase(0, rate_str.find_first_not_of(" \t"));
+            rate_str.erase(rate_str.find_last_not_of(" \t") + 1);
+            
+            result.rateIdx = std::stoi(rate_str);
+            result.latencyMs = duration.count();
+            result.success = true;
+            
+            std::cout << "[SUCCESS ML] Parsed rate index: " << result.rateIdx << std::endl;
+        }
+        else
+        {
+            result.error = "Could not find rateIdx in JSON: " + json_str;
+            std::cout << "[ERROR ML] " << result.error << std::endl;
+        }
     }
-    else
+    catch (const std::exception& e)
     {
-        result.error = "Failed to parse JSON output";
+        result.error = "JSON parsing failed: " + std::string(e.what()) + ", output: " + output;
+        std::cout << "[ERROR ML] " << result.error << std::endl;
     }
     
     return result;
