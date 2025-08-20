@@ -28,3 +28,5 @@ Thumbs.db
 logged-results
 
 smart-v3-logged-ALL.csv
+
+venv/
