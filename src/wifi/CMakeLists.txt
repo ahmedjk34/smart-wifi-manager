@@ -103,6 +103,8 @@ set(source_files
     model/rate-control/smart-wifi-manager-v2.cc
     model/rate-control/smart-wifi-manager-v3.cc
     model/rate-control/smart-wifi-manager-v3-logged.cc
+    model/rate-control/smart-wifi-manager-xgb.cc
+    model/rate-control/smart-wifi-manager-rf.cc
     model/recipient-block-ack-agreement.cc
     model/reduced-neighbor-report.cc
     model/simple-frame-capture-model.cc
@@ -260,6 +262,9 @@ set(header_files
     model/rate-control/smart-wifi-manager-v2.h
     model/rate-control/smart-wifi-manager-v3.h
     model/rate-control/smart-wifi-manager-v3-logged.h
+    model/rate-control/smart-wifi-manager-ml-common.h
+    model/rate-control/smart-wifi-manager-xgb.h
+    model/rate-control/smart-wifi-manager-rf.h
     model/recipient-block-ack-agreement.h
     model/reduced-neighbor-report.h
     model/reference/error-rate-tables.h
