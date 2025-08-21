@@ -30,6 +30,12 @@ void RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
               << " new datarate=" << rate << " old datarate=" << oldRate << std::endl;
 }
 
+// Correct callback signature for PhyRxEnd
+void PhyRxEndTrace(std::string context, Ptr<const Packet> packet)
+{
+    std::cout << "[DEBUG PHY] Packet received at " << context << std::endl;
+}
+
 void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::string& modelType)
 {
     // Create nodes
@@ -44,29 +50,34 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     interfererApNodes.Create(tc.numInterferers);
     interfererStaNodes.Create(tc.numInterferers);
 
-    // Channel and PHY
+    // Channel and PHY: Add realistic propagation loss
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
+    channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+    channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel");
+    // Optionally, add fading:
+    // channel.AddPropagationLoss("ns3::NakagamiPropagationLossModel");
+
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
-    
+
     // Use SmartWifiManagerRf with different model types
     wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                  "ModelType", StringValue(modelType));
-    
+
     // Set model path based on type
     if (modelType == "oracle")
     {
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
-                                     "ModelPath", StringValue("step3_rf_oracle_best_rateldx_model.joblib"),
+                                     "ModelPath", StringValue("step3_rf_oracle_best_rateIdx_model_FIXED.joblib"),
                                      "ModelType", StringValue("oracle"));
     }
     else if (modelType == "v3")
     {
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
-                                     "ModelPath", StringValue("step3_rf_v3_rateldx_model.joblib"),
+                                     "ModelPath", StringValue("step3_rf_v3_rateIdx_model_FIXED.joblib"),
                                      "ModelType", StringValue("v3"));
     }
 
@@ -183,6 +194,8 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     // Enable Rate trace
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
                 MakeCallback(&RateTrace));
+    // Correct PHY callback (no SNR, just packet):
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd", MakeCallback(&PhyRxEndTrace));
 
     // Run simulation
     Simulator::Stop(Seconds(20.0));
@@ -238,11 +251,11 @@ int main(int argc, char *argv[])
     std::vector<BenchmarkTestCase> testCases;
 
     // Fill test cases: distances, speeds, interferers, packet sizes, rates
-    std::vector<double> distances = { 1.0, 40.0, 120.0 };      // 3
-    std::vector<double> speeds = { 0.0, 10.0 };                // 2
-    std::vector<uint32_t> interferers = { 0, 3 };              // 2
-    std::vector<uint32_t> packetSizes = { 256, 1500 };         // 2
-    std::vector<std::string> trafficRates = { "1Mbps", "11Mbps", "54Mbps" }; // 3
+    std::vector<double> distances = { 120.0 };      // e.g. 120m
+    std::vector<double> speeds = { 0.0, 10.0 };     // 0 or 10 m/s
+    std::vector<uint32_t> interferers = { 0, 3 };   // None or 3 interferers
+    std::vector<uint32_t> packetSizes = { 1500 };   // 1500 bytes
+    std::vector<std::string> trafficRates = { "1Mbps", "11Mbps", "54Mbps" };
 
     for (double d : distances)
     {
@@ -272,7 +285,7 @@ int main(int argc, char *argv[])
 
     // Test both models
     std::vector<std::string> modelTypes = {"oracle", "v3"};
-    
+
     for (const std::string& modelType : modelTypes)
     {
         std::string csvFilename = "smartrf-benchmark.csv";
