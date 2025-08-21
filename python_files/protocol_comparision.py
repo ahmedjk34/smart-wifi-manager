@@ -66,6 +66,8 @@ class ProtocolComparisonAnalyzer:
                 return 'SmartV4'
             elif 'xgb' in filename.lower():
                 return 'SmartXGD'
+            elif 'rf' in filename.lower():
+                return 'SmartRF'
             else:
                 return 'Smart'
         else:
@@ -791,7 +793,7 @@ def main():
     try:
         # CSV files in parent directory
         protocol1_csv = "aarf-benchmark.csv"
-        protocol2_csv = "smartxgb-benchmark.csv"
+        protocol2_csv = "smartrf-benchmark.csv"
         
         analyzer = ProtocolComparisonAnalyzer(protocol1_csv, protocol2_csv)
         analyzer.run_complete_comparison()
