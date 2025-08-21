@@ -12,6 +12,8 @@ set(source_files
     helper/wifi-mac-helper.cc
     helper/wifi-radio-energy-model-helper.cc
     helper/yans-wifi-helper.cc
+    helper/performance-based-parameter-generator.cc
+    helper/decision-count-controller.cc
     model/addba-extension.cc
     model/adhoc-wifi-mac.cc
     model/ampdu-subframe-header.cc
@@ -171,6 +173,8 @@ set(header_files
     helper/wifi-mac-helper.h
     helper/wifi-radio-energy-model-helper.h
     helper/yans-wifi-helper.h
+    helper/performance-based-parameter-generator.h
+    helper/decision-count-controller.h
     model/addba-extension.h
     model/adhoc-wifi-mac.h
     model/ampdu-subframe-header.h
