@@ -28,12 +28,17 @@ void RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
               << " new datarate=" << rate << " old datarate=" << oldRate << std::endl;
     
     // *** COUNT DECISIONS ***
+    // FIX: Use IncrementSuccess or IncrementFailure based on your logic
+    // Here, we assume every RateTrace is a "decision" (success or not)
+    // If you have packet outcome info, call IncrementSuccess/Failure accordingly.
     if (g_decisionController) {
-        g_decisionController->IncrementDecisionCount();
+        g_decisionController->IncrementSuccess();
+        // OR if you want to count failures as well, use IncrementFailure()
+        // g_decisionController->IncrementFailure();
     }
 }
 
-void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDecisions)  // *** FIXED: Added output parameter ***
+void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDecisions)
 {
     // Reset decision controller for this scenario
     DecisionCountController controller(tc.targetDecisions, 120); // 2 min max
@@ -44,7 +49,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     
     std::cout << "  Target: " << tc.targetDecisions << " decisions (" << tc.category << ")" << std::endl;
 
-    // *** REST OF YOUR ORIGINAL CODE WITH PARAMETER CHANGES ***
+    // --- Simulation Setup ---
     NodeContainer wifiStaNodes;
     wifiStaNodes.Create(1);
     NodeContainer wifiApNode;
@@ -52,7 +57,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
 
     NodeContainer interfererApNodes;
     NodeContainer interfererStaNodes;
-    interfererApNodes.Create(tc.interferers);  // *** CHANGED FROM tc.numInterferers ***
+    interfererApNodes.Create(tc.interferers);
     interfererStaNodes.Create(tc.interferers);
 
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
@@ -62,7 +67,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
     wifi.SetRemoteStationManager("ns3::SmartWifiManagerV3Logged", 
-        "LogFilePath", StringValue(logPath));  // *** USE PERFORMANCE-BASED LOG PATH ***
+        "LogFilePath", StringValue(logPath));
         
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns3-80211g");
@@ -79,7 +84,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
 
-    // Mobility - same logic but using performance-calculated distance
+    // Mobility for AP
     MobilityHelper apMobility;
     Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
     apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -87,12 +92,13 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     apMobility.Install(wifiApNode);
 
-    if (tc.speed > 0.0)  // *** CHANGED FROM tc.staSpeed ***
+    // Mobility for STA
+    if (tc.speed > 0.0)
     {
         MobilityHelper mobMove;
         mobMove.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
         Ptr<ListPositionAllocator> movingAlloc = CreateObject<ListPositionAllocator>();
-        movingAlloc->Add(Vector(tc.distance, 0.0, 0.0)); // *** CHANGED FROM tc.staDistance ***
+        movingAlloc->Add(Vector(tc.distance, 0.0, 0.0));
         mobMove.SetPositionAllocator(movingAlloc);
         mobMove.Install(wifiStaNodes);
         wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(Vector(tc.speed, 0.0, 0.0));
@@ -179,7 +185,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     Simulator::Stop(Seconds(120.0));
     Simulator::Run();
 
-    // Results calculation (same as your original)
+    // Results calculation
     double throughput = 0;
     double packetLoss = 0;
     double avgDelay = 0;
@@ -206,7 +212,8 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     }
 
     // *** CAPTURE DECISION COUNT BEFORE NULLIFYING POINTER ***
-    collectedDecisions = controller.GetDecisionCount();
+    // FIX: Use GetSuccessCount + GetFailureCount
+    collectedDecisions = controller.GetSuccessCount() + controller.GetFailureCount();
 
     // *** ENHANCED CSV OUTPUT ***
     csv << "\"" << tc.scenarioName << "\","
@@ -219,7 +226,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
         << tc.targetSnrMin << ","
         << tc.targetSnrMax << ","
         << tc.targetDecisions << ","
-        << collectedDecisions << ","  // *** USE CAPTURED VALUE ***
+        << collectedDecisions << ","
         << simulationTime << ","
         << throughput << ","
         << packetLoss << ","
@@ -261,11 +268,9 @@ int main(int argc, char *argv[])
         std::cout << "Running scenario " << (i + 1) << "/" << testCases.size() 
                   << ": " << tc.scenarioName << std::endl;
         
-        // *** FIXED: Properly capture decision count ***
         uint32_t collectedDecisions = 0;
         RunTestCase(tc, csv, collectedDecisions);
         
-        // Track statistics using the captured value
         categoryStats[tc.category]++;
         decisionCountsByCategory[tc.category].push_back(collectedDecisions);
     }
@@ -281,7 +286,7 @@ int main(int argc, char *argv[])
         for (uint32_t count : counts) categoryTotal += count;
         totalDecisions += categoryTotal;
         
-        double avgDecisions = counts.size() > 0 ? double(categoryTotal) / counts.size() : 0.0;  // *** FIXED: Added safety check ***
+        double avgDecisions = counts.size() > 0 ? double(categoryTotal) / counts.size() : 0.0;
         
         std::cout << "Category " << category.first << ": " 
                   << category.second << " scenarios, "
