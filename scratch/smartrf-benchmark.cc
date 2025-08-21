@@ -13,6 +13,19 @@
 
 using namespace ns3;
 
+// --- BEGIN PATCH ---
+// These extern "C" functions allow the manager to log features and picked rates.
+extern "C" void LogFeaturesAndRate(const std::vector<double>& features, uint32_t rateIdx, uint64_t rate)
+{
+    std::cout << "[ML DEBUG] Features sent to ML: ";
+    for (size_t i = 0; i < features.size(); ++i)
+    {
+        std::cout << features[i] << " ";
+    }
+    std::cout << "-> Picked Rate Index: " << rateIdx << " (Rate: " << rate << "bps)" << std::endl;
+}
+// --- END PATCH ---
+
 // Struct for describing a single test case
 struct BenchmarkTestCase
 {
@@ -251,11 +264,11 @@ int main(int argc, char *argv[])
     std::vector<BenchmarkTestCase> testCases;
 
     // Fill test cases: distances, speeds, interferers, packet sizes, rates
-    std::vector<double> distances = { 120.0 };      // e.g. 120m
-    std::vector<double> speeds = { 0.0, 10.0 };     // 0 or 10 m/s
-    std::vector<uint32_t> interferers = { 0, 3 };   // None or 3 interferers
-    std::vector<uint32_t> packetSizes = { 1500 };   // 1500 bytes
-    std::vector<std::string> trafficRates = { "1Mbps", "11Mbps", "54Mbps" };
+    std::vector<double> distances = { 1.0, 40.0, 120.0 };      // 3
+    std::vector<double> speeds = { 0.0, 10.0 };                // 2
+    std::vector<uint32_t> interferers = { 0, 3 };              // 2
+    std::vector<uint32_t> packetSizes = { 256, 1500 };         // 2
+    std::vector<std::string> trafficRates = { "1Mbps", "11Mbps", "54Mbps" }; // 3
 
     for (double d : distances)
     {
