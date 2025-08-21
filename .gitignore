@@ -26,6 +26,7 @@ cmake-cache/
 Thumbs.db
 
 logged-results
+balanced-results
 
 smart-v3-logged-ALL.csv
 
