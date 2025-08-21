@@ -5,8 +5,6 @@
 #include "ns3/internet-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/flow-monitor-module.h"
-#include <iomanip>
-
 
 // *** INCLUDE THE 3 NEW FILES HERE ***
 #include "ns3/performance-based-parameter-generator.h"
@@ -17,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <iomanip>
 
 using namespace ns3;
 
@@ -34,7 +33,7 @@ void RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
     }
 }
 
-void RunTestCase(const ScenarioParams& tc, std::ofstream& csv)  // *** CHANGED FROM BenchmarkTestCase ***
+void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDecisions)  // *** FIXED: Added output parameter ***
 {
     // Reset decision controller for this scenario
     DecisionCountController controller(tc.targetDecisions, 120); // 2 min max
@@ -206,6 +205,9 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv)  // *** CHANGED F
         }
     }
 
+    // *** CAPTURE DECISION COUNT BEFORE NULLIFYING POINTER ***
+    collectedDecisions = controller.GetDecisionCount();
+
     // *** ENHANCED CSV OUTPUT ***
     csv << "\"" << tc.scenarioName << "\","
         << tc.category << ","
@@ -217,7 +219,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv)  // *** CHANGED F
         << tc.targetSnrMin << ","
         << tc.targetSnrMax << ","
         << tc.targetDecisions << ","
-        << controller.GetDecisionCount() << ","
+        << collectedDecisions << ","  // *** USE CAPTURED VALUE ***
         << simulationTime << ","
         << throughput << ","
         << packetLoss << ","
@@ -225,7 +227,7 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv)  // *** CHANGED F
         << rxPackets << ","
         << txPackets << "\n";
 
-    std::cout << "  Collected: " << controller.GetDecisionCount() << "/" << tc.targetDecisions 
+    std::cout << "  Collected: " << collectedDecisions << "/" << tc.targetDecisions 
               << " decisions in " << simulationTime << "s" << std::endl;
 
     Simulator::Destroy();
@@ -259,13 +261,13 @@ int main(int argc, char *argv[])
         std::cout << "Running scenario " << (i + 1) << "/" << testCases.size() 
                   << ": " << tc.scenarioName << std::endl;
         
-        RunTestCase(tc, csv);
+        // *** FIXED: Properly capture decision count ***
+        uint32_t collectedDecisions = 0;
+        RunTestCase(tc, csv, collectedDecisions);
         
-        // Track statistics
+        // Track statistics using the captured value
         categoryStats[tc.category]++;
-        if (g_decisionController) {
-            decisionCountsByCategory[tc.category].push_back(g_decisionController->GetDecisionCount());
-        }
+        decisionCountsByCategory[tc.category].push_back(collectedDecisions);
     }
 
     csv.close();
@@ -279,7 +281,7 @@ int main(int argc, char *argv[])
         for (uint32_t count : counts) categoryTotal += count;
         totalDecisions += categoryTotal;
         
-        double avgDecisions = double(categoryTotal) / counts.size();
+        double avgDecisions = counts.size() > 0 ? double(categoryTotal) / counts.size() : 0.0;  // *** FIXED: Added safety check ***
         
         std::cout << "Category " << category.first << ": " 
                   << category.second << " scenarios, "
