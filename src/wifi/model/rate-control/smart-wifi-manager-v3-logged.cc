@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <iomanip>
 
 #include "ns3/string.h"
 #include "ns3/pointer.h"
 #include "ns3/boolean.h"
 #include "ns3/uinteger.h"
 #include "ns3/double.h"
+
 
 #define Min(a,b) ((a)<(b)?(a):(b))
 #define Max(a,b) ((a)>(b)?(a):(b))
@@ -204,15 +206,22 @@ SmartWifiManagerV3Logged::DoInitialize ()
   if (!m_logFilePath.empty () && !m_logHeaderWritten)
     {
       m_logFile.open (m_logFilePath, std::ios::out | std::ios::trunc);
-      // Write header
+      if (!m_logFile.is_open()) {
+        NS_LOG_ERROR("Failed to open log file: " << m_logFilePath);
+        return;
+      }
+      
+      // *** CRITICAL: Write header with consistent column order ***
       m_logFile << "time,stationId,rateIdx,phyRate,lastSnr,snrFast,snrSlow,"
                    "shortSuccRatio,medSuccRatio,consecSuccess,consecFailure,"
                    "severity,confidence,T1,T2,T3,decisionReason,packetSuccess,"
                    "offeredLoad,queueLen,retryCount,channelWidth,mobilityMetric,snrVariance\n";
+      m_logFile.flush();  // Ensure header is written immediately
       m_logHeaderWritten = true;
     }
 }
 
+// *** FIX 1: Add rate validation in DoCreateStation ***
 WifiRemoteStation *
 SmartWifiManagerV3Logged::DoCreateStation () const
 {
@@ -222,6 +231,21 @@ SmartWifiManagerV3Logged::DoCreateStation () const
   st->m_histMed.resize (m_historyMedLen, true);
   st->m_snrSamples.reserve (200);
   st->m_node = GetObject<Node> ();
+  
+  // *** CRITICAL: Initialize rate to safe value ***
+  st->m_rate = 0;  // Start at lowest rate (index 0)
+  
+  // *** CRITICAL: Initialize thresholds to safe values ***
+  st->m_T1 = 10.0;
+  st->m_T2 = 15.0;
+  st->m_T3 = 25.0;
+  st->m_severity = 0.0;
+  st->m_confidence = 0.0;
+  st->m_lastSnr = 0.0;
+  st->m_snrFast = 0.0;
+  st->m_snrSlow = 0.0;
+  st->m_snrInit = false;
+  
   return st;
 }
 
@@ -236,15 +260,43 @@ SmartWifiManagerV3Logged::LogDecision (SmartWifiRemoteStationV3Logged *st, int d
   else
     stationId << reinterpret_cast<uintptr_t> (st);
 
-  int rateIdx = static_cast<int> (st->m_rate);
+  // *** CRITICAL FIX 1: VALIDATE AND CLAMP RATE INDEX ***
+  uint8_t maxRateIdx = GetNSupported(st) - 1;
+  uint8_t validatedRateIdx = std::min(st->m_rate, maxRateIdx);
+  
+  // Extra safety: ensure it's within 802.11g bounds (0-7)
+  if (validatedRateIdx > 7) {
+    NS_LOG_WARN("Rate index " << (int)validatedRateIdx << " exceeds 802.11g limit, clamping to 7");
+    validatedRateIdx = 7;
+  }
+  
+  int rateIdx = static_cast<int>(validatedRateIdx);
+
+  // *** CRITICAL FIX 2: SAFE PHY RATE CALCULATION ***
   uint64_t phyRate = 0;
   uint16_t channelWidth = GetChannelWidth (st);
-  phyRate = GetSupported (st, st->m_rate).GetDataRate (channelWidth);
+  
+  try {
+    if (validatedRateIdx < GetNSupported(st)) {
+      phyRate = GetSupported(st, validatedRateIdx).GetDataRate(channelWidth);
+    } else {
+      // Fallback to lowest rate if something goes wrong
+      phyRate = GetSupported(st, 0).GetDataRate(channelWidth);
+      NS_LOG_WARN("Invalid rate index, using fallback rate");
+    }
+  } catch (...) {
+    // Ultimate fallback - use standard 802.11g rates
+    const uint64_t G_RATES[8] = {1000000, 2000000, 5500000, 6000000, 9000000, 11000000, 12000000, 18000000};
+    phyRate = (validatedRateIdx < 8) ? G_RATES[validatedRateIdx] : G_RATES[0];
+    NS_LOG_WARN("Exception in rate calculation, using hardcoded fallback");
+  }
 
-  double lastSnr = st->m_lastSnr;
-  double snrFast = st->m_snrFast;
-  double snrSlow = st->m_snrSlow;
+  // *** CRITICAL FIX 3: VALIDATE SNR VALUES ***
+  double lastSnr = std::isfinite(st->m_lastSnr) ? st->m_lastSnr : -99.0;
+  double snrFast = std::isfinite(st->m_snrFast) ? st->m_snrFast : lastSnr;
+  double snrSlow = std::isfinite(st->m_snrSlow) ? st->m_snrSlow : lastSnr;
 
+  // *** CRITICAL FIX 4: SAFE SUCCESS RATIO CALCULATION ***
   double shortSuccRatio = 0.0, medSuccRatio = 0.0;
   if (st->m_histShortFill > 0)
     {
@@ -261,40 +313,60 @@ SmartWifiManagerV3Logged::LogDecision (SmartWifiRemoteStationV3Logged *st, int d
       medSuccRatio = double (succ) / st->m_histMedFill;
     }
 
+  // *** CRITICAL FIX 5: VALIDATE ALL NUMERIC VALUES ***
   uint32_t consecSuccess = st->m_consecSuccess;
   uint32_t consecFailure = st->m_consecFailure;
-  double severity = st->m_severity;
-  double confidence = st->m_confidence;
-  double T1 = st->m_T1, T2 = st->m_T2, T3 = st->m_T3;
+  double severity = std::isfinite(st->m_severity) ? st->m_severity : 0.0;
+  double confidence = std::isfinite(st->m_confidence) ? st->m_confidence : 0.0;
+  double T1 = std::isfinite(st->m_T1) ? st->m_T1 : 10.0;
+  double T2 = std::isfinite(st->m_T2) ? st->m_T2 : 15.0; 
+  double T3 = std::isfinite(st->m_T3) ? st->m_T3 : 25.0;
 
-  double offeredLoad = -1.0;
-  int queueLen = -1;
-  int retryCount = -1;
-  double mobilityMetric = -1.0;
-  double snrVariance = -1.0;
+  // Default values for optional metrics
+  double offeredLoad = 0.0;  // Changed from -1 to avoid issues
+  int queueLen = 0;         // Changed from -1 to avoid issues
+  int retryCount = 0;       // Changed from -1 to avoid issues
+  double mobilityMetric = 0.0; // Changed from -1 to avoid issues
+  double snrVariance = 0.0;
 
-  if (st->m_histShortFill > 1)
+  // *** CRITICAL FIX 6: SAFE SNR VARIANCE CALCULATION ***
+  if (st->m_histShortFill > 1 && !st->m_snrSamples.empty())
     {
       double mean = 0.0;
-      uint32_t cnt = Min (st->m_histShortFill, (uint32_t)st->m_snrSamples.size());
-      for (uint32_t i = 0; i < cnt; ++i)
-        mean += st->m_snrSamples[i];
-      mean /= cnt;
-      double var = 0.0;
-      for (uint32_t i = 0; i < cnt; ++i)
-        var += (st->m_snrSamples[i] - mean) * (st->m_snrSamples[i] - mean);
-      snrVariance = var / cnt;
+      uint32_t cnt = std::min(st->m_histShortFill, (uint32_t)st->m_snrSamples.size());
+      if (cnt > 0) {
+        for (uint32_t i = 0; i < cnt; ++i)
+          mean += st->m_snrSamples[i];
+        mean /= cnt;
+        double var = 0.0;
+        for (uint32_t i = 0; i < cnt; ++i)
+          var += (st->m_snrSamples[i] - mean) * (st->m_snrSamples[i] - mean);
+        snrVariance = var / cnt;
+        
+        // Validate result
+        if (!std::isfinite(snrVariance)) {
+          snrVariance = 0.0;
+        }
+      }
     }
 
+  // *** CRITICAL FIX 7: SAFE CSV OUTPUT WITH VALIDATION ***
   if (m_logFile.is_open ())
     {
-      m_logFile << Simulator::Now ().GetSeconds () << ","
+      // Validate all values before writing
+      double simTime = Simulator::Now().GetSeconds();
+      if (!std::isfinite(simTime)) simTime = 0.0;
+      
+      // Use fixed-precision formatting to avoid scientific notation
+      m_logFile << std::fixed << std::setprecision(6)
+                << simTime << ","
                 << stationId.str () << ","
-                << rateIdx << ","
-                << phyRate << ","
+                << rateIdx << ","                    // Now guaranteed to be 0-7
+                << phyRate << ","                    // Now guaranteed to be valid rate
                 << lastSnr << ","
                 << snrFast << ","
                 << snrSlow << ","
+                << std::setprecision(4)
                 << shortSuccRatio << ","
                 << medSuccRatio << ","
                 << consecSuccess << ","
@@ -304,14 +376,22 @@ SmartWifiManagerV3Logged::LogDecision (SmartWifiRemoteStationV3Logged *st, int d
                 << T1 << "," << T2 << "," << T3 << ","
                 << decisionReason << ","
                 << (packetSuccess ? 1 : 0) << ","
+                << std::setprecision(2)
                 << offeredLoad << ","
                 << queueLen << ","
                 << retryCount << ","
                 << channelWidth << ","
                 << mobilityMetric << ","
+                << std::setprecision(4)
                 << snrVariance << "\n";
       m_logFile.flush ();
     }
+  
+  // *** CRITICAL FIX 8: VALIDATE STATION RATE AFTER LOGGING ***
+  if (st->m_rate > maxRateIdx) {
+    NS_LOG_WARN("Correcting invalid station rate " << (int)st->m_rate << " to " << (int)maxRateIdx);
+    st->m_rate = maxRateIdx;
+  }
 }
 
 /* --- HISTORY & FEATURE UPDATES --- */
@@ -493,6 +573,7 @@ SmartWifiManagerV3Logged::MaybeRelaxRaiseThreshold (SmartWifiRemoteStationV3Logg
     }
 }
 
+// *** FIX 2: Add rate validation in ApplyDecision ***
 /* --- Decision logic with reason code --- */
 uint8_t
 SmartWifiManagerV3Logged::ApplyDecision (SmartWifiRemoteStationV3Logged *st,
@@ -502,8 +583,18 @@ SmartWifiManagerV3Logged::ApplyDecision (SmartWifiRemoteStationV3Logged *st,
                                    uint8_t maxRateIdx,
                                    int& decisionReason)
 {
+  
+  maxRateIdx = std::min<uint8_t>(maxRateIdx, 7);
   uint8_t oldRate = st->m_rate;
   uint8_t currentTier = 0;
+
+    // *** CRITICAL: Validate current rate before processing ***
+  if (st->m_rate > maxRateIdx) {
+    NS_LOG_WARN("Correcting invalid current rate " << (int)st->m_rate << " to " << (int)maxRateIdx);
+    st->m_rate = maxRateIdx;
+  }
+  
+
   if (maxRateIdx >= 3)
     {
       if (st->m_rate <= maxRateIdx / 4) currentTier = 0;
@@ -602,6 +693,15 @@ SmartWifiManagerV3Logged::ApplyDecision (SmartWifiRemoteStationV3Logged *st,
     {
       st->m_sinceLastRateChange++;
     }
+
+  
+  if (st->m_rate > maxRateIdx) {
+    NS_LOG_WARN("Final rate validation failed, clamping " << (int)st->m_rate << " to " << (int)maxRateIdx);
+    st->m_rate = maxRateIdx;
+    decisionReason = SAFETY_SNR_CLAMP;  // Indicate this was a safety correction
+  }
+  
+
   return st->m_rate;
 }
 
@@ -694,21 +794,35 @@ SmartWifiManagerV3Logged::DoReportFinalDataFailed (WifiRemoteStation *station)
 }
 
 /* --- TX VECTOR SELECTION --- */
+// *** FIX 3: Add rate validation in DoGetDataTxVector ***
 WifiTxVector
 SmartWifiManagerV3Logged::DoGetDataTxVector (WifiRemoteStation *station, uint16_t allowedWidth)
 {
   NS_LOG_FUNCTION (this << station << allowedWidth);
   auto st = Lookup (station);
-  uint8_t rateIndex = std::min<uint8_t> (st->m_rate, GetNSupported (st) - 1);
+  
+  // *** CRITICAL: Validate rate index before using ***
+  uint8_t maxSupported = GetNSupported(st) - 1;
+  uint8_t safeMaxRate = std::min<uint8_t>(maxSupported, 7);  // 802.11g limit
+  
+  if (st->m_rate > safeMaxRate) {
+    NS_LOG_WARN("TxVector: Invalid rate " << (int)st->m_rate << ", using " << (int)safeMaxRate);
+    st->m_rate = safeMaxRate;
+  }
+  
+  uint8_t rateIndex = st->m_rate;
   WifiMode mode = GetSupported (st, rateIndex);
   uint16_t channelWidth = GetChannelWidth (st);
   if (channelWidth > 20 && channelWidth != 22)
     channelWidth = 20;
+  
   uint64_t rate = mode.GetDataRate (channelWidth);
-  if (m_currentRate != rate)
-    {
-      m_currentRate = rate;
-    }
+if (m_currentRate != rate)
+{
+    DoInitialize();
+    m_currentRate = rate;
+}
+  
   return WifiTxVector (mode,
                        GetDefaultTxPowerLevel (),
                        GetPreambleForTransmission (mode.GetModulationClass (), GetShortPreambleEnabled ()),
@@ -719,6 +833,8 @@ SmartWifiManagerV3Logged::DoGetDataTxVector (WifiRemoteStation *station, uint16_
                        channelWidth,
                        GetAggregation (st));
 }
+
+
 WifiTxVector
 SmartWifiManagerV3Logged::DoGetRtsTxVector (WifiRemoteStation *station)
 {
