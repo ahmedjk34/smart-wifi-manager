@@ -3,7 +3,7 @@ import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
-LOG_DIR = os.path.join(PARENT_DIR, "logged-results")
+LOG_DIR = os.path.join(PARENT_DIR, "balanced-results")
 OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALL.csv")
 
 # Check if the directory exists before proceeding
