@@ -17,6 +17,8 @@
 #include <string>
 #include <chrono>
 #include <deque>
+// #include "ns3/ptr.h"
+// #include "ns3/wifi-phy.h"
 
 namespace ns3
 {
@@ -98,6 +100,21 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     // SNR calculation method
     double CalculateCurrentSnr(WifiRemoteStation* station) const;
 
+        /**
+     * Calculate realistic SNR from received power
+     * \param rxPowerDbm received power in dBm
+     * \return corrected SNR in dB
+     */
+    double CalculateRealisticSnr(double rxPowerDbm) const;
+    
+    /**
+     * Convert power from Watts to dBm
+     * \param rxPowerWatt received power in Watts
+     * \return power in dBm
+     */
+    double ConvertRxPowerWattToDbm(double rxPowerWatt) const;
+    // --- SNR FIX MEMBERS END ---
+
     // --- HYBRID PATCH START ---
     // Context/risk assessment and fusion
     SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
@@ -108,6 +125,15 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     uint32_t GetRuleBasedRate(struct SmartWifiManagerRfState* station) const;
     void LogContextAndDecision(const SafetyAssessment& safety, uint32_t mlRate, uint32_t ruleRate, uint32_t finalRate) const;
     // --- HYBRID PATCH END ---
+
+    //fixing the snr issues [not calcualted correctly from PHY layer]
+    double m_noiseFigureDb;           //!< Noise figure in dB
+    double m_channelBandwidthMHz;     //!< Channel bandwidth in MHz  
+    bool m_enableRealisticSnr;        //!< Enable realistic SNR calculation
+    double m_maxSnrDb;                //!< Maximum allowed SNR in dB
+    double m_minSnrDb;                //!< Minimum allowed SNR in dB
+    double m_thermalNoiseFloorDbm;    //!< Calculated thermal noise floor in dBm
+
 
     std::string m_modelPath;
     std::string m_scalerPath;
