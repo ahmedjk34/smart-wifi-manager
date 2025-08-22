@@ -105,7 +105,7 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
      * \param rxPowerDbm received power in dBm
      * \return corrected SNR in dB
      */
-    double CalculateRealisticSnr(double rxPowerDbm) const;
+    // double CalculateRealisticSnr(double rxPowerDbm) const;
     
     /**
      * Convert power from Watts to dBm
@@ -115,6 +115,22 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     double ConvertRxPowerWattToDbm(double rxPowerWatt) const;
     // --- SNR FIX MEMBERS END ---
 
+
+        /**
+     * Calculate distance-based SNR using path loss model
+     * \param st the remote station
+     * \return calculated SNR in dB
+     */
+    double CalculateDistanceBasedSnr(WifiRemoteStation* st) const;
+    
+    /**
+     * Calculate realistic SNR from ns-3 reported value
+     * \param ns3SnrValue value reported by ns-3
+     * \param st the remote station
+     * \return corrected SNR in dB
+     */
+    double CalculateRealisticSnr(double ns3SnrValue) const;
+    // --- CORRECTED SNR FIX MEMBERS END ---
     // --- HYBRID PATCH START ---
     // Context/risk assessment and fusion
     SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
@@ -127,13 +143,19 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     // --- HYBRID PATCH END ---
 
     //fixing the snr issues [not calcualted correctly from PHY layer]
+    bool m_useDistanceBasedSnr;       //!< Use distance-based SNR calculation
+    double m_txPowerDbm;              //!< Transmit power in dBm
     double m_noiseFigureDb;           //!< Noise figure in dB
-    double m_channelBandwidthMHz;     //!< Channel bandwidth in MHz  
-    bool m_enableRealisticSnr;        //!< Enable realistic SNR calculation
-    double m_maxSnrDb;                //!< Maximum allowed SNR in dB
-    double m_minSnrDb;                //!< Minimum allowed SNR in dB
+    double m_frequencyGHz;            //!< Operating frequency in GHz
+    double m_pathLossExponent;        //!< Path loss exponent
+    double m_maxSnrDb;                //!< Maximum realistic SNR in dB
+    double m_minSnrDb;                //!< Minimum realistic SNR in dB
     double m_thermalNoiseFloorDbm;    //!< Calculated thermal noise floor in dBm
+        double m_snrOffset;               //!< SNR offset to apply to ns-3 values (dB)
+            bool m_useRealisticSnr;           //!< Use realistic SNR calculation
 
+
+    
 
     std::string m_modelPath;
     std::string m_scalerPath;
