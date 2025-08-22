@@ -38,6 +38,7 @@ class MLInferenceServer:
         
         # Validate features
         if len(features) != 18:
+            print(f"[ERROR] Feature count mismatch: got {len(features)} features")
             raise ValueError(f"Expected 18 features, got {len(features)}")
             
         features_array = np.array(features).reshape(1, -1)
@@ -52,6 +53,10 @@ class MLInferenceServer:
         features_array[0, 8] = max(0.0, min(1.0, features_array[0, 8]))    # confidence
         features_array[0, 16] = max(0.0, min(1.0, features_array[0, 16]))  # mobilityMetric
         
+        # Log features sent for prediction
+        features_str = " ".join([f"{x:.5g}" for x in features])
+        print(f"[INFER] Features: {features_str}")
+        
         # Scale and predict
         scaled_features = self.scaler.transform(features_array)
         prediction = self.model.predict(scaled_features)[0]
@@ -60,6 +65,8 @@ class MLInferenceServer:
         rate_idx = max(0, min(7, int(prediction)))
         
         elapsed_ms = (time.time() - start_time) * 1000
+        
+        print(f"[RESULT] rateIdx={rate_idx} latencyMs={elapsed_ms:.2f}")
         
         return {
             "rateIdx": rate_idx,
@@ -82,6 +89,7 @@ class MLInferenceServer:
                 features = [float(x) for x in data.split()]
                 result = self.predict(features)
             except Exception as e:
+                print(f"[ERROR] {str(e)} for data: {data}")
                 result = {
                     "rateIdx": 3,
                     "latencyMs": 0,
@@ -100,7 +108,11 @@ class MLInferenceServer:
                 "success": False,
                 "error": str(e)
             }) + "\n"
-            conn.sendall(error_response.encode('utf-8'))
+            try:
+                conn.sendall(error_response.encode('utf-8'))
+            except Exception:
+                pass
+            print(f"[ERROR] {str(e)} during connection")
         finally:
             conn.close()
             
