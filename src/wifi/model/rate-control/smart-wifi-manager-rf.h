@@ -11,6 +11,9 @@
 #include "ns3/vector.h"
 #include "ns3/node.h"
 #include "ns3/mobility-model.h"
+#include "ns3/node-container.h"
+#include "ns3/wifi-net-device.h"
+#include "ns3/wifi-phy.h"
 #include <string>
 #include <chrono>
 #include <deque>
@@ -18,16 +21,22 @@
 namespace ns3
 {
 
+// --- HYBRID PATCH START ---
+// Context classification
+enum class WifiContextType {
+    EMERGENCY,
+    POOR_UNSTABLE,
+    MARGINAL,
+    GOOD_UNSTABLE,
+    GOOD_STABLE,
+    EXCELLENT_STABLE,
+    UNKNOWN
+};
+// --- HYBRID PATCH END ---
+
 /**
  * \brief Smart Rate control algorithm using Random Forest ML models
  * \ingroup wifi
- *
- * This class implements the Smart rate control algorithm using Random Forest models.
- * It uses Python inference script to predict optimal rate indices based on
- * network conditions and performance metrics.
- * This RAA does not support HT modes and will error
- * exit if the user tries to configure this RAA with a Wi-Fi MAC
- * that supports 802.11n or higher.
  */
 class SmartWifiManagerRf : public WifiRemoteStationManager
 {
@@ -42,7 +51,22 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
         double latencyMs;
         bool success;
         std::string error;
+        // --- HYBRID PATCH START ---
+        double confidence; // ML confidence (future use)
+        // --- HYBRID PATCH END ---
     };
+
+    // --- HYBRID PATCH START ---
+    struct SafetyAssessment
+    {
+        WifiContextType context;
+        double riskLevel;
+        uint32_t recommendedSafeRate;
+        bool requiresEmergencyAction;
+        double confidenceInAssessment;
+        std::string contextStr;
+    };
+    // --- HYBRID PATCH END ---
 
   private:
     void DoInitialize() override;
@@ -70,6 +94,20 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void UpdateMetrics(WifiRemoteStation* station, bool success, double snr);
     double GetOfferedLoad() const;
     double GetMobilityMetric(WifiRemoteStation* station) const;
+    
+    // SNR calculation method
+    double CalculateCurrentSnr(WifiRemoteStation* station) const;
+
+    // --- HYBRID PATCH START ---
+    // Context/risk assessment and fusion
+    SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
+    WifiContextType ClassifyNetworkContext(struct SmartWifiManagerRfState* station) const;
+    std::string ContextTypeToString(WifiContextType type) const;
+    double CalculateRiskLevel(struct SmartWifiManagerRfState* station) const;
+    uint32_t GetContextSafeRate(struct SmartWifiManagerRfState* station, WifiContextType context) const;
+    uint32_t GetRuleBasedRate(struct SmartWifiManagerRfState* station) const;
+    void LogContextAndDecision(const SafetyAssessment& safety, uint32_t mlRate, uint32_t ruleRate, uint32_t finalRate) const;
+    // --- HYBRID PATCH END ---
 
     std::string m_modelPath;
     std::string m_scalerPath;
@@ -83,9 +121,14 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     uint32_t m_inferencePeriod;
     uint32_t m_fallbackRate;
     bool m_enableFallback;
-
-    // --- Add this missing member for the server port ---
     uint16_t m_inferenceServerPort;
+
+    // --- HYBRID PATCH START ---
+    // Tunable fusion thresholds
+    double m_confidenceThreshold;
+    double m_riskThreshold;
+    uint32_t m_failureThreshold;
+    // --- HYBRID PATCH END ---
 
     TracedValue<uint64_t> m_currentRate;
     TracedValue<uint32_t> m_mlInferences;
@@ -115,6 +158,13 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     Vector lastPosition;
     uint32_t currentRateIndex;
     uint32_t queueLength;
+    // --- HYBRID PATCH START ---
+    WifiContextType lastContext;
+    double lastRiskLevel;
+    // --- HYBRID PATCH END ---
+
+    uint32_t decisionReason = 0;          
+    bool lastPacketSuccess = true;        
 };
 
 } // namespace ns3
