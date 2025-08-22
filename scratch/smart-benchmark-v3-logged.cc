@@ -164,8 +164,9 @@ wifi.SetRemoteStationManager("ns3::SmartWifiManagerV3Logged",
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
     // Enable Rate trace
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/RateChange",
                 MakeCallback(&RateTrace));
+
 
     // Run simulation
     Simulator::Stop(Seconds(40.0)); // increased run time
