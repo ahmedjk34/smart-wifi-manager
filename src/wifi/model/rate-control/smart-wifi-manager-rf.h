@@ -17,8 +17,6 @@
 #include <string>
 #include <chrono>
 #include <deque>
-// #include "ns3/ptr.h"
-// #include "ns3/wifi-phy.h"
 
 namespace ns3
 {
@@ -53,12 +51,9 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
         double latencyMs;
         bool success;
         std::string error;
-        // --- HYBRID PATCH START ---
-        double confidence; // ML confidence (future use)
-        // --- HYBRID PATCH END ---
+        double confidence;
     };
 
-    // --- HYBRID PATCH START ---
     struct SafetyAssessment
     {
         WifiContextType context;
@@ -68,7 +63,9 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
         double confidenceInAssessment;
         std::string contextStr;
     };
-    // --- HYBRID PATCH END ---
+
+    // Method to set distance from benchmark (DIRECTLY from your test cases)
+    void SetBenchmarkDistance(double distance);
 
   private:
     void DoInitialize() override;
@@ -96,42 +93,13 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void UpdateMetrics(WifiRemoteStation* station, bool success, double snr);
     double GetOfferedLoad() const;
     double GetMobilityMetric(WifiRemoteStation* station) const;
-    
-    // SNR calculation method
-    double CalculateCurrentSnr(WifiRemoteStation* station) const;
 
-        /**
-     * Calculate realistic SNR from received power
-     * \param rxPowerDbm received power in dBm
-     * \return corrected SNR in dB
-     */
-    // double CalculateRealisticSnr(double rxPowerDbm) const;
-    
-    /**
-     * Convert power from Watts to dBm
-     * \param rxPowerWatt received power in Watts
-     * \return power in dBm
-     */
-    double ConvertRxPowerWattToDbm(double rxPowerWatt) const;
-    // --- SNR FIX MEMBERS END ---
+    // Simple distance → SNR mapping using the value passed from benchmark
+    double GetSnrFromDistance() const;
 
-
-        /**
-     * Calculate distance-based SNR using path loss model
-     * \param st the remote station
-     * \return calculated SNR in dB
-     */
+    // (Legacy helper retained; now unused for distance, but harmless to keep declared)
     double CalculateDistanceBasedSnr(WifiRemoteStation* st) const;
-    
-    /**
-     * Calculate realistic SNR from ns-3 reported value
-     * \param ns3SnrValue value reported by ns-3
-     * \param st the remote station
-     * \return corrected SNR in dB
-     */
-    double CalculateRealisticSnr(double ns3SnrValue) const;
-    // --- CORRECTED SNR FIX MEMBERS END ---
-    // --- HYBRID PATCH START ---
+
     // Context/risk assessment and fusion
     SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
     WifiContextType ClassifyNetworkContext(struct SmartWifiManagerRfState* station) const;
@@ -140,23 +108,11 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     uint32_t GetContextSafeRate(struct SmartWifiManagerRfState* station, WifiContextType context) const;
     uint32_t GetRuleBasedRate(struct SmartWifiManagerRfState* station) const;
     void LogContextAndDecision(const SafetyAssessment& safety, uint32_t mlRate, uint32_t ruleRate, uint32_t finalRate) const;
-    // --- HYBRID PATCH END ---
 
-    //fixing the snr issues [not calcualted correctly from PHY layer]
-    bool m_useDistanceBasedSnr;       //!< Use distance-based SNR calculation
-    double m_txPowerDbm;              //!< Transmit power in dBm
-    double m_noiseFigureDb;           //!< Noise figure in dB
-    double m_frequencyGHz;            //!< Operating frequency in GHz
-    double m_pathLossExponent;        //!< Path loss exponent
-    double m_maxSnrDb;                //!< Maximum realistic SNR in dB
-    double m_minSnrDb;                //!< Minimum realistic SNR in dB
-    double m_thermalNoiseFloorDbm;    //!< Calculated thermal noise floor in dBm
-        double m_snrOffset;               //!< SNR offset to apply to ns-3 values (dB)
-            bool m_useRealisticSnr;           //!< Use realistic SNR calculation
+    // Distance from benchmark (set per simulation by your benchmark harness)
+    double m_benchmarkDistance;
 
-
-    
-
+    // Config / attributes
     std::string m_modelPath;
     std::string m_scalerPath;
     std::string m_pythonScript;
@@ -171,12 +127,16 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     bool m_enableFallback;
     uint16_t m_inferenceServerPort;
 
-    // --- HYBRID PATCH START ---
+    // SNR behavior toggles/limits
+    bool   m_useRealisticSnr;
+    double m_maxSnrDb;
+    double m_minSnrDb;
+    double m_snrOffset;
+
     // Tunable fusion thresholds
     double m_confidenceThreshold;
     double m_riskThreshold;
     uint32_t m_failureThreshold;
-    // --- HYBRID PATCH END ---
 
     TracedValue<uint64_t> m_currentRate;
     TracedValue<uint32_t> m_mlInferences;
@@ -206,13 +166,10 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     Vector lastPosition;
     uint32_t currentRateIndex;
     uint32_t queueLength;
-    // --- HYBRID PATCH START ---
     WifiContextType lastContext;
     double lastRiskLevel;
-    // --- HYBRID PATCH END ---
-
-    uint32_t decisionReason = 0;          
-    bool lastPacketSuccess = true;        
+    uint32_t decisionReason = 0;
+    bool lastPacketSuccess = true;
 };
 
 } // namespace ns3

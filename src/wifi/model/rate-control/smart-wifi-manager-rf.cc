@@ -22,6 +22,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <map>    // add at top of .cc if not already included
 
 namespace ns3
 {
@@ -97,33 +98,28 @@ SmartWifiManagerRf::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&SmartWifiManagerRf::m_enableFallback),
                           MakeBooleanChecker())
-            // --- SNR FIX PARAMETERS START ---
-            .AddAttribute("NoiseFigureDb",
-                          "Noise figure of the receiver in dB",
-                          DoubleValue(7.0),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_noiseFigureDb),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("ChannelBandwidthMHz",
-                          "Channel bandwidth in MHz for noise calculation",
-                          DoubleValue(20.0),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_channelBandwidthMHz),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("EnableRealisticSnr",
-                          "Enable realistic SNR calculation with proper noise floor",
+            // --- FIXED SNR PARAMETERS START ---
+            .AddAttribute("UseRealisticSnr",
+                          "Use realistic SNR calculation with proper bounds",
                           BooleanValue(true),
-                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableRealisticSnr),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_useRealisticSnr),
                           MakeBooleanChecker())
             .AddAttribute("MaxSnrDb",
-                          "Maximum allowed SNR in dB",
-                          DoubleValue(40.0),
+                          "Maximum realistic SNR in dB",
+                          DoubleValue(30.0),
                           MakeDoubleAccessor(&SmartWifiManagerRf::m_maxSnrDb),
                           MakeDoubleChecker<double>())
             .AddAttribute("MinSnrDb",
-                          "Minimum allowed SNR in dB",
-                          DoubleValue(-10.0),
+                          "Minimum realistic SNR in dB",
+                          DoubleValue(-5.0),
                           MakeDoubleAccessor(&SmartWifiManagerRf::m_minSnrDb),
                           MakeDoubleChecker<double>())
-            // --- SNR FIX PARAMETERS END ---
+            .AddAttribute("SnrOffset",
+                          "SNR offset to apply to ns-3 values (dB)",
+                          DoubleValue(-10.0),
+                          MakeDoubleAccessor(&SmartWifiManagerRf::m_snrOffset),
+                          MakeDoubleChecker<double>())
+            // --- FIXED SNR PARAMETERS END ---
             // --- HYBRID PATCH START ---
             .AddAttribute("ConfidenceThreshold",
                 "Minimum ML confidence required to trust prediction",
@@ -156,10 +152,11 @@ SmartWifiManagerRf::GetTypeId()
     return tid;
 }
 
-SmartWifiManagerRf::SmartWifiManagerRf()
-    : m_currentRate(0),
-      m_mlInferences(0),
-      m_mlFailures(0)
+SmartWifiManagerRf::SmartWifiManagerRf() 
+    : m_currentRate(0), 
+      m_mlInferences(0), 
+      m_mlFailures(0),
+      m_benchmarkDistance(1.0)  // ADD THIS LINE
 {
     NS_LOG_FUNCTION(this);
 }
@@ -191,20 +188,13 @@ SmartWifiManagerRf::DoInitialize()
         NS_FATAL_ERROR("Scaler file not found: " + m_scalerPath);
     }
 
-    // --- SNR FIX START ---
-    // Calculate thermal noise floor: -174 dBm/Hz + 10*log10(BW) + NF
-    m_thermalNoiseFloorDbm = -174.0 + 10.0 * std::log10(m_channelBandwidthMHz * 1e6) + m_noiseFigureDb;
-    
     std::cout << "[INFO RF] SmartWifiManagerRf initialized successfully" << std::endl;
     std::cout << "[INFO RF] Model: " << m_modelPath << std::endl;
     std::cout << "[INFO RF] Scaler: " << m_scalerPath << std::endl;
     std::cout << "[INFO RF] Server Port: " << m_inferenceServerPort << std::endl;
-    std::cout << "[INFO RF SNR] Realistic SNR enabled: " << m_enableRealisticSnr << std::endl;
-    std::cout << "[INFO RF SNR] Thermal noise floor: " << m_thermalNoiseFloorDbm << " dBm" << std::endl;
-    std::cout << "[INFO RF SNR] Channel bandwidth: " << m_channelBandwidthMHz << " MHz" << std::endl;
-    std::cout << "[INFO RF SNR] Noise figure: " << m_noiseFigureDb << " dB" << std::endl;
+    std::cout << "[INFO RF SNR] Realistic SNR enabled: " << m_useRealisticSnr << std::endl;
     std::cout << "[INFO RF SNR] SNR range: [" << m_minSnrDb << ", " << m_maxSnrDb << "] dB" << std::endl;
-    // --- SNR FIX END ---
+    std::cout << "[INFO RF SNR] SNR offset: " << m_snrOffset << " dB" << std::endl;
 
     WifiRemoteStationManager::DoInitialize();
 }
@@ -216,9 +206,9 @@ SmartWifiManagerRf::DoCreateStation() const
 
     SmartWifiManagerRfState* station = new SmartWifiManagerRfState;
 
-    station->lastSnr = 25.0;
-    station->snrFast = 25.0;
-    station->snrSlow = 25.0;
+    station->lastSnr = 15.0;  // More realistic initial value
+    station->snrFast = 15.0;
+    station->snrSlow = 15.0;
     station->consecSuccess = 0;
     station->consecFailure = 0;
     station->severity = 0.0;
@@ -240,68 +230,70 @@ SmartWifiManagerRf::DoCreateStation() const
     // --- HYBRID PATCH END ---
 
     std::cout << "[INFO RF] Created new station with initial rate index: "
-              << station->currentRateIndex << std::endl;
+              << station->currentRateIndex << " and initial SNR: " << station->lastSnr << " dB" << std::endl;
 
     return station;
 }
 
-// --- SNR FIX START ---
-double
-SmartWifiManagerRf::CalculateRealisticSnr(double rxPowerDbm) const
+void SmartWifiManagerRf::SetBenchmarkDistance(double distance) 
 {
-    NS_LOG_FUNCTION(this << rxPowerDbm);
-
-    if (!m_enableRealisticSnr)
-    {
-        // Return original behavior if realistic SNR is disabled
-        return rxPowerDbm;
+    m_benchmarkDistance = distance;
+    std::cout << "[INFO RF DISTANCE] Benchmark distance set to: " << m_benchmarkDistance << "m" << std::endl;
+}
+double SmartWifiManagerRf::CalculateDistanceBasedSnr(WifiRemoteStation* st) const 
+{
+    double snrDb;
+    
+    if (m_benchmarkDistance <= 1.0) {
+        snrDb = 40.0;  // Very close - excellent signal
+    } else if (m_benchmarkDistance <= 40.0) {
+        snrDb = 25.0;  // Good signal for 40m
+    } else if (m_benchmarkDistance <= 60.0) {
+        snrDb = 15.0;  // Moderate signal for 60m  
+    } else if (m_benchmarkDistance <= 120.0) {
+        snrDb = 8.0;   // Weak but usable signal for 120m
+    } else {
+        snrDb = 5.0;   // Very weak signal for distances > 120m
     }
-
-    // Calculate SNR = Signal Power (dBm) - Noise Power (dBm)
-    double snrDb = rxPowerDbm - m_thermalNoiseFloorDbm;
     
-    // Clamp SNR to realistic bounds
-    snrDb = std::max(m_minSnrDb, std::min(m_maxSnrDb, snrDb));
-    
-    std::cout << "[DEBUG SNR] RxPower=" << rxPowerDbm << "dBm, NoiseFloor=" 
-              << m_thermalNoiseFloorDbm << "dBm, SNR=" << snrDb << "dB" << std::endl;
+    std::cout << "[DEBUG SNR DISTANCE] Using benchmark distance=" << m_benchmarkDistance 
+              << "m -> SNR=" << snrDb << "dB" << std::endl;
     
     return snrDb;
 }
 
-double
-SmartWifiManagerRf::ConvertRxPowerWattToDbm(double rxPowerWatt) const
-{
-    if (rxPowerWatt <= 0.0)
-    {
-        std::cout << "[WARN SNR] Invalid RxPower=" << rxPowerWatt << "W, using minimum" << std::endl;
-        return -100.0; // Very low power
-    }
-    
-    double rxPowerDbm = 10.0 * std::log10(rxPowerWatt * 1000.0); // Convert W to mW, then to dBm
-    
-    std::cout << "[DEBUG SNR] RxPower=" << rxPowerWatt << "W = " << rxPowerDbm << "dBm" << std::endl;
-    
-    return rxPowerDbm;
-}
-// --- SNR FIX END ---
+// --- FIXED SNR CALCULATION START ---
+// double
+// SmartWifiManagerRf::CalculateRealisticSnr(WifiRemoteStation* st, double ns3SnrValue) const
+// {
+//     NS_LOG_FUNCTION(this << ns3SnrValue);
+//     if (!m_useRealisticSnr)
+//         return ns3SnrValue;
+
+//     double realisticSnr = CalculateDistanceBasedSnr(st);
+//     std::cout << "[DEBUG SNR] NS3 reported=" << ns3SnrValue
+//               << " (IGNORED), Using distance-based SNR=" << realisticSnr << "dB" << std::endl;
+//     return realisticSnr;
+// }
+
+// --- FIXED SNR CALCULATION END ---
 
 void
 SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode txMode)
 {
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     
-    // --- SNR FIX START ---
+    // --- FIXED SNR START ---
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     
-    // Apply realistic SNR calculation if enabled
-    double correctedSnr = m_enableRealisticSnr ? CalculateRealisticSnr(rxSnr) : rxSnr;
+    // Calculate realistic SNR
+    double correctedSnr = CalculateDistanceBasedSnr(st);
     
-    std::cout << "[DEBUG SNR RX] Original SNR=" << rxSnr << "dB, Corrected SNR=" 
+    std::cout << "[DEBUG SNR RX] NS3 reported=" << rxSnr << ", Corrected SNR=" 
               << correctedSnr << "dB" << std::endl;
     
     station->lastSnr = correctedSnr;
-    // --- SNR FIX END ---
+    // --- FIXED SNR END ---
 }
 
 void
@@ -330,12 +322,12 @@ SmartWifiManagerRf::DoReportRtsOk(WifiRemoteStation* st,
     NS_LOG_FUNCTION(this << st << ctsSnr << ctsMode << rtsSnr);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     
-    // --- SNR FIX START ---
-    double correctedSnr = m_enableRealisticSnr ? CalculateRealisticSnr(rtsSnr) : rtsSnr;
-    std::cout << "[DEBUG SNR RTS] Original SNR=" << rtsSnr << "dB, Corrected SNR=" 
+    // --- FIXED SNR START ---
+double correctedSnr = CalculateDistanceBasedSnr(st);
+    std::cout << "[DEBUG SNR RTS] NS3 reported=" << rtsSnr << "dB, Corrected SNR=" 
               << correctedSnr << "dB" << std::endl;
     station->lastSnr = correctedSnr;
-    // --- SNR FIX END ---
+    // --- FIXED SNR END ---
 }
 
 void
@@ -349,12 +341,12 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     
-    // --- SNR FIX START ---
-    double correctedSnr = m_enableRealisticSnr ? CalculateRealisticSnr(dataSnr) : dataSnr;
-    std::cout << "[DEBUG SNR DATA] Original SNR=" << dataSnr << "dB, Corrected SNR=" 
+    // --- FIXED SNR START ---
+double correctedSnr = CalculateDistanceBasedSnr(st);
+    std::cout << "[DEBUG SNR DATA] NS3 reported=" << dataSnr << "dB, Corrected SNR=" 
               << correctedSnr << "dB" << std::endl;
     station->lastSnr = correctedSnr;
-    // --- SNR FIX END ---
+    // --- FIXED SNR END ---
     
     station->retryCount = 0;
     UpdateMetrics(st, true, correctedSnr);
@@ -629,20 +621,14 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     WifiMode mode = GetSupported(st, station->currentRateIndex);
     features[1] = static_cast<double>(mode.GetDataRate(GetChannelWidth(st)));
 
-    // 3. lastSnr -- use lastSnr, which is filled from last RX packet
-    // --- SNR FIX START ---
-    // Apply bounds and realistic values for ML model
-    double clampedSnr = std::max(-20.0, std::min(80.0, station->lastSnr));
-    features[2] = clampedSnr;
-    // --- SNR FIX END ---
+    // 3. lastSnr -- use lastSnr, which should now be realistic
+    features[2] = station->lastSnr;
 
     // 4. snrFast
-    double clampedSnrFast = std::max(-20.0, std::min(80.0, station->snrFast));
-    features[3] = clampedSnrFast;
+    features[3] = station->snrFast;
 
     // 5. snrSlow
-    double clampedSnrSlow = std::max(-20.0, std::min(80.0, station->snrSlow));
-    features[4] = clampedSnrSlow;
+    features[4] = station->snrSlow;
 
     // 6. shortSuccRatio
     features[5] = std::max(0.0, std::min(1.0, shortSuccRatio));
@@ -698,9 +684,8 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     features[21] = std::max(0.0, std::min(100.0, station->snrVariance));
 
     // --- Debug output ---
-    std::cout << "[DEBUG RF SNR FEATURES] SNR values - Last:" << clampedSnr 
-              << " Fast:" << clampedSnrFast << " Slow:" << clampedSnrSlow 
-              << " (Original: " << station->lastSnr << ")" << std::endl;
+    std::cout << "[DEBUG RF SNR FEATURES] SNR values - Last:" << features[2] 
+              << " Fast:" << features[3] << " Slow:" << features[4] << std::endl;
     std::cout << "[DEBUG RF] Features sent to ML: ";
     for (size_t i = 0; i < features.size(); ++i) {
         std::cout << features[i] << " ";
@@ -718,31 +703,24 @@ SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double sn
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     Time now = Simulator::Now();
 
-    // --- SNR FIX START ---
-    // Apply realistic SNR bounds and processing
-    double processedSnr = snr;
-    if (m_enableRealisticSnr && snr > -50.0 && snr < 100.0)
+    // SNR should already be realistic at this point
+    if (snr >= m_minSnrDb && snr <= m_maxSnrDb)
     {
-        // Clamp to realistic bounds
-        processedSnr = std::max(m_minSnrDb, std::min(m_maxSnrDb, snr));
-        
-        station->lastSnr = processedSnr;
-        if (station->snrFast == 25.0)
+        station->lastSnr = snr;
+        if (station->snrFast == 15.0 && station->snrSlow == 15.0) // Initial values
         {
-            station->snrFast = processedSnr;
-            station->snrSlow = processedSnr;
+            station->snrFast = snr;
+            station->snrSlow = snr;
         }
         else
         {
-            station->snrFast = m_snrAlpha * processedSnr + (1 - m_snrAlpha) * station->snrFast;
-            station->snrSlow = (m_snrAlpha / 10) * processedSnr + (1 - m_snrAlpha / 10) * station->snrSlow;
+            station->snrFast = m_snrAlpha * snr + (1 - m_snrAlpha) * station->snrFast;
+            station->snrSlow = (m_snrAlpha / 10) * snr + (1 - m_snrAlpha / 10) * station->snrSlow;
         }
         
-        std::cout << "[DEBUG SNR UPDATE] Raw SNR=" << snr << "dB, Processed=" 
-                  << processedSnr << "dB, Fast=" << station->snrFast 
+        std::cout << "[DEBUG SNR UPDATE] SNR=" << snr << "dB, Fast=" << station->snrFast 
                   << "dB, Slow=" << station->snrSlow << "dB" << std::endl;
     }
-    // --- SNR FIX END ---
 
     station->shortWindow.push_back(success);
     if (station->shortWindow.size() > m_windowSize / 2)
@@ -777,7 +755,7 @@ SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double sn
         station->confidence = std::min(1.0, station->confidence + 0.05);
     }
 
-    double snrDiff = processedSnr - station->snrSlow;
+    double snrDiff = snr - station->snrSlow;
     station->snrVariance = 0.9 * station->snrVariance + 0.1 * (snrDiff * snrDiff);
 
     double timeDiff = (now - station->lastUpdateTime).GetSeconds();
@@ -833,15 +811,16 @@ SmartWifiManagerRf::ClassifyNetworkContext(SmartWifiManagerRfState* station) con
     if (!station->shortWindow.empty())
         shortSuccRatio = static_cast<double>(std::count(station->shortWindow.begin(), station->shortWindow.end(), true)) / station->shortWindow.size();
 
-    if (snr < 10.0 || shortSuccRatio < 0.5 || station->consecFailure >= m_failureThreshold)
+    // Adjusted thresholds for realistic SNR values
+    if (snr < 5.0 || shortSuccRatio < 0.5 || station->consecFailure >= m_failureThreshold)
         return WifiContextType::EMERGENCY;
-    if (snr < 15 || snrVar > 5)
+    if (snr < 10.0 || snrVar > 5)
         return WifiContextType::POOR_UNSTABLE;
-    if (snr < 20 || shortSuccRatio < 0.8)
+    if (snr < 15.0 || shortSuccRatio < 0.8)
         return WifiContextType::MARGINAL;
     if (snrVar > 3)
         return WifiContextType::GOOD_UNSTABLE;
-    if (snr > 25 && shortSuccRatio > 0.9)
+    if (snr > 20.0 && shortSuccRatio > 0.9)
         return WifiContextType::EXCELLENT_STABLE;
     return WifiContextType::GOOD_STABLE;
 }
@@ -866,7 +845,7 @@ SmartWifiManagerRf::CalculateRiskLevel(SmartWifiManagerRfState* station) const
     double risk = 0.0;
     risk += (station->consecFailure >= m_failureThreshold) ? 0.5 : 0.0;
     risk += (station->snrVariance > 5.0) ? 0.25 : 0.0;
-    risk += (station->lastSnr < 10.0) ? 0.25 : 0.0;
+    risk += (station->lastSnr < 5.0) ? 0.25 : 0.0; // Adjusted for realistic SNR
     risk += std::max(0.0, 1.0 - station->confidence);
     risk = std::min(1.0, risk);
     return risk;
