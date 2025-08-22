@@ -3,7 +3,6 @@
  * ... (license text unchanged)
  * Author: Mathieu Lacage <mathieu.lacage@sophia.inria.fr>
  */
-
 #include "smart-wifi-manager-rf.h"
 
 #include "ns3/assert.h"
@@ -103,6 +102,23 @@ SmartWifiManagerRf::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&SmartWifiManagerRf::m_enableFallback),
                           MakeBooleanChecker())
+            // --- HYBRID PATCH START ---
+            .AddAttribute("ConfidenceThreshold",
+                "Minimum ML confidence required to trust prediction",
+                DoubleValue(0.7),
+                MakeDoubleAccessor(&SmartWifiManagerRf::m_confidenceThreshold),
+                MakeDoubleChecker<double>())
+            .AddAttribute("RiskThreshold",
+                "Maximum risk allowed before forcing conservative rate",
+                DoubleValue(0.7),
+                MakeDoubleAccessor(&SmartWifiManagerRf::m_riskThreshold),
+                MakeDoubleChecker<double>())
+            .AddAttribute("FailureThreshold",
+                "Consecutive failures required to trigger emergency",
+                UintegerValue(4),
+                MakeUintegerAccessor(&SmartWifiManagerRf::m_failureThreshold),
+                MakeUintegerChecker<uint32_t>())
+            // --- HYBRID PATCH END ---
             .AddTraceSource("Rate",
                             "Remote station data rate changed",
                             MakeTraceSourceAccessor(&SmartWifiManagerRf::m_currentRate),
@@ -140,7 +156,6 @@ SmartWifiManagerRf::DoInitialize()
         NS_FATAL_ERROR("SmartWifiManagerRf does not support HT/VHT/HE modes");
     }
 
-    // Verify model/scaler exist
     std::ifstream modelFile(m_modelPath);
     if (!modelFile.good())
     {
@@ -187,6 +202,10 @@ SmartWifiManagerRf::DoCreateStation() const
     station->lastPosition = Vector(0, 0, 0);
     station->currentRateIndex = std::min(m_fallbackRate, static_cast<uint32_t>(7));
     station->queueLength = 0;
+    // --- HYBRID PATCH START ---
+    station->lastContext = WifiContextType::UNKNOWN;
+    station->lastRiskLevel = 0.0;
+    // --- HYBRID PATCH END ---
 
     std::cout << "[INFO RF] Created new station with initial rate index: "
               << station->currentRateIndex << std::endl;
@@ -263,58 +282,75 @@ WifiTxVector
 SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWidth)
 {
     NS_LOG_FUNCTION(this << st << allowedWidth);
-
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
     uint32_t maxRateIndex = GetNSupported(st) - 1;
     maxRateIndex = std::min(maxRateIndex, static_cast<uint32_t>(7));
 
-    if (station->currentRateIndex > maxRateIndex)
-    {
-        station->currentRateIndex = std::min(m_fallbackRate, maxRateIndex);
-        std::cout << "[WARN RF] Reset invalid rate index to fallback: " << station->currentRateIndex << std::endl;
-    }
+    // --- HYBRID PATCH START ---
+    // Stage 1: Safety/Context Assessment
+    SafetyAssessment safety = AssessNetworkSafety(station);
 
-    if ((Simulator::Now() - station->lastInferenceTime).GetMilliSeconds() > m_inferencePeriod)
+    // Stage 2: ML Prediction (only if context/risk allow)
+    uint32_t mlRate = m_fallbackRate;
+    double mlConfidence = 0.0;
+    bool mlAllowed = (!safety.requiresEmergencyAction && safety.riskLevel < m_riskThreshold);
+
+    if (mlAllowed)
     {
         std::vector<double> features = ExtractFeatures(st);
         InferenceResult result = RunMLInference(features);
-
         m_mlInferences++;
-
         if (result.success)
         {
-            uint32_t rateIdx = result.rateIdx <= maxRateIndex ? result.rateIdx : std::min(m_fallbackRate, maxRateIndex);
-            station->currentRateIndex = rateIdx;
+            mlRate = result.rateIdx <= maxRateIndex ? result.rateIdx : std::min(m_fallbackRate, maxRateIndex);
+            mlConfidence = result.confidence;
             station->lastInferenceTime = Simulator::Now();
             std::cout << "[SUCCESS RF] ML predicted rate index: " << result.rateIdx
-                      << " (mapped to WiFi: " << rateIdx << ", max=" << maxRateIndex << ")" << std::endl;
+                      << " (mapped to WiFi: " << mlRate << ", max=" << maxRateIndex << ")"
+                      << " ML confidence: " << mlConfidence << std::endl;
         }
         else
         {
             m_mlFailures++;
-            if (m_enableFallback)
-            {
-                station->currentRateIndex = std::min(m_fallbackRate, maxRateIndex);
-            }
+            mlRate = std::min(m_fallbackRate, maxRateIndex);
             std::cout << "[ERROR RF] ML inference failed: " << result.error
-                      << ", using fallback rate: " << station->currentRateIndex << std::endl;
+                      << ", using fallback rate: " << mlRate << std::endl;
         }
     }
 
-    if (station->currentRateIndex > maxRateIndex)
+    // Stage 3: Rule-Based Safety Override
+    uint32_t ruleRate = GetRuleBasedRate(station);
+
+    // Stage 4: Real-Time Feedback Correction
+    uint32_t finalRate = ruleRate;
+    if (mlAllowed && mlConfidence > m_confidenceThreshold)
     {
-        station->currentRateIndex = maxRateIndex;
-        std::cout << "[EMERGENCY RF] Rate index correction to: " << station->currentRateIndex << std::endl;
+        // ML trusted only if confidence and context/risk allow
+        finalRate = mlRate;
+    }
+    else if (safety.requiresEmergencyAction)
+    {
+        finalRate = safety.recommendedSafeRate;
+        std::cout << "[EMERGENCY RF] Safety override, using recommended safe rate: " << finalRate << std::endl;
+    }
+    else
+    {
+        // Blend ML and rule if moderate risk
+        finalRate = std::min(ruleRate, mlRate);
     }
 
-    WifiMode mode = GetSupported(st, station->currentRateIndex);
+    // Stage 5: Clamp and log
+    finalRate = std::max(0U, std::min(maxRateIndex, finalRate));
+    LogContextAndDecision(safety, mlRate, ruleRate, finalRate);
+
+    WifiMode mode = GetSupported(st, finalRate);
     uint64_t rate = mode.GetDataRate(allowedWidth);
 
     if (m_currentRate != rate)
     {
         std::cout << "[INFO RF] Rate changed from " << m_currentRate << " to " << rate
-                  << " (index " << station->currentRateIndex << ")" << std::endl;
+                  << " (index " << finalRate << ")" << std::endl;
         m_currentRate = rate;
     }
 
@@ -327,6 +363,7 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
                         0,
                         allowedWidth,
                         GetAggregation(st));
+    // --- HYBRID PATCH END ---
 }
 
 WifiTxVector
@@ -356,8 +393,7 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     result.success = false;
     result.rateIdx = m_fallbackRate;
     result.latencyMs = 0.0;
-
-
+    result.confidence = 1.0; // Default: always "high confidence" if not returned by server
 
     if (features.size() != 18)
     {
@@ -440,6 +476,20 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
 
             result.rateIdx = static_cast<uint32_t>(std::stoi(rate_str));
             result.success = true;
+
+            // Optionally parse "confidence" from JSON if present
+            size_t confPos = json_str.find("\"confidence\":");
+            if (confPos != std::string::npos) {
+                size_t confStart = json_str.find(":", confPos) + 1;
+                size_t confEnd = json_str.find_first_of(",}", confStart);
+                std::string conf_str = json_str.substr(confStart, confEnd - confStart);
+                conf_str.erase(0, conf_str.find_first_not_of(" \t\n"));
+                conf_str.erase(conf_str.find_last_not_of(" \t\n") + 1);
+                result.confidence = std::stod(conf_str);
+            } else {
+                result.confidence = 1.0;
+            }
+
         } else {
             result.error = "rateIdx not found in JSON";
         }
@@ -492,15 +542,11 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     features[16] = GetMobilityMetric(st);
     features[17] = std::max(0.0, std::min(100.0, station->snrVariance));
 
-    
-    // --- DEBUG PRINT: Print features before sending to ML server ---
     std::cout << "[DEBUG RF] Features sent to ML: ";
     for (size_t i = 0; i < features.size(); ++i) {
         std::cout << features[i] << " ";
     }
     std::cout << std::endl;
-    // --------------------------------------------------------------
-
 
     return features;
 }
@@ -585,5 +631,109 @@ SmartWifiManagerRf::GetMobilityMetric(WifiRemoteStation* st) const
     station->mobilityMetric = snrMobility;
     return std::max(0.0, std::min(1.0, station->mobilityMetric));
 }
+
+// --- HYBRID PATCH START ---
+// Context logic, risk assessment, safety, fusion
+
+SmartWifiManagerRf::SafetyAssessment
+SmartWifiManagerRf::AssessNetworkSafety(SmartWifiManagerRfState* station)
+{
+    SafetyAssessment assessment;
+    assessment.context = ClassifyNetworkContext(station);
+    assessment.riskLevel = CalculateRiskLevel(station);
+    assessment.recommendedSafeRate = GetContextSafeRate(station, assessment.context);
+    assessment.requiresEmergencyAction = (
+        assessment.context == WifiContextType::EMERGENCY ||
+        station->consecFailure >= m_failureThreshold ||
+        assessment.riskLevel > m_riskThreshold
+    );
+    assessment.confidenceInAssessment = 1.0 - assessment.riskLevel;
+    assessment.contextStr = ContextTypeToString(assessment.context);
+    station->lastContext = assessment.context;
+    station->lastRiskLevel = assessment.riskLevel;
+    return assessment;
+}
+
+WifiContextType
+SmartWifiManagerRf::ClassifyNetworkContext(SmartWifiManagerRfState* station) const
+{
+    double snr = station->lastSnr;
+    double snrVar = station->snrVariance;
+    double shortSuccRatio = 0.5;
+    if (!station->shortWindow.empty())
+        shortSuccRatio = static_cast<double>(std::count(station->shortWindow.begin(), station->shortWindow.end(), true)) / station->shortWindow.size();
+
+    if (snr < 10.0 || shortSuccRatio < 0.5 || station->consecFailure >= m_failureThreshold)
+        return WifiContextType::EMERGENCY;
+    if (snr < 15 || snrVar > 5)
+        return WifiContextType::POOR_UNSTABLE;
+    if (snr < 20 || shortSuccRatio < 0.8)
+        return WifiContextType::MARGINAL;
+    if (snrVar > 3)
+        return WifiContextType::GOOD_UNSTABLE;
+    if (snr > 25 && shortSuccRatio > 0.9)
+        return WifiContextType::EXCELLENT_STABLE;
+    return WifiContextType::GOOD_STABLE;
+}
+
+std::string
+SmartWifiManagerRf::ContextTypeToString(WifiContextType type) const
+{
+    switch (type) {
+        case WifiContextType::EMERGENCY: return "emergency_recovery";
+        case WifiContextType::POOR_UNSTABLE: return "poor_unstable";
+        case WifiContextType::MARGINAL: return "marginal_conditions";
+        case WifiContextType::GOOD_UNSTABLE: return "good_unstable";
+        case WifiContextType::GOOD_STABLE: return "good_stable";
+        case WifiContextType::EXCELLENT_STABLE: return "excellent_stable";
+        default: return "unknown";
+    }
+}
+
+double
+SmartWifiManagerRf::CalculateRiskLevel(SmartWifiManagerRfState* station) const
+{
+    double risk = 0.0;
+    risk += (station->consecFailure >= m_failureThreshold) ? 0.5 : 0.0;
+    risk += (station->snrVariance > 5.0) ? 0.25 : 0.0;
+    risk += (station->lastSnr < 10.0) ? 0.25 : 0.0;
+    risk += std::max(0.0, 1.0 - station->confidence);
+    risk = std::min(1.0, risk);
+    return risk;
+}
+
+uint32_t
+SmartWifiManagerRf::GetContextSafeRate(SmartWifiManagerRfState* station, WifiContextType context) const
+{
+    switch (context) {
+        case WifiContextType::EMERGENCY: return 0;
+        case WifiContextType::POOR_UNSTABLE: return 1;
+        case WifiContextType::MARGINAL: return 3;
+        case WifiContextType::GOOD_UNSTABLE: return 5;
+        case WifiContextType::GOOD_STABLE: return 6;
+        case WifiContextType::EXCELLENT_STABLE: return 7;
+        default: return m_fallbackRate;
+    }
+}
+
+uint32_t
+SmartWifiManagerRf::GetRuleBasedRate(SmartWifiManagerRfState* station) const
+{
+    // Conservative: Always clamp to safe rate for current context
+    return GetContextSafeRate(station, ClassifyNetworkContext(station));
+}
+
+void
+SmartWifiManagerRf::LogContextAndDecision(const SafetyAssessment& safety, uint32_t mlRate, uint32_t ruleRate, uint32_t finalRate) const
+{
+    std::cout << "[CONTEXT RF] Context=" << safety.contextStr
+              << " Risk=" << safety.riskLevel
+              << " Emergency=" << safety.requiresEmergencyAction
+              << " RecommendedSafeRate=" << safety.recommendedSafeRate
+              << " MLRate=" << mlRate
+              << " RuleRate=" << ruleRate
+              << " FinalRate=" << finalRate << std::endl;
+}
+// --- HYBRID PATCH END ---
 
 } // namespace ns3

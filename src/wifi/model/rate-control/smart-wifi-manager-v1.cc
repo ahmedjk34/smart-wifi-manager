@@ -209,7 +209,7 @@ SmartWifiManagerV1::DoReportDataOk(WifiRemoteStation* st,
     station->m_recovery = false;
     station->m_lastSnr = dataSnr;
 
-
+    
 //     // Decision Tree (improved for realistic SNR mapping)
 // if (station->m_lastSnr < 8.0) {
 //     station->m_rate = 0; // safest, lowest rate
@@ -220,6 +220,7 @@ SmartWifiManagerV1::DoReportDataOk(WifiRemoteStation* st,
 // } else {
 //     station->m_rate = maxRateIdx; // best rate
 // }
+
 
     // V1: Simple Decision Tree for Rate Selection
     // Example: 4 rates
