@@ -5,6 +5,7 @@
 #include "ns3/internet-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/flow-monitor-module.h"
+#include "ns3/smart-wifi-manager-rf.h"
 #include <vector>
 #include <string>
 #include <fstream>
@@ -15,26 +16,20 @@
 
 using namespace ns3;
 
-// --- HYBRID PATCH START ---
-// Logging file (global to allow access in callbacks)
+// Global logging file
 std::ofstream logFile;
 
-// These extern "C" functions allow the manager to log features and picked rates.
-// PATCH: Now fully supports 22 features and checks/corrects order/size.
 extern "C" void LogFeaturesAndRate(const std::vector<double>& features, uint32_t rateIdx, uint64_t rate,
                                    std::string context, double risk, uint32_t ruleRate, double mlConfidence)
 {
     logFile << "[ML DEBUG] Features to ML: ";
-    // Check for correct feature count
     if (features.size() != 22) {
         logFile << "[ERROR] Feature count mismatch! Got " << features.size() << " features, expected 22. ";
-        // Optionally, print each feature for debugging
         for (size_t i = 0; i < features.size(); ++i)
             logFile << features[i] << " ";
         logFile << std::endl;
         return;
     }
-    // Print features with order index for robust debugging
     for (size_t i = 0; i < features.size(); ++i)
         logFile << "[" << i << "]=" << std::setprecision(6) << features[i] << " ";
     logFile << "-> ML Prediction: " << rateIdx
@@ -45,7 +40,6 @@ extern "C" void LogFeaturesAndRate(const std::vector<double>& features, uint32_t
             << " | ML Confidence: " << mlConfidence
             << std::endl;
 }
-// --- HYBRID PATCH END ---
 
 struct BenchmarkTestCase
 {
@@ -76,6 +70,7 @@ void PhyTxBeginTrace(std::string context, Ptr<const Packet> packet, double txPow
             << " TxPower=" << txPowerW << "W (" << 10*log10(txPowerW*1000) << " dBm)" << std::endl;
 }
 
+
 void PhyRxBeginTrace(std::string context, Ptr<const Packet> packet, RxPowerWattPerChannelBand rxPowersW)
 {
     double totalRxPower = 0;
@@ -86,82 +81,52 @@ void PhyRxBeginTrace(std::string context, Ptr<const Packet> packet, RxPowerWattP
             << " RxPower=" << totalRxPower << "W (" << 10*log10(totalRxPower*1000) << " dBm)" << std::endl;
 }
 
-// Utility: Validate and expand feature vector to 22 elements with safe defaults
-std::vector<double> ValidateAndExpandFeatures(const std::vector<double>& input)
-{
-    std::vector<double> features(22, 0.0);
-    size_t n = input.size();
-    for (size_t i = 0; i < std::min(n, size_t(22)); ++i)
-        features[i] = input[i];
-    // If not enough features, fill remaining ones with 0.0 and log warning
-    if (n != 22) {
-        logFile << "[WARN] Expanding feature vector from " << n << " to 22. Missing indices set to 0." << std::endl;
-    }
-    return features;
-}
-
 void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::string& modelType)
 {
+    logFile << "[TEST START] Running test case: " << tc.scenarioName << " with distance=" << tc.staDistance << "m" << std::endl;
+
     NodeContainer wifiStaNodes;
     wifiStaNodes.Create(1);
     NodeContainer wifiApNode;
     wifiApNode.Create(1);
 
-    // FIXED: Properly configure propagation model with realistic distance-based path loss
+    // Configure propagation model
     YansWifiChannelHelper channel;
     channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-    
-    // Use realistic path loss model with proper parameters
-channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
-                          "Exponent", DoubleValue(3.0),          // Realistic path loss exponent
-                          "ReferenceLoss", DoubleValue(46.67),   // Standard reference loss at 1m for 2.4GHz
-                          "ReferenceDistance", DoubleValue(1.0));
+    channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+                              "Exponent", DoubleValue(3.0),
+                              "ReferenceLoss", DoubleValue(46.67),
+                              "ReferenceDistance", DoubleValue(1.0));
 
-
-YansWifiPhyHelper phy;
-phy.SetChannel(channel.Create());
-
-// FIXED: Set realistic PHY parameters
-phy.Set("TxPowerStart", DoubleValue(20.0));     // 20 dBm (100 mW)
-phy.Set("TxPowerEnd", DoubleValue(20.0));       // 20 dBm (100 mW)  
-phy.Set("RxSensitivity", DoubleValue(-85.0));   // Realistic sensitivity
-phy.Set("CcaEdThreshold", DoubleValue(-85.0));  // Clear channel assessment
-    
-    // FIXED: Set more realistic but permissive PHY parameters
-    phy.Set("TxPowerStart", DoubleValue(20.0));  // 20 dBm
-    phy.Set("TxPowerEnd", DoubleValue(20.0));    // 20 dBm
-    phy.Set("RxSensitivity", DoubleValue(-85.0)); // More realistic sensitivity
+    YansWifiPhyHelper phy;
+    phy.SetChannel(channel.Create());
+    phy.Set("TxPowerStart", DoubleValue(20.0));
+    phy.Set("TxPowerEnd", DoubleValue(20.0));
+    phy.Set("RxSensitivity", DoubleValue(-85.0));
     phy.Set("CcaEdThreshold", DoubleValue(-85.0));
 
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
 
-wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
-                             "EnableRealisticSnr", BooleanValue(true),
-                             "NoiseFigureDb", DoubleValue(7.0),
-                             "ChannelBandwidthMHz", DoubleValue(20.0),
-                             "MaxSnrDb", DoubleValue(40.0),
-                             "MinSnrDb", DoubleValue(-10.0));
+    // Configure SmartWifiManagerRf
     if (modelType == "oracle")
     {
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                      "ModelPath", StringValue("step3_rf_oracle_best_rateIdx_model_FIXED.joblib"),
-                                     "ModelType", StringValue("oracle"));
+                                     "ModelType", StringValue("oracle"),
+                                     "ConfidenceThreshold", DoubleValue(0.7),
+                                     "RiskThreshold", DoubleValue(0.7),
+                                     "FailureThreshold", UintegerValue(4));
     }
     else if (modelType == "v3")
     {
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                      "ModelPath", StringValue("step3_rf_v3_rateIdx_model_FIXED.joblib"),
-                                     "ModelType", StringValue("v3"));
+                                     "ModelType", StringValue("v3"),
+                                     "ConfidenceThreshold", DoubleValue(0.7),
+                                     "RiskThreshold", DoubleValue(0.7),
+                                     "FailureThreshold", UintegerValue(4));
     }
-
-    // --- HYBRID PATCH START ---
-    // Optionally add context/risk/hybrid thresholds
-    wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
-                                 "ConfidenceThreshold", DoubleValue(0.7),
-                                 "RiskThreshold", DoubleValue(0.7),
-                                 "FailureThreshold", UintegerValue(4));
-    // --- HYBRID PATCH END ---
 
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns3-80211g");
@@ -172,6 +137,20 @@ wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
+    // PASS DISTANCE DIRECTLY TO SMART WIFI MANAGER
+    Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
+    Ptr<SmartWifiManagerRf> smartManager = DynamicCast<SmartWifiManagerRf>(staDevice->GetRemoteStationManager());
+    if (smartManager)
+    {
+        smartManager->SetBenchmarkDistance(tc.staDistance);
+        logFile << "[DISTANCE SET] Passed distance " << tc.staDistance << "m directly to SmartWifiManagerRf" << std::endl;
+    }
+    else
+    {
+        logFile << "[ERROR] Could not cast to SmartWifiManagerRf to set distance!" << std::endl;
+    }
+
+    // Set up mobility
     MobilityHelper apMobility;
     Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
     apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -199,7 +178,7 @@ wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
         mobStill.Install(wifiStaNodes);
     }
 
-    // Log actual positions for verification
+    // Log actual positions
     logFile << "[POSITION] AP at: " << wifiApNode.Get(0)->GetObject<MobilityModel>()->GetPosition() << std::endl;
     logFile << "[POSITION] STA at: " << wifiStaNodes.Get(0)->GetObject<MobilityModel>()->GetPosition() << std::endl;
     
@@ -228,8 +207,7 @@ wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    // --- HYBRID PATCH START ---
-    // Connect rate/context/risk tracing with additional PHY traces
+    // Connect traces
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
         MakeCallback(&RateTrace));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
@@ -238,7 +216,6 @@ wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
         MakeCallback(&PhyTxBeginTrace));
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxBegin",
         MakeCallback(&PhyRxBeginTrace));
-    // --- HYBRID PATCH END ---
 
     Simulator::Stop(Seconds(20.0));
     Simulator::Run();
@@ -284,12 +261,12 @@ wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
         << rxPackets << ","
         << txPackets << "\n";
 
+    logFile << "[TEST END] Completed test case: " << tc.scenarioName << std::endl;
     Simulator::Destroy();
 }
 
 int main(int argc, char *argv[])
 {
-    // Open the log file for writing, will be used globally
     logFile.open("smartrf-logs.txt");
     if (!logFile.is_open()) {
         std::cerr << "Error: Could not open smartrf-logs.txt for writing logs." << std::endl;
@@ -298,7 +275,7 @@ int main(int argc, char *argv[])
     logFile << "SmartRF Benchmark Logging Started\n";
 
     std::vector<BenchmarkTestCase> testCases;
-    std::vector<double> distances = { 60.0  };  // FIXED: Test multiple distances
+    std::vector<double> distances = { 1.0, 40.0 ,  120.0 };  // DIRECT DISTANCE VALUES
     std::vector<double> speeds = { 0.0, 10.0 };
     std::vector<uint32_t> interferers = { 0, 3 };
     std::vector<uint32_t> packetSizes = { 256, 1500 };
@@ -340,7 +317,7 @@ int main(int argc, char *argv[])
 
         for (const auto& tc : testCases)
         {
-            logFile << "Running RF " << modelType << ": " << tc.scenarioName << std::endl;
+            logFile << "Running RF " << modelType << ": " << tc.scenarioName << " (Distance: " << tc.staDistance << "m)" << std::endl;
             RunTestCase(tc, csv, modelType);
         }
 
