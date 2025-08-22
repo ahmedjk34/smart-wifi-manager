@@ -112,13 +112,20 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
     
     // Use realistic path loss model with proper parameters
-    channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
-                              "Exponent", DoubleValue(3.0),        // Realistic outdoor path loss
-                              "ReferenceLoss", DoubleValue(46.67), // Standard reference loss at 1m
-                              "ReferenceDistance", DoubleValue(1.0));
+channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+                          "Exponent", DoubleValue(3.0),          // Realistic path loss exponent
+                          "ReferenceLoss", DoubleValue(46.67),   // Standard reference loss at 1m for 2.4GHz
+                          "ReferenceDistance", DoubleValue(1.0));
 
-    YansWifiPhyHelper phy;
-    phy.SetChannel(channel.Create());
+
+YansWifiPhyHelper phy;
+phy.SetChannel(channel.Create());
+
+// FIXED: Set realistic PHY parameters
+phy.Set("TxPowerStart", DoubleValue(20.0));     // 20 dBm (100 mW)
+phy.Set("TxPowerEnd", DoubleValue(20.0));       // 20 dBm (100 mW)  
+phy.Set("RxSensitivity", DoubleValue(-85.0));   // Realistic sensitivity
+phy.Set("CcaEdThreshold", DoubleValue(-85.0));  // Clear channel assessment
     
     // FIXED: Set more realistic but permissive PHY parameters
     phy.Set("TxPowerStart", DoubleValue(20.0));  // 20 dBm
@@ -129,9 +136,12 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
 
-    wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
-                                 "ModelType", StringValue(modelType));
-
+wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
+                             "EnableRealisticSnr", BooleanValue(true),
+                             "NoiseFigureDb", DoubleValue(7.0),
+                             "ChannelBandwidthMHz", DoubleValue(20.0),
+                             "MaxSnrDb", DoubleValue(40.0),
+                             "MinSnrDb", DoubleValue(-10.0));
     if (modelType == "oracle")
     {
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
@@ -288,7 +298,7 @@ int main(int argc, char *argv[])
     logFile << "SmartRF Benchmark Logging Started\n";
 
     std::vector<BenchmarkTestCase> testCases;
-    std::vector<double> distances = {60.0};  // FIXED: Test multiple distances
+    std::vector<double> distances = { 60.0  };  // FIXED: Test multiple distances
     std::vector<double> speeds = { 0.0, 10.0 };
     std::vector<uint32_t> interferers = { 0, 3 };
     std::vector<uint32_t> packetSizes = { 256, 1500 };
