@@ -1,8 +1,3 @@
-/*
- * Copyright (c) 2005,2006 INRIA
- * ... (license text unchanged)
- * Author: Mathieu Lacage <mathieu.lacage@sophia.inria.fr>
- */
 #include "smart-wifi-manager-rf.h"
 
 #include "ns3/assert.h"
@@ -395,11 +390,11 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     result.latencyMs = 0.0;
     result.confidence = 1.0; // Default: always "high confidence" if not returned by server
 
-    if (features.size() != 18)
+    if (features.size() != 22)
     {
-        result.error = "Invalid feature count: " + std::to_string(features.size());
-        return result;
-    }
+    result.error = "Invalid feature count: " + std::to_string(features.size());
+    return result;
+}
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
@@ -499,49 +494,101 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
 
     return result;
 }
-
 std::vector<double>
 SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
 {
     NS_LOG_FUNCTION(this << st);
 
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    std::vector<double> features(18);
 
+    // --- Success Ratios ---
     double shortSuccRatio = 0.5;
     double medSuccRatio = 0.5;
-
     if (!station->shortWindow.empty())
     {
         int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(), true);
         shortSuccRatio = static_cast<double>(successes) / station->shortWindow.size();
     }
-
     if (!station->mediumWindow.empty())
     {
         int successes = std::count(station->mediumWindow.begin(), station->mediumWindow.end(), true);
         medSuccRatio = static_cast<double>(successes) / station->mediumWindow.size();
     }
 
-    features[0] = std::max(-20.0, std::min(80.0, station->lastSnr));
-    features[1] = std::max(-20.0, std::min(80.0, station->snrFast));
-    features[2] = std::max(-20.0, std::min(80.0, station->snrSlow));
-    features[3] = std::max(0.0, std::min(1.0, shortSuccRatio));
-    features[4] = std::max(0.0, std::min(1.0, medSuccRatio));
-    features[5] = std::min(100.0, static_cast<double>(station->consecSuccess));
-    features[6] = std::min(100.0, static_cast<double>(station->consecFailure));
-    features[7] = std::max(0.0, std::min(1.0, station->severity));
-    features[8] = std::max(0.0, std::min(1.0, station->confidence));
-    features[9] = static_cast<double>(station->T1);
-    features[10] = static_cast<double>(station->T2);
-    features[11] = static_cast<double>(station->T3);
-    features[12] = GetOfferedLoad();
-    features[13] = static_cast<double>(station->queueLength);
-    features[14] = static_cast<double>(station->retryCount);
-    features[15] = 20.0;
-    features[16] = GetMobilityMetric(st);
-    features[17] = std::max(0.0, std::min(100.0, station->snrVariance));
+    // --- Feature Vector Construction (22 features, exact order) ---
+    std::vector<double> features(22);
 
+    // 1. rateIdx
+    features[0] = static_cast<double>(station->currentRateIndex);
+
+    // 2. phyRate
+    // Use the WiFiMode data rate for the current index and default channel width
+    WifiMode mode = GetSupported(st, station->currentRateIndex);
+    features[1] = static_cast<double>(mode.GetDataRate(GetChannelWidth(st)));
+
+    // 3. lastSnr -- use lastSnr, which is filled from last RX packet
+    features[2] = std::max(-20.0, std::min(80.0, station->lastSnr));
+
+    // 4. snrFast
+    features[3] = std::max(-20.0, std::min(80.0, station->snrFast));
+
+    // 5. snrSlow
+    features[4] = std::max(-20.0, std::min(80.0, station->snrSlow));
+
+    // 6. shortSuccRatio
+    features[5] = std::max(0.0, std::min(1.0, shortSuccRatio));
+
+    // 7. medSuccRatio
+    features[6] = std::max(0.0, std::min(1.0, medSuccRatio));
+
+    // 8. consecSuccess
+    features[7] = std::min(100.0, static_cast<double>(station->consecSuccess));
+
+    // 9. consecFailure
+    features[8] = std::min(100.0, static_cast<double>(station->consecFailure));
+
+    // 10. severity
+    features[9] = std::max(0.0, std::min(1.0, station->severity));
+
+    // 11. confidence
+    features[10] = std::max(0.0, std::min(1.0, station->confidence));
+
+    // 12. T1
+    features[11] = static_cast<double>(station->T1);
+
+    // 13. T2
+    features[12] = static_cast<double>(station->T2);
+
+    // 14. T3
+    features[13] = static_cast<double>(station->T3);
+
+    // 15. decisionReason
+    // If you have an integer/enum decision reason, pass it here; otherwise default to 0.
+    features[14] = static_cast<double>(station->decisionReason);
+
+    // 16. packetSuccess
+    // If last packet was success/failure, encode as 1/0. (default: 1)
+    features[15] = station->lastPacketSuccess ? 1.0 : 0.0;
+
+    // 17. offeredLoad
+    features[16] = GetOfferedLoad();
+
+    // 18. queueLen
+    features[17] = static_cast<double>(station->queueLength);
+
+    // 19. retryCount
+    features[18] = static_cast<double>(station->retryCount);
+
+    // 20. channelWidth
+    features[19] = static_cast<double>(GetChannelWidth(st));
+
+    // 21. mobilityMetric
+    features[20] = GetMobilityMetric(st);
+
+    // 22. snrVariance
+    features[21] = std::max(0.0, std::min(100.0, station->snrVariance));
+
+    // --- Debug output ---
     std::cout << "[DEBUG RF] Features sent to ML: ";
     for (size_t i = 0; i < features.size(); ++i) {
         std::cout << features[i] << " ";
