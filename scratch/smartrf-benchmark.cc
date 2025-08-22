@@ -13,20 +13,27 @@
 
 using namespace ns3;
 
-// --- BEGIN PATCH ---
-// These extern "C" functions allow the manager to log features and picked rates.
-extern "C" void LogFeaturesAndRate(const std::vector<double>& features, uint32_t rateIdx, uint64_t rate)
-{
-    std::cout << "[ML DEBUG] Features sent to ML: ";
-    for (size_t i = 0; i < features.size(); ++i)
-    {
-        std::cout << features[i] << " ";
-    }
-    std::cout << "-> Picked Rate Index: " << rateIdx << " (Rate: " << rate << "bps)" << std::endl;
-}
-// --- END PATCH ---
+// --- HYBRID PATCH START ---
+// Logging file (global to allow access in callbacks)
+std::ofstream logFile;
 
-// Struct for describing a single test case
+// These extern "C" functions allow the manager to log features and picked rates.
+extern "C" void LogFeaturesAndRate(const std::vector<double>& features, uint32_t rateIdx, uint64_t rate,
+                                   std::string context, double risk, uint32_t ruleRate, double mlConfidence)
+{
+    logFile << "[ML DEBUG] Features to ML: ";
+    for (size_t i = 0; i < features.size(); ++i)
+        logFile << features[i] << " ";
+    logFile << "-> ML Prediction: " << rateIdx
+            << " (Rate: " << rate << "bps)"
+            << " | Context: " << context
+            << " | Risk: " << risk
+            << " | RuleRate: " << ruleRate
+            << " | ML Confidence: " << mlConfidence
+            << std::endl;
+}
+// --- HYBRID PATCH END ---
+
 struct BenchmarkTestCase
 {
     double staDistance;
@@ -39,36 +46,26 @@ struct BenchmarkTestCase
 
 void RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
 {
-    std::cout << "Rate adaptation event: context=" << context
-              << " new datarate=" << rate << " old datarate=" << oldRate << std::endl;
+    logFile << "[RATE ADAPT EVENT] context=" << context
+            << " new datarate=" << rate
+            << " old datarate=" << oldRate
+            << std::endl;
 }
 
-// Correct callback signature for PhyRxEnd
 void PhyRxEndTrace(std::string context, Ptr<const Packet> packet)
 {
-    std::cout << "[DEBUG PHY] Packet received at " << context << std::endl;
+    logFile << "[DEBUG PHY] Packet received at " << context << std::endl;
 }
 
 void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::string& modelType)
 {
-    // Create nodes
     NodeContainer wifiStaNodes;
     wifiStaNodes.Create(1);
     NodeContainer wifiApNode;
     wifiApNode.Create(1);
 
-    // Interferers
-    NodeContainer interfererApNodes;
-    NodeContainer interfererStaNodes;
-    interfererApNodes.Create(tc.numInterferers);
-    interfererStaNodes.Create(tc.numInterferers);
-
-    // Channel and PHY: Add realistic propagation loss
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
     channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-    channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel");
-    // Optionally, add fading:
-    // channel.AddPropagationLoss("ns3::NakagamiPropagationLossModel");
 
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
@@ -76,11 +73,9 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
 
-    // Use SmartWifiManagerRf with different model types
     wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                  "ModelType", StringValue(modelType));
 
-    // Set model path based on type
     if (modelType == "oracle")
     {
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
@@ -94,6 +89,14 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
                                      "ModelType", StringValue("v3"));
     }
 
+    // --- HYBRID PATCH START ---
+    // Optionally add context/risk/hybrid thresholds
+    wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
+                                 "ConfidenceThreshold", DoubleValue(0.7),
+                                 "RiskThreshold", DoubleValue(0.7),
+                                 "FailureThreshold", UintegerValue(4));
+    // --- HYBRID PATCH END ---
+
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns3-80211g");
 
@@ -103,14 +106,6 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-    // Interferer WiFi
-    mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
-    NetDeviceContainer interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
-
-    mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
-    NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
-
-    // AP at origin
     MobilityHelper apMobility;
     Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
     apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -118,7 +113,6 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     apMobility.Install(wifiApNode);
 
-    // STA at distance (ONLY ONE MOBILITY MODEL INSTALLED)
     if (tc.staSpeed > 0.0)
     {
         MobilityHelper mobMove;
@@ -139,40 +133,15 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
         mobStill.Install(wifiStaNodes);
     }
 
-    // Interferers placed far from main AP and STA
-    MobilityHelper interfererMobility;
-    Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
-    Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
-    for (uint32_t i = 0; i < tc.numInterferers; ++i)
-    {
-        interfererApAlloc->Add(Vector(50.0 + 40*i, 50.0, 0.0));
-        interfererStaAlloc->Add(Vector(50.0 + 40*i, 55.0, 0.0));
-    }
-    interfererMobility.SetPositionAllocator(interfererApAlloc);
-    interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    interfererMobility.Install(interfererApNodes);
-    interfererMobility.SetPositionAllocator(interfererStaAlloc);
-    interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    interfererMobility.Install(interfererStaNodes);
-
-    // Internet stack
     InternetStackHelper stack;
     stack.Install(wifiApNode);
     stack.Install(wifiStaNodes);
-    stack.Install(interfererApNodes);
-    stack.Install(interfererStaNodes);
 
     Ipv4AddressHelper address;
     address.SetBase("10.1.3.0", "255.255.255.0");
     Ipv4InterfaceContainer apInterface = address.Assign(apDevices);
     Ipv4InterfaceContainer staInterface = address.Assign(staDevices);
 
-    // Interferer IPs
-    address.SetBase("10.1.4.0", "255.255.255.0");
-    Ipv4InterfaceContainer interfererApInterface = address.Assign(interfererApDevices);
-    Ipv4InterfaceContainer interfererStaInterface = address.Assign(interfererStaDevices);
-
-    // Main Application: UDP bulk traffic
     uint16_t port = 4000;
     OnOffHelper onoff("ns3::UdpSocketFactory", InetSocketAddress(apInterface.GetAddress(0), port));
     onoff.SetAttribute("DataRate", DataRateValue(DataRate(tc.trafficRate)));
@@ -186,35 +155,20 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     serverApps.Start(Seconds(1.0));
     serverApps.Stop(Seconds(20.0));
 
-    // Interferer traffic
-    for (uint32_t i = 0; i < tc.numInterferers; ++i)
-    {
-        OnOffHelper interfererOnOff("ns3::UdpSocketFactory", InetSocketAddress(interfererApInterface.GetAddress(i), port+1));
-        interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate("2Mbps")));
-        interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
-        interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
-        interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(18.0)));
-        interfererOnOff.Install(interfererStaNodes.Get(i));
-
-        PacketSinkHelper interfererSink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), port+1));
-        interfererSink.Install(interfererApNodes.Get(i));
-    }
-
-    // FlowMonitor
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    // Enable Rate trace
+    // --- HYBRID PATCH START ---
+    // Connect rate/context/risk tracing
     Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
-                MakeCallback(&RateTrace));
-    // Correct PHY callback (no SNR, just packet):
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd", MakeCallback(&PhyRxEndTrace));
+        MakeCallback(&RateTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
+        MakeCallback(&PhyRxEndTrace));
+    // --- HYBRID PATCH END ---
 
-    // Run simulation
     Simulator::Stop(Seconds(20.0));
     Simulator::Run();
 
-    // Results
     double throughput = 0;
     double packetLoss = 0;
     double avgDelay = 0;
@@ -229,19 +183,17 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
     for (auto it = stats.begin(); it != stats.end(); ++it)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
-        // Filter for main STA to AP flow
         if (t.sourceAddress == staInterface.GetAddress(0) && t.destinationAddress == apInterface.GetAddress(0))
         {
             rxPackets = it->second.rxPackets;
             txPackets = it->second.txPackets;
             rxBytes = it->second.rxBytes;
-            throughput = (rxBytes * 8.0) / (simulationTime * 1e6); // Mbps
+            throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
             packetLoss = txPackets > 0 ? 100.0 * (txPackets - rxPackets) / txPackets : 0.0;
             avgDelay = it->second.rxPackets > 0 ? it->second.delaySum.GetSeconds() / it->second.rxPackets * 1000.0 : 0.0;
         }
     }
 
-    // Output to CSV
     csv << "\"" << tc.scenarioName << "\","
         << modelType << ","
         << tc.staDistance << ","
@@ -260,15 +212,20 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, const std::str
 
 int main(int argc, char *argv[])
 {
-    // Many test cases in a vector
-    std::vector<BenchmarkTestCase> testCases;
+    // Open the log file for writing, will be used globally
+    logFile.open("smartrf-logs.txt");
+    if (!logFile.is_open()) {
+        std::cerr << "Error: Could not open smartrf-logs.txt for writing logs." << std::endl;
+        return 1;
+    }
+    logFile << "SmartRF Benchmark Logging Started\n";
 
-    // Fill test cases: distances, speeds, interferers, packet sizes, rates
-    std::vector<double> distances = { 1.0, 40.0, 120.0 };      // 3
-    std::vector<double> speeds = { 0.0, 10.0 };                // 2
-    std::vector<uint32_t> interferers = { 0, 3 };              // 2
-    std::vector<uint32_t> packetSizes = { 256, 1500 };         // 2
-    std::vector<std::string> trafficRates = { "1Mbps", "11Mbps", "54Mbps" }; // 3
+    std::vector<BenchmarkTestCase> testCases;
+    std::vector<double> distances = { 1.0, 40.0, 120.0 };
+    std::vector<double> speeds = { 0.0, 10.0 };
+    std::vector<uint32_t> interferers = { 0, 3 };
+    std::vector<uint32_t> packetSizes = { 256, 1500 };
+    std::vector<std::string> trafficRates = { "1Mbps", "11Mbps", "54Mbps" };
 
     for (double d : distances)
     {
@@ -296,7 +253,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Test both models
     std::vector<std::string> modelTypes = {"oracle", "v3"};
 
     for (const std::string& modelType : modelTypes)
@@ -307,14 +263,15 @@ int main(int argc, char *argv[])
 
         for (const auto& tc : testCases)
         {
-            std::cout << "Running RF " << modelType << ": " << tc.scenarioName << std::endl;
+            logFile << "Running RF " << modelType << ": " << tc.scenarioName << std::endl;
             RunTestCase(tc, csv, modelType);
         }
 
         csv.close();
-        std::cout << "RF " << modelType << " tests complete. Results in " << csvFilename << "\n";
+        logFile << "RF " << modelType << " tests complete. Results in " << csvFilename << "\n";
     }
 
-    std::cout << "All RF tests complete!\n";
+    logFile << "All RF tests complete!\n";
+    logFile.close();
     return 0;
 }
