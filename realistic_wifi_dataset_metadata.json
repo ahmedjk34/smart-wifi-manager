@@ -1,0 +1,86 @@
+{
+  "total_samples": 200000,
+  "features": [
+    "lastSnr",
+    "snrFast",
+    "snrSlow",
+    "shortSuccRatio",
+    "medSuccRatio",
+    "consecSuccess",
+    "consecFailure",
+    "severity",
+    "confidence",
+    "T1",
+    "T2",
+    "T3",
+    "offeredLoad",
+    "queueLen",
+    "retryCount",
+    "channelWidth",
+    "mobilityMetric",
+    "snrVariance",
+    "oracle_best_rateIdx",
+    "v3_rateIdx",
+    "distance",
+    "speed",
+    "environment",
+    "scenario",
+    "num_interferers"
+  ],
+  "scenarios": {
+    "static_good": {
+      "distance_range": [5, 30],
+      "speed_range": [0, 0.5],
+      "interference_prob": 0.1,
+      "environment": "indoor",
+      "weight": 0.25
+    },
+    "static_medium": {
+      "distance_range": [20, 80],
+      "speed_range": [0, 1],
+      "interference_prob": 0.3,
+      "environment": "mixed",
+      "weight": 0.25
+    },
+    "mobile_indoor": {
+      "distance_range": [10, 50],
+      "speed_range": [1, 5],
+      "interference_prob": 0.4,
+      "environment": "indoor",
+      "weight": 0.2
+    },
+    "mobile_outdoor": {
+      "distance_range": [20, 150],
+      "speed_range": [2, 15],
+      "interference_prob": 0.2,
+      "environment": "outdoor",
+      "weight": 0.15
+    },
+    "high_interference": {
+      "distance_range": [15, 60],
+      "speed_range": [0, 3],
+      "interference_prob": 0.8,
+      "environment": "indoor",
+      "weight": 0.15
+    }
+  },
+  "rate_distribution": {
+    "7": 119309,
+    "0": 75195,
+    "6": 3669,
+    "5": 1364,
+    "1": 250,
+    "4": 131,
+    "3": 77,
+    "2": 5
+  },
+  "v3_rate_distribution": {
+    "0": 200000
+  },
+  "snr_stats": {
+    "mean": 6.640065105353497,
+    "std": 12.648038953042242,
+    "min": 0.0,
+    "max": 50.0
+  }
+}
