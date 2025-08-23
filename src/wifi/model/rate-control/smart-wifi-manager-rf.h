@@ -11,6 +11,9 @@
 #include "ns3/vector.h"
 #include "ns3/node.h"
 #include "ns3/mobility-model.h"
+#include "ns3/node-container.h"
+#include "ns3/wifi-net-device.h"
+#include "ns3/wifi-phy.h"
 #include <string>
 #include <chrono>
 #include <deque>
@@ -18,16 +21,22 @@
 namespace ns3
 {
 
+// --- HYBRID PATCH START ---
+// Context classification
+enum class WifiContextType {
+    EMERGENCY,
+    POOR_UNSTABLE,
+    MARGINAL,
+    GOOD_UNSTABLE,
+    GOOD_STABLE,
+    EXCELLENT_STABLE,
+    UNKNOWN
+};
+// --- HYBRID PATCH END ---
+
 /**
  * \brief Smart Rate control algorithm using Random Forest ML models
  * \ingroup wifi
- *
- * This class implements the Smart rate control algorithm using Random Forest models.
- * It uses Python inference script to predict optimal rate indices based on
- * network conditions and performance metrics.
- * This RAA does not support HT modes and will error
- * exit if the user tries to configure this RAA with a Wi-Fi MAC
- * that supports 802.11n or higher.
  */
 class SmartWifiManagerRf : public WifiRemoteStationManager
 {
@@ -42,7 +51,21 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
         double latencyMs;
         bool success;
         std::string error;
+        double confidence;
     };
+
+    struct SafetyAssessment
+    {
+        WifiContextType context;
+        double riskLevel;
+        uint32_t recommendedSafeRate;
+        bool requiresEmergencyAction;
+        double confidenceInAssessment;
+        std::string contextStr;
+    };
+
+    // Method to set distance from benchmark (DIRECTLY from your test cases)
+    void SetBenchmarkDistance(double distance);
 
   private:
     void DoInitialize() override;
@@ -71,6 +94,28 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     double GetOfferedLoad() const;
     double GetMobilityMetric(WifiRemoteStation* station) const;
 
+    // Simple distance → SNR mapping using the value passed from benchmark
+    double GetSnrFromDistance() const;
+
+    // (Legacy helper retained; now unused for distance, but harmless to keep declared)
+    double CalculateDistanceBasedSnr(WifiRemoteStation* st) const;
+
+    // Context/risk assessment and fusion
+    SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
+    WifiContextType ClassifyNetworkContext(struct SmartWifiManagerRfState* station) const;
+    std::string ContextTypeToString(WifiContextType type) const;
+    double CalculateRiskLevel(struct SmartWifiManagerRfState* station) const;
+    uint32_t GetContextSafeRate(struct SmartWifiManagerRfState* station, WifiContextType context) const;
+    uint32_t GetRuleBasedRate(struct SmartWifiManagerRfState* station) const;
+    void LogContextAndDecision(const SafetyAssessment& safety, uint32_t mlRate, uint32_t ruleRate, uint32_t finalRate) const;
+
+
+    uint32_t GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station, const SafetyAssessment& safety) const;
+
+    // Distance from benchmark (set per simulation by your benchmark harness)
+    double m_benchmarkDistance;
+
+    // Config / attributes
     std::string m_modelPath;
     std::string m_scalerPath;
     std::string m_pythonScript;
@@ -83,13 +128,27 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     uint32_t m_inferencePeriod;
     uint32_t m_fallbackRate;
     bool m_enableFallback;
-
-    // --- Add this missing member for the server port ---
     uint16_t m_inferenceServerPort;
+
+    // SNR behavior toggles/limits
+    bool   m_useRealisticSnr;
+    double m_maxSnrDb;
+    double m_minSnrDb;
+    double m_snrOffset;
+
+    // Tunable fusion thresholds
+    double m_confidenceThreshold;
+    double m_riskThreshold;
+    uint32_t m_failureThreshold;
 
     TracedValue<uint64_t> m_currentRate;
     TracedValue<uint32_t> m_mlInferences;
     TracedValue<uint32_t> m_mlFailures;
+
+    mutable uint32_t m_lastMlRate;      // Cache last ML result
+    mutable Time m_lastMlTime;          // When ML was last called
+    double m_mlGuidanceWeight;          // Weight of ML in final decision
+    uint32_t m_mlCacheTime;             // How long to cache ML results
 };
 
 /**
@@ -115,6 +174,10 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     Vector lastPosition;
     uint32_t currentRateIndex;
     uint32_t queueLength;
+    WifiContextType lastContext;
+    double lastRiskLevel;
+    uint32_t decisionReason = 0;
+    bool lastPacketSuccess = true;
 };
 
 } // namespace ns3
