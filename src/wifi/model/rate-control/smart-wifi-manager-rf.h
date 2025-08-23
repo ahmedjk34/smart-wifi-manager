@@ -17,6 +17,7 @@
 #include <string>
 #include <chrono>
 #include <deque>
+#include <cstdint>
 
 namespace ns3
 {
@@ -100,6 +101,9 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     // (Legacy helper retained; now unused for distance, but harmless to keep declared)
     double CalculateDistanceBasedSnr(WifiRemoteStation* st) const;
 
+    // --- NEW: INFINITE LOOP PREVENTION METHODS ---
+    uint64_t CalculateFeatureHash(const std::vector<double>& features) const;
+
     // Context/risk assessment and fusion
     SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
     WifiContextType ClassifyNetworkContext(struct SmartWifiManagerRfState* station) const;
@@ -110,7 +114,11 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void LogContextAndDecision(const SafetyAssessment& safety, uint32_t mlRate, uint32_t ruleRate, uint32_t finalRate) const;
 
     // Distance from benchmark (set per simulation by your benchmark harness)
-    double m_benchmarkDistance;
+    double m_benchmarkDistance;  // MOVED UP IN DECLARATION ORDER
+
+    // --- NEW: INFINITE LOOP PREVENTION MEMBERS ---
+    mutable uint32_t m_totalInferenceCalls;    // Total ML inference calls counter
+    mutable uint64_t m_lastFeatureHash;        // Hash of last feature vector for duplicate detection
 
     // Config / attributes
     std::string m_modelPath;

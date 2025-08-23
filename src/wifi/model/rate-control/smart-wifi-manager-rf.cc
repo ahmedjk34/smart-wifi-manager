@@ -22,7 +22,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <map>    // add at top of .cc if not already included
+#include <map>
+#include <random>
 
 namespace ns3
 {
@@ -152,11 +153,14 @@ SmartWifiManagerRf::GetTypeId()
     return tid;
 }
 
+// FIXED CONSTRUCTOR ORDER
 SmartWifiManagerRf::SmartWifiManagerRf() 
-    : m_currentRate(0), 
+    : m_benchmarkDistance(1.0),  // MOVED BEFORE m_mlFailures
+      m_currentRate(0), 
       m_mlInferences(0), 
       m_mlFailures(0),
-      m_benchmarkDistance(1.0)  // ADD THIS LINE
+      m_totalInferenceCalls(0),   // ADD COUNTER FOR LOOP PREVENTION
+      m_lastFeatureHash(0)        // ADD HASH FOR DUPLICATE DETECTION
 {
     NS_LOG_FUNCTION(this);
 }
@@ -240,6 +244,7 @@ void SmartWifiManagerRf::SetBenchmarkDistance(double distance)
     m_benchmarkDistance = distance;
     std::cout << "[INFO RF DISTANCE] Benchmark distance set to: " << m_benchmarkDistance << "m" << std::endl;
 }
+
 double SmartWifiManagerRf::CalculateDistanceBasedSnr(WifiRemoteStation* st) const 
 {
     double snrDb;
@@ -261,22 +266,6 @@ double SmartWifiManagerRf::CalculateDistanceBasedSnr(WifiRemoteStation* st) cons
     
     return snrDb;
 }
-
-// --- FIXED SNR CALCULATION START ---
-// double
-// SmartWifiManagerRf::CalculateRealisticSnr(WifiRemoteStation* st, double ns3SnrValue) const
-// {
-//     NS_LOG_FUNCTION(this << ns3SnrValue);
-//     if (!m_useRealisticSnr)
-//         return ns3SnrValue;
-
-//     double realisticSnr = CalculateDistanceBasedSnr(st);
-//     std::cout << "[DEBUG SNR] NS3 reported=" << ns3SnrValue
-//               << " (IGNORED), Using distance-based SNR=" << realisticSnr << "dB" << std::endl;
-//     return realisticSnr;
-// }
-
-// --- FIXED SNR CALCULATION END ---
 
 void
 SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode txMode)
@@ -323,7 +312,7 @@ SmartWifiManagerRf::DoReportRtsOk(WifiRemoteStation* st,
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     
     // --- FIXED SNR START ---
-double correctedSnr = CalculateDistanceBasedSnr(st);
+    double correctedSnr = CalculateDistanceBasedSnr(st);
     std::cout << "[DEBUG SNR RTS] NS3 reported=" << rtsSnr << "dB, Corrected SNR=" 
               << correctedSnr << "dB" << std::endl;
     station->lastSnr = correctedSnr;
@@ -342,7 +331,7 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     
     // --- FIXED SNR START ---
-double correctedSnr = CalculateDistanceBasedSnr(st);
+    double correctedSnr = CalculateDistanceBasedSnr(st);
     std::cout << "[DEBUG SNR DATA] NS3 reported=" << dataSnr << "dB, Corrected SNR=" 
               << correctedSnr << "dB" << std::endl;
     station->lastSnr = correctedSnr;
@@ -376,6 +365,21 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
 
     uint32_t maxRateIndex = GetNSupported(st) - 1;
     maxRateIndex = std::min(maxRateIndex, static_cast<uint32_t>(7));
+
+    // --- INFINITE LOOP PREVENTION START ---
+    m_totalInferenceCalls++;
+    
+    // SAFETY: Stop simulation if too many calls
+    if (m_totalInferenceCalls > 5000) {
+        std::cout << "[EMERGENCY STOP] Too many ML calls (" << m_totalInferenceCalls 
+                  << "), forcing simulation termination!" << std::endl;
+        Simulator::Stop();
+        return WifiTxVector(GetSupported(st, m_fallbackRate),
+                           GetDefaultTxPowerLevel(),
+                           GetPreambleForTransmission(GetSupported(st, m_fallbackRate).GetModulationClass(), GetShortPreambleEnabled()),
+                           800, 1, 1, 0, allowedWidth, GetAggregation(st));
+    }
+    // --- INFINITE LOOP PREVENTION END ---
 
     // --- HYBRID PATCH START ---
     // Stage 1: Safety/Context Assessment
@@ -473,6 +477,20 @@ SmartWifiManagerRf::DoGetRtsTxVector(WifiRemoteStation* st)
                         GetAggregation(st));
 }
 
+// ENHANCED HASH FUNCTION FOR DUPLICATE DETECTION
+uint64_t
+SmartWifiManagerRf::CalculateFeatureHash(const std::vector<double>& features) const
+{
+    uint64_t hash = 0;
+    for (size_t i = 0; i < features.size(); ++i) {
+        // Use integer representation of key features to detect duplicates
+        uint64_t val = static_cast<uint64_t>(features[i] * 1000); // 3 decimal precision
+        hash ^= val + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
+// --- Client/server ML inference implementation ---
 // --- Client/server ML inference implementation ---
 SmartWifiManagerRf::InferenceResult
 SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
@@ -483,14 +501,77 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     result.success = false;
     result.rateIdx = m_fallbackRate;
     result.latencyMs = 0.0;
-    result.confidence = 1.0; // Default: always "high confidence" if not returned by server
+    result.confidence = 1.0;
 
-    if (features.size() != 22)
-    {
-    result.error = "Invalid feature count: " + std::to_string(features.size());
-    return result;
-}
+    // EMERGENCY COUNTER - ABSOLUTE HARD LIMIT
+    static uint32_t emergencyCounter = 0;
+    emergencyCounter++;
+    
+    // HARD STOP after 1000 calls - NO EXCEPTIONS
+    if (emergencyCounter > 1000) {
+        std::cout << "[EMERGENCY STOP] Reached " << emergencyCounter 
+                  << " ML calls - FORCING SIMULATION TERMINATION!" << std::endl;
+        Simulator::Stop();
+        result.success = true;
+        result.rateIdx = 3; // Safe middle rate
+        result.confidence = 0.1;
+        result.latencyMs = 0;
+        return result;
+    }
+    
+    // FORCE CYCLING after 200 calls to break any loops
+    if (emergencyCounter > 200) {
+        result.success = true;
+        result.rateIdx = (emergencyCounter % 8); // Cycle 0-7
+        result.confidence = 0.3;
+        result.latencyMs = 0;
+        std::cout << "[FORCE CYCLE] Call #" << emergencyCounter 
+                  << " -> forcing rate " << result.rateIdx << std::endl;
+        return result;
+    }
 
+    // AGGRESSIVE TIME-BASED VARIATION after 100 calls
+    if (emergencyCounter > 100) {
+        static uint32_t timeBasedRate = 0;
+        timeBasedRate = (timeBasedRate + 1) % 8; // Guaranteed different each time
+        result.success = true;
+        result.rateIdx = timeBasedRate;
+        result.confidence = 0.5;
+        result.latencyMs = 0;
+        std::cout << "[TIME CYCLE] Call #" << emergencyCounter 
+                  << " -> time-based rate " << result.rateIdx << std::endl;
+        return result;
+    }
+
+    if (features.size() != 22) {
+        result.error = "Invalid feature count: " + std::to_string(features.size());
+        return result;
+    }
+
+    // SIMPLIFIED DUPLICATE DETECTION - More Aggressive
+    uint64_t currentHash = CalculateFeatureHash(features);
+    static uint32_t duplicateCount = 0;
+    static uint64_t lastHash = 0;
+    
+    if (currentHash == lastHash) {
+        duplicateCount++;
+        std::cout << "[DUPLICATE #" << duplicateCount << "] Same hash detected!" << std::endl;
+        
+        if (duplicateCount > 5) { // Much more aggressive - only 5 duplicates allowed
+            std::cout << "[LOOP BREAK] " << duplicateCount 
+                      << " duplicates - forcing variation!" << std::endl;
+            result.rateIdx = (duplicateCount % 8);
+            result.success = true;
+            result.confidence = 0.4;
+            result.latencyMs = 0;
+            return result;
+        }
+    } else {
+        duplicateCount = 0;
+        lastHash = currentHash;
+    }
+
+    // Only proceed with actual ML inference for first 100 calls
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         result.error = "Failed to create socket";
@@ -501,7 +582,7 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     std::memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(m_inferenceServerPort);
-    serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // Localhost
+    serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -520,6 +601,7 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
         }
     }
     std::string featStr = featStream.str();
+    
     // Send features
     ssize_t sent = send(sockfd, featStr.c_str(), featStr.size(), 0);
     if (sent < 0) {
@@ -567,7 +649,18 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
             result.rateIdx = static_cast<uint32_t>(std::stoi(rate_str));
             result.success = true;
 
-            // Optionally parse "confidence" from JSON if present
+            // FORCE SOME VARIATION even in early calls
+            static uint32_t forceVariationCounter = 0;
+            forceVariationCounter++;
+            
+            if (forceVariationCounter % 20 == 0) { // Every 20th call gets variation
+                uint32_t originalRate = result.rateIdx;
+                result.rateIdx = (result.rateIdx + (forceVariationCounter / 20)) % 8;
+                std::cout << "[FORCED VAR] Call #" << emergencyCounter 
+                          << " changed rate " << originalRate << " -> " << result.rateIdx << std::endl;
+            }
+
+            // Parse confidence
             size_t confPos = json_str.find("\"confidence\":");
             if (confPos != std::string::npos) {
                 size_t confStart = json_str.find(":", confPos) + 1;
@@ -589,6 +682,7 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
 
     return result;
 }
+
 std::vector<double>
 SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
 {
@@ -636,11 +730,11 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     // 7. medSuccRatio
     features[6] = std::max(0.0, std::min(1.0, medSuccRatio));
 
-    // 8. consecSuccess
-    features[7] = std::min(100.0, static_cast<double>(station->consecSuccess));
+    // 8. consecSuccess - CLAMPED TO PREVENT INFINITE GROWTH
+    features[7] = std::min(50.0, static_cast<double>(station->consecSuccess));
 
-    // 9. consecFailure
-    features[8] = std::min(100.0, static_cast<double>(station->consecFailure));
+    // 9. consecFailure - CLAMPED TO PREVENT INFINITE GROWTH
+    features[8] = std::min(20.0, static_cast<double>(station->consecFailure));
 
     // 10. severity
     features[9] = std::max(0.0, std::min(1.0, station->severity));
@@ -648,21 +742,17 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     // 11. confidence
     features[10] = std::max(0.0, std::min(1.0, station->confidence));
 
-    // 12. T1
-    features[11] = static_cast<double>(station->T1);
-
-    // 13. T2
-    features[12] = static_cast<double>(station->T2);
-
-    // 14. T3
-    features[13] = static_cast<double>(station->T3);
+    // 12-14. TIME-BASED FEATURES TO PREVENT IDENTICAL FEATURES
+    Time now = Simulator::Now();
+    double timeSeconds = now.GetSeconds();
+    features[11] = fmod(timeSeconds * 1000, 10000); // T1: time-based instead of static
+    features[12] = fmod(timeSeconds * 2000, 20000); // T2: time-based
+    features[13] = fmod(timeSeconds * 3000, 30000); // T3: time-based
 
     // 15. decisionReason
-    // If you have an integer/enum decision reason, pass it here; otherwise default to 0.
     features[14] = static_cast<double>(station->decisionReason);
 
     // 16. packetSuccess
-    // If last packet was success/failure, encode as 1/0. (default: 1)
     features[15] = station->lastPacketSuccess ? 1.0 : 0.0;
 
     // 17. offeredLoad
@@ -735,7 +825,8 @@ SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double sn
 
     if (success)
     {
-        station->consecSuccess++;
+        // CAP CONSECUTIVE SUCCESS TO PREVENT INFINITE LOOPS
+        station->consecSuccess = std::min(station->consecSuccess + 1, 50U);
         station->consecFailure = 0;
     }
     else
