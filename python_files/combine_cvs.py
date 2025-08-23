@@ -52,10 +52,24 @@ for fname in csv_files:
             print(f"Warning: {fname} is empty")
             bad_files.append(fname)
             continue
-            
-        df['scenario_file'] = fname
-        dfs.append(df)
-        print(f"Successfully loaded: {fname} ({df.shape[0]} rows, {df.shape[1]} cols)")
+
+        # --- PATCH: Drop blank rows (all columns except scenario_file are NaN/empty) ---
+        cols_to_check = [col for col in df.columns if col != 'scenario_file']
+        df_clean = df.dropna(subset=cols_to_check, how='all')
+        # Also drop rows that are only empty strings except scenario_file
+        df_clean = df_clean.loc[
+            ~(df_clean[cols_to_check].apply(lambda row: all(
+                (pd.isna(x) or (isinstance(x, str) and x.strip() == "")) for x in row
+            ), axis=1))
+        ]
+        if df_clean.empty:
+            print(f"Warning: {fname} only contained blank rows, skipping.")
+            bad_files.append(fname)
+            continue
+
+        df_clean['scenario_file'] = fname
+        dfs.append(df_clean)
+        print(f"Successfully loaded: {fname} ({df_clean.shape[0]} rows, {df_clean.shape[1]} cols)")
         
     except Exception as e:
         print(f"Skipping {fname}: {str(e)[:100]}...")
@@ -78,7 +92,16 @@ if dfs:
             df[col] = None  # Fill missing columns with None
     
     combined_df = pd.concat(dfs, ignore_index=True, sort=False)
-    
+
+    # --- PATCH: Drop blank rows after combining (extra safety) ---
+    cols_to_check = [col for col in combined_df.columns if col != 'scenario_file']
+    combined_df = combined_df.dropna(subset=cols_to_check, how='all')
+    combined_df = combined_df.loc[
+        ~(combined_df[cols_to_check].apply(lambda row: all(
+            (pd.isna(x) or (isinstance(x, str) and x.strip() == "")) for x in row
+        ), axis=1))
+    ]
+
     # Try to save with error handling
     try:
         combined_df.to_csv(OUTPUT_CSV, index=False)
