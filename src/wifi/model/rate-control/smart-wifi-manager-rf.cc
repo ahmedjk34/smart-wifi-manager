@@ -432,30 +432,35 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     // -------- Stage 2: Primary Rule-Based Decision --------
     uint32_t primaryRate = GetEnhancedRuleBasedRate(station, safety);
 
-    // -------- Stage 3: ML Guidance (Infrequent & Cached) --------
-    uint32_t mlGuidance = primaryRate;  // Default to rule-based
+// -------- Stage 3: ML Guidance (Infrequent & Cached) --------
+    uint32_t mlGuidance = primaryRate;  // Default fallback
     double mlConfidence = 0.0;
+    bool mlInferenceAttempted = false;
+    bool mlInferenceSucceeded = false;
     bool usedCachedMl = false;
-    bool mlAttempted = false;
+    std::string mlStatus = "NO_ATTEMPT";
 
     // Check if we should get ML guidance
     static uint64_t s_callCounter = 0;
     ++s_callCounter;
 
     Time now = Simulator::Now();
-    bool canUseCachedMl = (now - m_lastMlTime) < MilliSeconds(m_mlCacheTime);
+    bool canUseCachedMl = (now - m_lastMlTime) < MilliSeconds(m_mlCacheTime) && 
+                        m_lastMlTime > Seconds(0);  // Ensure we actually have a cached value
     bool needNewMlInference = !safety.requiresEmergencyAction && 
-                             safety.riskLevel < m_riskThreshold &&
-                             !canUseCachedMl &&
-                             (s_callCounter % m_inferencePeriod) == 0;
+                            safety.riskLevel < m_riskThreshold &&
+                            !canUseCachedMl &&
+                            (s_callCounter % m_inferencePeriod) == 0;
 
     if (canUseCachedMl) {
         mlGuidance = m_lastMlRate;
         mlConfidence = 0.8; // Assume cached results are reasonably confident
         usedCachedMl = true;
+        mlStatus = "CACHED";
     } else if (needNewMlInference) {
-        mlAttempted = true;
-        // Only do ML inference occasionally
+        mlInferenceAttempted = true;
+        mlStatus = "ATTEMPTING";
+        
         std::vector<double> features = ExtractFeatures(st);
         InferenceResult result = RunMLInference(features);
         
@@ -463,43 +468,47 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
             m_mlInferences++;
             mlGuidance = std::min(result.rateIdx, maxRateIndex);
             mlConfidence = result.confidence;
+            
+            // Update cache with successful result
             m_lastMlRate = mlGuidance;
             m_lastMlTime = now;
             
-            // DEBUG LOG: ML Success
+            mlInferenceSucceeded = true;
+            mlStatus = "SUCCESS";
+            
             std::cout << "[ML SUCCESS] Raw ML Prediction: " << result.rateIdx 
-                      << " (clamped to " << mlGuidance << "), Confidence: " << mlConfidence
-                      << ", Latency: " << result.latencyMs << "ms" << std::endl;
+                    << " (clamped to " << mlGuidance << "), Confidence: " << mlConfidence
+                    << ", Latency: " << result.latencyMs << "ms" << std::endl;
         } else {
             m_mlFailures++;
-            mlGuidance = primaryRate; // Use rule-based on ML failure
+            // DON'T update cache on failure - keep using rule-based
+            mlGuidance = primaryRate;
+            mlConfidence = 0.0;
+            mlStatus = "FAILED";
             
-            // DEBUG LOG: ML Failure  
             std::cout << "[ML FAILURE] " << result.error << ", using rule-based rate: " 
-                      << primaryRate << std::endl;
+                    << primaryRate << std::endl;
         }
+    } else {
+        mlStatus = "SKIPPED";
     }
 
     // -------- Stage 4: Weighted Fusion (Balanced) --------
     uint32_t finalRate;
     std::string decisionReason;
-    
+
     if (safety.requiresEmergencyAction) {
-        // Emergency: ignore ML completely
         finalRate = safety.recommendedSafeRate;
         decisionReason = "EMERGENCY_OVERRIDE";
-    } else if (mlConfidence > m_confidenceThreshold) {
+    } else if (mlInferenceSucceeded && mlConfidence > m_confidenceThreshold) {
         // High confidence ML: blend with rules
         double mlWeight = m_mlGuidanceWeight;
         double ruleWeight = 1.0 - mlWeight;
         
-        // Weighted average, but favor conservative choice
         double blendedRate = (mlWeight * mlGuidance) + (ruleWeight * primaryRate);
         finalRate = static_cast<uint32_t>(std::round(blendedRate));
         
-        // Safety clamp: never go more than 2 rates above rule-based suggestion
         uint32_t clampedRate = std::min(finalRate, primaryRate + 2);
-        
         decisionReason = "ML_GUIDED_BLEND";
         if (clampedRate != finalRate) {
             decisionReason += "_CLAMPED";
@@ -507,12 +516,11 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         finalRate = clampedRate;
         
     } else {
-        // Low confidence or no ML: use rule-based with slight ML influence
-        if (mlGuidance > primaryRate) {
-            finalRate = std::min(primaryRate + 1, mlGuidance); // Slight upward nudge
-            decisionReason = "RULE_BASED_ML_NUDGE";
+        // No ML or low confidence: use rule-based
+        finalRate = primaryRate;
+        if (usedCachedMl && mlConfidence > 0.5) {
+            decisionReason = "RULE_BASED_WITH_CACHED_ML_HINT";
         } else {
-            finalRate = primaryRate; // Stick to rules when ML suggests lower
             decisionReason = "PURE_RULE_BASED";
         }
     }
@@ -521,23 +529,33 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     finalRate = std::min(finalRate, maxRateIndex);
     finalRate = std::max(finalRate, static_cast<uint32_t>(0));
 
-    // COMPREHENSIVE DEBUG LOG - Always show decisions
+    // CLEAR DEBUG LOG - Separate actual ML result from fallback
     std::cout << "[RATE DECISION] Call#" << s_callCounter 
-              << " | SNR=" << station->lastSnr << "dB"
-              << " | Context=" << safety.contextStr
-              << " | RuleRate=" << primaryRate
-              << " | MLRate=" << mlGuidance << "(conf=" << mlConfidence << ")"
-              << " | FinalRate=" << finalRate
-              << " | Reason=" << decisionReason;
-    
-    if (mlAttempted) {
-        std::cout << " | MLAttempt=YES";
+            << " | SNR=" << station->lastSnr << "dB"
+            << " | Context=" << safety.contextStr
+            << " | RuleRate=" << primaryRate;
+
+    if (mlInferenceSucceeded) {
+        std::cout << " | MLRate=" << mlGuidance << "(conf=" << mlConfidence << ")";
     } else if (usedCachedMl) {
-        std::cout << " | MLCache=YES";
+        std::cout << " | MLRate=" << mlGuidance << "(cached)";
     } else {
-        std::cout << " | MLSkip=YES";
+        std::cout << " | MLRate=N/A";
     }
-    std::cout << std::endl;
+
+    std::cout << " | FinalRate=" << finalRate
+            << " | Reason=" << decisionReason
+            << " | MLStatus=" << mlStatus
+            << std::endl;
+        
+    // if (mlAttempted) {
+    //     std::cout << " | MLAttempt=YES";
+    // } else if (usedCachedMl) {
+    //     std::cout << " | MLCache=YES";
+    // } else {
+    //     std::cout << " | MLSkip=YES";
+    // }
+    // std::cout << std::endl;
 
     WifiMode mode = GetSupported(st, finalRate);
     uint64_t rate = mode.GetDataRate(allowedWidth);

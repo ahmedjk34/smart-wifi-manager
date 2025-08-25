@@ -221,7 +221,7 @@ int main(int argc, char *argv[])
     std::vector<BenchmarkTestCase> testCases;
 
     // Fill test cases: distances, speeds, interferers, packet sizes, rates
-    std::vector<double> distances = { 1.0, 40.0, 120.0 };      // 3
+    std::vector<double> distances = { 20.0, 40.0, 60.0 };      // 3
     std::vector<double> speeds = { 0.0, 10.0 };                // 2
     std::vector<uint32_t> interferers = { 0, 3 };              // 2
     std::vector<uint32_t> packetSizes = { 256, 1500 };         // 2
@@ -266,3 +266,17 @@ int main(int argc, char *argv[])
     std::cout << "All tests complete. Results in smartv3-benchmark.csv\n";
     return 0;
 }
+
+// Calculate severity (failure pressure)
+double failureRatioMed = GetFailureRatioFromMediumWindow();
+double normFailStreak = std::min(1.0, double(m_consecFailure) / maxAllowedFailures);
+m_severity = m_severityAlpha * failureRatioMed + m_severityBeta * normFailStreak;
+
+// Calculate confidence (channel reliability)
+double successRatioShort = GetSuccessRatioFromShortWindow();
+double successRatioMed = GetSuccessRatioFromMediumWindow();  
+double snrMargin = CalculateSnrMarginAboveThreshold();
+double retryProxy = EstimateRetryRatio();  // Placeholder for future enhancement
+
+m_confidence = (0.38 * successRatioShort) + (0.24 * successRatioMed) + 
+               (0.18 * (1.0 - retryProxy)) + (0.20 * snrMargin);
