@@ -221,7 +221,7 @@ int main(int argc, char *argv[])
     std::vector<BenchmarkTestCase> testCases;
 
     // Fill test cases: distances, speeds, interferers, packet sizes, rates
-    std::vector<double> distances = { 1.0, 40.0, 120.0 };      // 3
+    std::vector<double> distances = { 20, 40.0, 60.0 };      // 3
     std::vector<double> speeds = { 0.0, 10.0 };                // 2
     std::vector<uint32_t> interferers = { 0, 3 };              // 2
     std::vector<uint32_t> packetSizes = { 256, 1500 };         // 2

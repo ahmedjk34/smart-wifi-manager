@@ -33,7 +33,7 @@ def setup_logging():
 
 logger = setup_logging()
 INPUT_CSV = os.path.join(BASE_DIR, "..", "smart-v3-logged-ALL.csv")
-OUTPUT_CSV = os.path.join(BASE_DIR, "..", "smartv4-ml-ready.csv")
+OUTPUT_CSV = os.path.join(BASE_DIR, "..", "smartv4-ml-pre-balancing.csv")
 
 # --- PHY RATES CONFIG ---
 # Restrict strictly to 802.11g (8 valid rates, indices 0–7)

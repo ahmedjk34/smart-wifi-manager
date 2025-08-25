@@ -31,6 +31,8 @@ struct SmartWifiRemoteStationV1 : public WifiRemoteStation
    bool     m_recovery;         // true after we’ve just increased rate until the first success
    uint32_t m_timerTimeout;     // dynamic timer threshold to trigger rate-up
    uint32_t m_successThreshold; // dynamic success threshold to trigger rate-up
+
+   //NEW for V1
    uint8_t  m_rate;             // index into the supported-rate table (0 = lowest)
    double   m_lastSnr;          // last SNR measurement (for decision tree)
 };
@@ -210,18 +212,6 @@ SmartWifiManagerV1::DoReportDataOk(WifiRemoteStation* st,
     station->m_lastSnr = dataSnr;
 
     
-//     // Decision Tree (improved for realistic SNR mapping)
-// if (station->m_lastSnr < 8.0) {
-//     station->m_rate = 0; // safest, lowest rate
-// } else if (station->m_lastSnr < 14.0) {
-//     station->m_rate = Min(1, maxRateIdx); // moderate rate
-// } else if (station->m_lastSnr < 22.0) {
-//     station->m_rate = Min(2, maxRateIdx); // higher rate
-// } else {
-//     station->m_rate = maxRateIdx; // best rate
-// }
-
-
     // V1: Simple Decision Tree for Rate Selection
     // Example: 4 rates
     uint8_t maxRateIdx = GetNSupported(station) - 1;

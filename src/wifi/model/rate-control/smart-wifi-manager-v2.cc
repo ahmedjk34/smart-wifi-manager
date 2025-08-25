@@ -33,6 +33,8 @@ struct SmartWifiRemoteStationV2 : public WifiRemoteStation
    bool     m_recovery;
    uint32_t m_timerTimeout;
    uint32_t m_successThreshold;
+
+   //V1
    uint8_t  m_rate;
    double   m_lastSnr;
 
@@ -240,15 +242,21 @@ SmartWifiManagerV2::DoReportDataOk(WifiRemoteStation* st,
 
 
     if (station->m_lastSnr < 10.0 || recentFailures >= 4) {
+        // Rule 1: Poor SNR OR excessive recent failures → conservative step-down
         station->m_rate = Max(0, station->m_rate - 1); // reduce, not force to lowest
     } else if (station->m_lastSnr < 15.0) {
+        // Rule 2: Low SNR band → assign rate index 1
         station->m_rate = Min(1, maxRateIdx);
     } else if (station->m_lastSnr < 25.0) {
+        // Rule 3: Mid SNR band → assign rate index 2
         station->m_rate = Min(2, maxRateIdx);
     } else {
+        // Rule 4: High SNR band → history-gated maximum rate selection
         if (recentFailures == 0)
-             station->m_rate = maxRateIdx;
+            // Rule 4a: Perfect recent history → immediate jump to maximum rate
+            station->m_rate = maxRateIdx;
          else
+            // Rule 4b: Some recent failures → cautious incremental increase
             station->m_rate = Min(station->m_rate + 1, maxRateIdx); // cautious step up
     }
 
@@ -330,3 +338,4 @@ SmartWifiManagerV2::DoGetRtsTxVector(WifiRemoteStation* st)
 }
 
 } // namespace ns3
+

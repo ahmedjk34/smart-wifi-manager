@@ -29,5 +29,14 @@ logged-results
 balanced-results
 
 smart-v3-logged-ALL.csv
+smart-v3-ml-enriched.csv
+
 
 venv/
+
+..lock-ns3_linux_build
+.lock-ns3_linux_build
+
+python_files/rest_reslts/
+python_files/test_side_by_side/
+

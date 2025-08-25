@@ -1,6 +1,6 @@
 """
 Ultimate ML Model Training Pipeline (Random Forest, Large CSV-Compatible, RAM-Efficient)
-Patched for new features, new dataset (smart-v3-ml-enriched.csv), and robust debugging.
+Trains and outputs the rateIdx model using Phase 4 Step 3 naming/style.
 
 Features:
 - Chunked CSV loading with balanced sampling for large datasets.
@@ -8,7 +8,7 @@ Features:
 - Step-by-step logging and documentation.
 - Stratified splits and feature scaling.
 - Model saving and top feature reporting.
-- Output file names are UNCHANGED.
+- Output model is named step3_rf_rateIdx_model_FIXED.joblib (matching Phase 4 Step 3 convention).
 
 Author: ahmedjk34
 Date: 2025-08-22
@@ -41,12 +41,12 @@ FEATURE_COLS = [
     "T1", "T2", "T3", "decisionReason", "packetSuccess", "offeredLoad", "queueLen",
     "retryCount", "channelWidth", "mobilityMetric", "snrVariance"
 ]
-ORACLE_LABEL = "oracle_balanced"        # You may switch to conservative/aggressive
+RATEIDX_LABEL = "rateIdx"             # <--- Main label for rateIdx model
 CONTEXT_LABEL = "network_context"
 USER = "ahmedjk34"
 SCALER_FILE = "step3_scaler_FIXED.joblib"  # <--- DO NOT CHANGE
-MODEL_FILE = f"step3_rf_{ORACLE_LABEL}_model_FIXED.joblib"  # <--- DO NOT CHANGE
-DOC_FILE = "ultimate_models_versions.txt"      # <--- DO NOT CHANGE
+MODEL_FILE = "step3_rf_rateIdx_model_FIXED.joblib"  # <--- Matches output style of Phase 4 Step 3
+DOC_FILE = "step3_ultimate_models_FIXED_versions.txt" # <--- Matches output style
 # ============================================
 
 def setup_logging():
@@ -61,7 +61,7 @@ def setup_logging():
     )
     logger = logging.getLogger(__name__)
     logger.info("="*60)
-    logger.info("ULTIMATE ML MODEL TRAINING PIPELINE STARTED (RF ONLY, NEW DATASET, PATCHED FOR LARGE FILES)")
+    logger.info("ULTIMATE ML MODEL TRAINING PIPELINE STARTED (RF ONLY, RATEIDX MODEL, PATCHED FOR LARGE FILES)")
     logger.info("="*60)
     return logger
 
@@ -179,13 +179,13 @@ def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_
         logger.error(f"❌ Training/evaluation failed for {model_name}: {str(e)}")
         raise
 
-def save_comprehensive_documentation(results, feature_cols, total_time, logger, oracle_label):
+def save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name):
     logger.info("📝 Saving comprehensive documentation...")
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(DOC_FILE, "w", encoding="utf-8") as f:
             f.write("="*60 + "\n")
-            f.write("ULTIMATE ML MODEL TRAINING PIPELINE RESULTS (RF ONLY, NEW DATASET)\n")
+            f.write("ULTIMATE ML MODEL TRAINING PIPELINE RESULTS (RF ONLY, RATEIDX MODEL)\n")
             f.write("="*60 + "\n")
             f.write(f"Timestamp: {timestamp}\n")
             f.write(f"User: {USER}\n")
@@ -195,7 +195,7 @@ def save_comprehensive_documentation(results, feature_cols, total_time, logger, 
             f.write("- Dataset includes context, oracle labels, synthetic edge cases, and new features\n")
             f.write("MODELS TRAINED:\n")
             val_acc, test_acc, train_time = results[0]
-            f.write(f"1. RandomForestClassifier ({oracle_label})\n")
+            f.write(f"1. RandomForestClassifier ({label_name})\n")
             f.write(f"   Validation Accuracy: {val_acc:.4f}\n")
             f.write(f"   Test Accuracy: {test_acc:.4f}\n")
             f.write(f"   Training Time: {train_time:.2f}s\n\n")
@@ -206,7 +206,7 @@ def save_comprehensive_documentation(results, feature_cols, total_time, logger, 
             f.write("- Random State: 42\n\n")
             f.write("FILES GENERATED:\n")
             f.write(f"- {SCALER_FILE} (StandardScaler)\n")
-            f.write(f"- {MODEL_FILE} (Random Forest for {oracle_label})\n")
+            f.write(f"- {MODEL_FILE} (Random Forest for {label_name})\n")
             f.write(f"- {DOC_FILE} (this file)\n\n")
             f.write("NEXT STEPS:\n")
             f.write("- Test models in simulation\n")
@@ -221,12 +221,12 @@ def main():
     pipeline_start = time.time()
     try:
         feature_cols = FEATURE_COLS
-        oracle_label = ORACLE_LABEL
+        label_name = RATEIDX_LABEL
         # STEP 1: LOAD DATA
-        df = load_balanced_dataset(CSV_FILE, feature_cols, oracle_label, logger, CONTEXT_LABEL)
-        df = df.dropna(subset=feature_cols + [oracle_label])
+        df = load_balanced_dataset(CSV_FILE, feature_cols, label_name, logger, CONTEXT_LABEL)
+        df = df.dropna(subset=feature_cols + [label_name])
         X = df[feature_cols]
-        y = df[oracle_label].astype(int)
+        y = df[label_name].astype(int)
         # STEP 2: SPLIT DATA
         X_train, X_val, X_test, y_train, y_val, y_test = perform_train_split(X, y, logger)
         # STEP 3: SCALE FEATURES
@@ -234,11 +234,11 @@ def main():
         # STEP 4: TRAIN RF
         results = []
         rf_model = RandomForestClassifier(n_estimators=120, max_depth=16, random_state=42, n_jobs=-1)
-        model_results = train_and_eval(rf_model, X_train_scaled, y_train, X_val_scaled, y_val, X_test_scaled, y_test, oracle_label, logger)
+        model_results = train_and_eval(rf_model, X_train_scaled, y_train, X_val_scaled, y_val, X_test_scaled, y_test, label_name, logger)
         results.append(model_results)
-        # STEP 5: SAVE DOCS
+        # STEP 5: SAVE DOCS (style and output name match Phase 4 Step 3)
         total_time = time.time() - pipeline_start
-        save_comprehensive_documentation(results, feature_cols, total_time, logger, oracle_label)
+        save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name)
         return True
     except Exception as e:
         logger.error(f"❌ Pipeline failed: {e}")

@@ -1,0 +1,30 @@
+============================================================
+ULTIMATE ML MODEL TRAINING PIPELINE RESULTS (RF ONLY, RATEIDX MODEL)
+============================================================
+Timestamp: 2025-08-23 01:36:17
+User: ahmedjk34
+Total Pipeline Runtime: 65.42 seconds (1.09 minutes)
+
+DATASET USED:
+- smart-v3-ml-enriched.csv
+- Dataset includes context, oracle labels, synthetic edge cases, and new features
+MODELS TRAINED:
+1. RandomForestClassifier (rateIdx)
+   Validation Accuracy: 1.0000
+   Test Accuracy: 1.0000
+   Training Time: 53.60s
+
+CONFIGURATION:
+- Scaler: StandardScaler
+- Features (22): rateIdx, phyRate, lastSnr, snrFast, snrSlow, shortSuccRatio, medSuccRatio, consecSuccess, consecFailure, severity, confidence, T1, T2, T3, decisionReason, packetSuccess, offeredLoad, queueLen, retryCount, channelWidth, mobilityMetric, snrVariance
+- Split: 80/10/10 stratified
+- Random State: 42
+
+FILES GENERATED:
+- step3_scaler_FIXED.joblib (StandardScaler)
+- step3_rf_rateIdx_model_FIXED.joblib (Random Forest for rateIdx)
+- step3_ultimate_models_FIXED_versions.txt (this file)
+
+NEXT STEPS:
+- Test models in simulation
+- Integrate with ns-3 or deployment pipeline

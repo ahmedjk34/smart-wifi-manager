@@ -275,7 +275,7 @@ int main(int argc, char *argv[])
     logFile << "SmartRF Benchmark Logging Started\n";
 
     std::vector<BenchmarkTestCase> testCases;
-    std::vector<double> distances = { 1.0  , 40.0  , 120.0};  // DIRECT DISTANCE VALUES
+    std::vector<double> distances = { 20.0  , 40.0  , 60.0};  // DIRECT DISTANCE VALUES
     std::vector<double> speeds = { 0.0, 10.0 };
     std::vector<uint32_t> interferers = { 0, 3 };
     std::vector<uint32_t> packetSizes = { 256, 1500 };
