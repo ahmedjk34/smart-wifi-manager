@@ -33,6 +33,7 @@ smart-v3-ml-enriched.csv
 
 
 venv/
+smart-wifi-env/
 
 ..lock-ns3_linux_build
 .lock-ns3_linux_build
