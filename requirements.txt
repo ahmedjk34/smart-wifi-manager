@@ -1,0 +1,26 @@
+# Core scientific/data packages
+pandas
+numpy
+joblib
+scikit-learn
+lightgbm
+xgboost
+tqdm
+
+# Sphinx (for documentation, used in conf.py)
+sphinx
+
+# Required for plotting/visualization (not directly found, but typical for ML analysis)
+matplotlib
+
+# Python GUI/graphics (used in utils/grid.py)
+pycairo
+pygobject   # for GTK (will provide gtk and cairo bindings)
+
+# Other possible dependencies (used by scripts)
+# No explicit 'argparse', 'os', 'sys', 'json', 'threading', 'socket' needed (these are standard library)
+
+# If using model_training.py with logging to files:
+# No extra dependency needed, but ensure your environment has write permissions to logs/
+
+# For any scripts using subprocess, re, etc., no extra dependencies required (standard library)
