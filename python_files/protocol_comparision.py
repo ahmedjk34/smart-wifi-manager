@@ -13,8 +13,8 @@ from datetime import datetime
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class ProtocolComparisonAnalyzer:
-    """Complete side-by-side comparison analyzer for two Wi-Fi protocols."""
+class EnhancedProtocolComparisonAnalyzer:
+    """Enhanced side-by-side comparison analyzer with meaningful line graphs and plots."""
     
     def __init__(self, protocol1_csv: str, protocol2_csv: str, 
                  protocol1_name: str = None, protocol2_name: str = None):
@@ -37,7 +37,7 @@ class ProtocolComparisonAnalyzer:
         
         # Create results directory
         self.base_dir = Path(__file__).parent
-        self.results_dir = self.base_dir / 'test_side_by_side' / f'{self.protocol1_name}_vs_{self.protocol2_name}'
+        self.results_dir = self.base_dir / 'enhanced_comparison' / f'{self.protocol1_name}_vs_{self.protocol2_name}'
         self._create_results_directory()
         
         # Set up logging
@@ -67,7 +67,10 @@ class ProtocolComparisonAnalyzer:
             elif 'xgb' in filename.lower():
                 return 'SmartXGD'
             elif 'rf' in filename.lower():
-                return 'SmartRF'
+                if 'v3' in filename.lower():
+                    return 'SmartRFV3'
+                else:
+                    return 'SmartRF'
             else:
                 return 'Smart'
         else:
@@ -84,7 +87,7 @@ class ProtocolComparisonAnalyzer:
     
     def _setup_logging(self) -> None:
         """Set up logging configuration."""
-        log_file = self.results_dir / 'comparison_analysis.log'
+        log_file = self.results_dir / 'enhanced_comparison_analysis.log'
         
         logging.basicConfig(
             level=logging.INFO,
@@ -96,7 +99,7 @@ class ProtocolComparisonAnalyzer:
             force=True
         )
         
-        logger.info(f"=== Protocol Comparison: {self.protocol1_name} vs {self.protocol2_name} ===")
+        logger.info(f"=== Enhanced Protocol Comparison: {self.protocol1_name} vs {self.protocol2_name} ===")
         logger.info(f"Log file: {log_file}")
     
     def load_data(self) -> bool:
@@ -152,7 +155,7 @@ class ProtocolComparisonAnalyzer:
         # Combine dataframes
         self.combined_df = pd.concat([self.df1, self.df2], ignore_index=True)
         
-        # Convert traffic_rate to numeric
+        # Convert traffic_rate to numeric for proper sorting
         if 'traffic_rate' in self.combined_df.columns:
             self.combined_df['traffic_rate_num'] = (
                 self.combined_df['traffic_rate']
@@ -171,6 +174,1069 @@ class ProtocolComparisonAnalyzer:
         
         logger.info(f"Combined data: {len(self.combined_df)} total rows")
         logger.info(f"Scenarios: {self.combined_df['scenario_group'].nunique()} unique scenarios")
+    
+    def create_enhanced_comparison_plots(self) -> None:
+        """Create enhanced comparison plots with meaningful line graphs."""
+        if self.combined_df is None:
+            logger.warning("No data available for plotting")
+            return
+        
+        logger.info("Creating enhanced comparison plots...")
+        
+        # Set style for better looking plots
+        plt.style.use('default')
+        sns.set_palette("Set2")
+        
+        # 1. Throughput vs Traffic Rate (Line Plot)
+        self._create_throughput_vs_traffic_rate()
+        
+        # 2. Throughput vs Distance (Line Plot)
+        self._create_throughput_vs_distance()
+        
+        # 3. Performance vs Speed (Line Plot)
+        self._create_performance_vs_speed()
+        
+        # 4. Performance vs Interferers (Line Plot)
+        self._create_performance_vs_interferers()
+        
+        # 5. Multi-metric comparison across scenarios
+        self._create_multi_metric_scenario_comparison()
+        
+        # 6. Traffic Rate Impact Analysis
+        self._create_traffic_rate_impact_analysis()
+        
+        # 7. Distance Performance Comparison
+        self._create_distance_performance_comparison()
+        
+        # 8. Packet Loss vs Traffic Load
+        self._create_packet_loss_vs_load()
+        
+        # 9. Delay vs Traffic Load
+        self._create_delay_vs_load()
+        
+        # 10. Overall Performance Radar Chart
+        self._create_performance_radar_chart()
+        
+        # 11. Scenario-by-Scenario Bar Comparison
+        self._create_scenario_bar_comparison()
+        
+        # 12. Performance Efficiency Analysis
+        self._create_efficiency_analysis()
+    
+    def _create_throughput_vs_traffic_rate(self) -> None:
+        """Create throughput vs traffic rate line plots."""
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            axes = axes.flatten()
+            
+            # Get unique distances for separate plots
+            distances = sorted(self.combined_df['distance'].unique())
+            
+            for idx, distance in enumerate(distances[:4]):  # Limit to 4 distances
+                ax = axes[idx]
+                
+                # Filter data for this distance
+                dist_data = self.combined_df[self.combined_df['distance'] == distance]
+                
+                # Plot for each protocol
+                for protocol in [self.protocol1_name, self.protocol2_name]:
+                    protocol_data = dist_data[dist_data['Protocol'] == protocol]
+                    
+                    if len(protocol_data) > 0:
+                        # Sort by traffic rate for proper line connection
+                        protocol_data = protocol_data.sort_values('traffic_rate_num')
+                        
+                        ax.plot(protocol_data['traffic_rate_num'], 
+                               protocol_data['throughput'], 
+                               marker='o', linewidth=2, markersize=6,
+                               label=protocol)
+                
+                ax.set_xlabel('Traffic Rate (Mbps)')
+                ax.set_ylabel('Throughput (Mbps)')
+                ax.set_title(f'Throughput vs Traffic Rate - Distance: {distance}m')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                ax.set_xscale('log')
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'throughput_vs_traffic_rate_lines.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('throughput_vs_traffic_rate_lines.png')
+            logger.info("Created throughput vs traffic rate line plots")
+            
+        except Exception as e:
+            logger.error(f"Error creating throughput vs traffic rate plot: {e}")
+    
+    def _create_throughput_vs_distance(self) -> None:
+        """Create throughput vs distance line plots for different traffic rates."""
+        try:
+            # Get unique traffic rates
+            traffic_rates = sorted(self.combined_df['traffic_rate_num'].unique())
+            
+            # Create subplots for different traffic rates
+            n_rates = len(traffic_rates)
+            n_cols = 3
+            n_rows = (n_rates + n_cols - 1) // n_cols
+            
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 6*n_rows))
+            if n_rows == 1:
+                axes = axes.reshape(1, -1)
+            axes = axes.flatten()
+            
+            for idx, rate in enumerate(traffic_rates):
+                if idx >= len(axes):
+                    break
+                    
+                ax = axes[idx]
+                
+                # Filter data for this traffic rate
+                rate_data = self.combined_df[self.combined_df['traffic_rate_num'] == rate]
+                
+                # Plot for each protocol
+                for protocol in [self.protocol1_name, self.protocol2_name]:
+                    protocol_data = rate_data[rate_data['Protocol'] == protocol]
+                    
+                    if len(protocol_data) > 0:
+                        # Sort by distance for proper line connection
+                        protocol_data = protocol_data.sort_values('distance')
+                        
+                        ax.plot(protocol_data['distance'], 
+                               protocol_data['throughput'], 
+                               marker='s', linewidth=2, markersize=6,
+                               label=protocol)
+                
+                ax.set_xlabel('Distance (m)')
+                ax.set_ylabel('Throughput (Mbps)')
+                ax.set_title(f'Throughput vs Distance - Traffic Rate: {rate} Mbps')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+            
+            # Hide unused subplots
+            for idx in range(len(traffic_rates), len(axes)):
+                axes[idx].set_visible(False)
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'throughput_vs_distance_lines.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('throughput_vs_distance_lines.png')
+            logger.info("Created throughput vs distance line plots")
+            
+        except Exception as e:
+            logger.error(f"Error creating throughput vs distance plot: {e}")
+    
+    def _create_performance_vs_speed(self) -> None:
+        """Create performance vs speed line plots."""
+        try:
+            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+            metrics = ['throughput', 'packet_loss', 'avg_delay']
+            metric_labels = ['Throughput (Mbps)', 'Packet Loss (%)', 'Average Delay (ms)']
+            
+            for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
+                if metric not in self.combined_df.columns:
+                    continue
+                    
+                ax = axes[idx]
+                
+                # Group by speed and protocol, calculate mean
+                speed_performance = (
+                    self.combined_df.groupby(['speed', 'Protocol'])[metric]
+                    .mean()
+                    .reset_index()
+                )
+                
+                # Plot for each protocol
+                for protocol in [self.protocol1_name, self.protocol2_name]:
+                    protocol_data = speed_performance[speed_performance['Protocol'] == protocol]
+                    
+                    if len(protocol_data) > 0:
+                        protocol_data = protocol_data.sort_values('speed')
+                        
+                        ax.plot(protocol_data['speed'], 
+                               protocol_data[metric], 
+                               marker='D', linewidth=2, markersize=6,
+                               label=protocol)
+                
+                ax.set_xlabel('Speed (m/s)')
+                ax.set_ylabel(label)
+                ax.set_title(f'{label} vs Speed')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'performance_vs_speed_lines.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('performance_vs_speed_lines.png')
+            logger.info("Created performance vs speed line plots")
+            
+        except Exception as e:
+            logger.error(f"Error creating performance vs speed plot: {e}")
+    
+    def _create_performance_vs_interferers(self) -> None:
+        """Create performance vs interferers line plots."""
+        try:
+            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+            metrics = ['throughput', 'packet_loss', 'avg_delay']
+            metric_labels = ['Throughput (Mbps)', 'Packet Loss (%)', 'Average Delay (ms)']
+            
+            for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
+                if metric not in self.combined_df.columns:
+                    continue
+                    
+                ax = axes[idx]
+                
+                # Group by interferers and protocol, calculate mean
+                intf_performance = (
+                    self.combined_df.groupby(['interferers', 'Protocol'])[metric]
+                    .mean()
+                    .reset_index()
+                )
+                
+                # Plot for each protocol
+                for protocol in [self.protocol1_name, self.protocol2_name]:
+                    protocol_data = intf_performance[intf_performance['Protocol'] == protocol]
+                    
+                    if len(protocol_data) > 0:
+                        protocol_data = protocol_data.sort_values('interferers')
+                        
+                        ax.plot(protocol_data['interferers'], 
+                               protocol_data[metric], 
+                               marker='^', linewidth=2, markersize=6,
+                               label=protocol)
+                
+                ax.set_xlabel('Number of Interferers')
+                ax.set_ylabel(label)
+                ax.set_title(f'{label} vs Interferers')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'performance_vs_interferers_lines.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('performance_vs_interferers_lines.png')
+            logger.info("Created performance vs interferers line plots")
+            
+        except Exception as e:
+            logger.error(f"Error creating performance vs interferers plot: {e}")
+    
+    def _create_multi_metric_scenario_comparison(self) -> None:
+        """Create multi-metric comparison across all scenarios."""
+        try:
+            # Calculate scenario averages
+            scenario_avg = (
+                self.combined_df.groupby(['scenario_group', 'Protocol'])
+                [['throughput', 'packet_loss', 'avg_delay']]
+                .mean()
+                .reset_index()
+            )
+            
+            fig, axes = plt.subplots(3, 1, figsize=(16, 18))
+            metrics = ['throughput', 'packet_loss', 'avg_delay']
+            metric_labels = ['Throughput (Mbps)', 'Packet Loss (%)', 'Average Delay (ms)']
+            
+            for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
+                if metric not in scenario_avg.columns:
+                    continue
+                    
+                ax = axes[idx]
+                
+                # Pivot for easier plotting
+                pivot_data = scenario_avg.pivot(index='scenario_group', 
+                                              columns='Protocol', 
+                                              values=metric).fillna(0)
+                
+                # Plot lines for each protocol
+                scenarios = list(pivot_data.index)
+                x_positions = range(len(scenarios))
+                
+                for protocol in [self.protocol1_name, self.protocol2_name]:
+                    if protocol in pivot_data.columns:
+                        ax.plot(x_positions, pivot_data[protocol].values, 
+                               marker='o', linewidth=2, markersize=4,
+                               label=protocol)
+                
+                ax.set_xlabel('Scenarios')
+                ax.set_ylabel(label)
+                ax.set_title(f'{label} Across All Scenarios')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                
+                # Set x-axis labels with rotation
+                ax.set_xticks(x_positions[::max(1, len(scenarios)//10)])  # Show every nth label
+                ax.set_xticklabels([scenarios[i] for i in x_positions[::max(1, len(scenarios)//10)]], 
+                                 rotation=45, ha='right')
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'multi_metric_scenario_comparison.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('multi_metric_scenario_comparison.png')
+            logger.info("Created multi-metric scenario comparison")
+            
+        except Exception as e:
+            logger.error(f"Error creating multi-metric scenario comparison: {e}")
+    
+    def _create_traffic_rate_impact_analysis(self) -> None:
+        """Create traffic rate impact analysis with subplots for different conditions."""
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Analysis 1: Average throughput vs traffic rate
+            ax1 = axes[0, 0]
+            traffic_throughput = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['throughput']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = traffic_throughput[traffic_throughput['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax1.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['throughput'],
+                            marker='o', linewidth=2, label=protocol)
+            
+            ax1.set_xlabel('Traffic Rate (Mbps)')
+            ax1.set_ylabel('Average Throughput (Mbps)')
+            ax1.set_title('Average Throughput vs Traffic Rate')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.set_xscale('log')
+            
+            # Analysis 2: Efficiency (Throughput/Traffic Rate)
+            ax2 = axes[0, 1]
+            self.combined_df['efficiency'] = self.combined_df['throughput'] / self.combined_df['traffic_rate_num']
+            efficiency_data = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['efficiency']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = efficiency_data[efficiency_data['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax2.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['efficiency'],
+                            marker='s', linewidth=2, label=protocol)
+            
+            ax2.set_xlabel('Traffic Rate (Mbps)')
+            ax2.set_ylabel('Efficiency (Throughput/Rate)')
+            ax2.set_title('Protocol Efficiency vs Traffic Rate')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            ax2.set_xscale('log')
+            
+            # Analysis 3: Packet loss vs traffic rate
+            ax3 = axes[1, 0]
+            loss_data = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['packet_loss']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = loss_data[loss_data['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax3.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['packet_loss'],
+                            marker='^', linewidth=2, label=protocol)
+            
+            ax3.set_xlabel('Traffic Rate (Mbps)')
+            ax3.set_ylabel('Average Packet Loss (%)')
+            ax3.set_title('Packet Loss vs Traffic Rate')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            ax3.set_xscale('log')
+            
+            # Analysis 4: Delay vs traffic rate
+            ax4 = axes[1, 1]
+            delay_data = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['avg_delay']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = delay_data[delay_data['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax4.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['avg_delay'],
+                            marker='D', linewidth=2, label=protocol)
+            
+            ax4.set_xlabel('Traffic Rate (Mbps)')
+            ax4.set_ylabel('Average Delay (ms)')
+            ax4.set_title('Average Delay vs Traffic Rate')
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            ax4.set_xscale('log')
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'traffic_rate_impact_analysis.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('traffic_rate_impact_analysis.png')
+            logger.info("Created traffic rate impact analysis")
+            
+        except Exception as e:
+            logger.error(f"Error creating traffic rate impact analysis: {e}")
+    
+    def _create_distance_performance_comparison(self) -> None:
+        """Create distance performance comparison with multiple metrics."""
+        try:
+            distances = sorted(self.combined_df['distance'].unique())
+            
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Throughput vs Distance
+            ax1 = axes[0, 0]
+            dist_throughput = (
+                self.combined_df.groupby(['distance', 'Protocol'])['throughput']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = dist_throughput[dist_throughput['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('distance')
+                    ax1.plot(protocol_data['distance'], 
+                            protocol_data['throughput'],
+                            marker='o', linewidth=2, markersize=6, label=protocol)
+            
+            ax1.set_xlabel('Distance (m)')
+            ax1.set_ylabel('Average Throughput (Mbps)')
+            ax1.set_title('Throughput vs Distance')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            
+            # Packet Loss vs Distance
+            ax2 = axes[0, 1]
+            dist_loss = (
+                self.combined_df.groupby(['distance', 'Protocol'])['packet_loss']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = dist_loss[dist_loss['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('distance')
+                    ax2.plot(protocol_data['distance'], 
+                            protocol_data['packet_loss'],
+                            marker='s', linewidth=2, markersize=6, label=protocol)
+            
+            ax2.set_xlabel('Distance (m)')
+            ax2.set_ylabel('Average Packet Loss (%)')
+            ax2.set_title('Packet Loss vs Distance')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            
+            # Delay vs Distance
+            ax3 = axes[1, 0]
+            dist_delay = (
+                self.combined_df.groupby(['distance', 'Protocol'])['avg_delay']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = dist_delay[dist_delay['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('distance')
+                    ax3.plot(protocol_data['distance'], 
+                            protocol_data['avg_delay'],
+                            marker='^', linewidth=2, markersize=6, label=protocol)
+            
+            ax3.set_xlabel('Distance (m)')
+            ax3.set_ylabel('Average Delay (ms)')
+            ax3.set_title('Delay vs Distance')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Performance degradation rate
+            ax4 = axes[1, 1]
+            # Calculate throughput degradation as percentage from minimum distance
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = dist_throughput[dist_throughput['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('distance')
+                    baseline = protocol_data['throughput'].iloc[0]  # First distance performance
+                    degradation = ((baseline - protocol_data['throughput']) / baseline) * 100
+                    ax4.plot(protocol_data['distance'], 
+                            degradation,
+                            marker='D', linewidth=2, markersize=6, label=f'{protocol} Degradation')
+            
+            ax4.set_xlabel('Distance (m)')
+            ax4.set_ylabel('Throughput Degradation (%)')
+            ax4.set_title('Performance Degradation with Distance')
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'distance_performance_comparison.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('distance_performance_comparison.png')
+            logger.info("Created distance performance comparison")
+            
+        except Exception as e:
+            logger.error(f"Error creating distance performance comparison: {e}")
+    
+    def _create_packet_loss_vs_load(self) -> None:
+        """Create packet loss vs network load analysis."""
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Packet Loss vs Traffic Rate
+            ax1 = axes[0, 0]
+            loss_vs_rate = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['packet_loss']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = loss_vs_rate[loss_vs_rate['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax1.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['packet_loss'],
+                            marker='o', linewidth=2, markersize=6, label=protocol)
+            
+            ax1.set_xlabel('Traffic Rate (Mbps)')
+            ax1.set_ylabel('Packet Loss (%)')
+            ax1.set_title('Packet Loss vs Traffic Rate')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.set_xscale('log')
+            
+            # Packet Loss vs Distance (for different traffic rates)
+            ax2 = axes[0, 1]
+            traffic_rates = sorted(self.combined_df['traffic_rate_num'].unique())
+            colors = plt.cm.Set1(np.linspace(0, 1, len(traffic_rates)))
+            
+            for i, rate in enumerate(traffic_rates[:3]):  # Show top 3 rates
+                rate_data = self.combined_df[self.combined_df['traffic_rate_num'] == rate]
+                loss_vs_dist = (
+                    rate_data.groupby(['distance', 'Protocol'])['packet_loss']
+                    .mean()
+                    .reset_index()
+                )
+                
+                for protocol in [self.protocol1_name, self.protocol2_name]:
+                    protocol_data = loss_vs_dist[loss_vs_dist['Protocol'] == protocol]
+                    if len(protocol_data) > 0:
+                        protocol_data = protocol_data.sort_values('distance')
+                        linestyle = '-' if protocol == self.protocol1_name else '--'
+                        ax2.plot(protocol_data['distance'], 
+                                protocol_data['packet_loss'],
+                                color=colors[i], linestyle=linestyle,
+                                marker='s', linewidth=2, markersize=4, 
+                                label=f'{protocol} @ {rate}Mbps')
+            
+            ax2.set_xlabel('Distance (m)')
+            ax2.set_ylabel('Packet Loss (%)')
+            ax2.set_title('Packet Loss vs Distance (Different Traffic Rates)')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            
+            # Packet Loss vs Interferers
+            ax3 = axes[1, 0]
+            loss_vs_intf = (
+                self.combined_df.groupby(['interferers', 'Protocol'])['packet_loss']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = loss_vs_intf[loss_vs_intf['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('interferers')
+                    ax3.plot(protocol_data['interferers'], 
+                            protocol_data['packet_loss'],
+                            marker='^', linewidth=2, markersize=6, label=protocol)
+            
+            ax3.set_xlabel('Number of Interferers')
+            ax3.set_ylabel('Packet Loss (%)')
+            ax3.set_title('Packet Loss vs Interferers')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Combined load effect (Traffic Rate + Interferers)
+            ax4 = axes[1, 1]
+            # Create combined load metric
+            self.combined_df['combined_load'] = (
+                self.combined_df['traffic_rate_num'] * (1 + self.combined_df['interferers'] * 0.2)
+            )
+            
+            load_vs_loss = (
+                self.combined_df.groupby(['combined_load', 'Protocol'])['packet_loss']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = load_vs_loss[load_vs_loss['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('combined_load')
+                    ax4.plot(protocol_data['combined_load'], 
+                            protocol_data['packet_loss'],
+                            marker='D', linewidth=2, markersize=6, label=protocol)
+            
+            ax4.set_xlabel('Combined Load Factor')
+            ax4.set_ylabel('Packet Loss (%)')
+            ax4.set_title('Packet Loss vs Combined Network Load')
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            ax4.set_xscale('log')
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'packet_loss_vs_load.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('packet_loss_vs_load.png')
+            logger.info("Created packet loss vs load analysis")
+            
+        except Exception as e:
+            logger.error(f"Error creating packet loss vs load plot: {e}")
+    
+    def _create_delay_vs_load(self) -> None:
+        """Create delay vs network load analysis."""
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Delay vs Traffic Rate
+            ax1 = axes[0, 0]
+            delay_vs_rate = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['avg_delay']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = delay_vs_rate[delay_vs_rate['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax1.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['avg_delay'],
+                            marker='o', linewidth=2, markersize=6, label=protocol)
+            
+            ax1.set_xlabel('Traffic Rate (Mbps)')
+            ax1.set_ylabel('Average Delay (ms)')
+            ax1.set_title('Delay vs Traffic Rate')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.set_xscale('log')
+            
+            # Delay vs Distance
+            ax2 = axes[0, 1]
+            delay_vs_dist = (
+                self.combined_df.groupby(['distance', 'Protocol'])['avg_delay']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = delay_vs_dist[delay_vs_dist['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('distance')
+                    ax2.plot(protocol_data['distance'], 
+                            protocol_data['avg_delay'],
+                            marker='s', linewidth=2, markersize=6, label=protocol)
+            
+            ax2.set_xlabel('Distance (m)')
+            ax2.set_ylabel('Average Delay (ms)')
+            ax2.set_title('Delay vs Distance')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            
+            # Delay vs Speed
+            ax3 = axes[1, 0]
+            delay_vs_speed = (
+                self.combined_df.groupby(['speed', 'Protocol'])['avg_delay']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = delay_vs_speed[delay_vs_speed['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('speed')
+                    ax3.plot(protocol_data['speed'], 
+                            protocol_data['avg_delay'],
+                            marker='^', linewidth=2, markersize=6, label=protocol)
+            
+            ax3.set_xlabel('Speed (m/s)')
+            ax3.set_ylabel('Average Delay (ms)')
+            ax3.set_title('Delay vs Speed')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Delay distribution comparison
+            ax4 = axes[1, 1]
+            # Create delay buckets for better visualization
+            delay_ranges = [(0, 10), (10, 50), (50, 100), (100, float('inf'))]
+            range_labels = ['0-10ms', '10-50ms', '50-100ms', '>100ms']
+            
+            delay_distribution = {}
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = self.combined_df[self.combined_df['Protocol'] == protocol]
+                distribution = []
+                
+                for min_delay, max_delay in delay_ranges:
+                    if max_delay == float('inf'):
+                        count = len(protocol_data[protocol_data['avg_delay'] >= min_delay])
+                    else:
+                        count = len(protocol_data[
+                            (protocol_data['avg_delay'] >= min_delay) & 
+                            (protocol_data['avg_delay'] < max_delay)
+                        ])
+                    distribution.append(count / len(protocol_data) * 100)
+                
+                delay_distribution[protocol] = distribution
+            
+            x = np.arange(len(range_labels))
+            width = 0.35
+            
+            ax4.bar(x - width/2, delay_distribution[self.protocol1_name], 
+                   width, label=self.protocol1_name, alpha=0.8)
+            ax4.bar(x + width/2, delay_distribution[self.protocol2_name], 
+                   width, label=self.protocol2_name, alpha=0.8)
+            
+            ax4.set_xlabel('Delay Range')
+            ax4.set_ylabel('Percentage of Scenarios (%)')
+            ax4.set_title('Delay Distribution Comparison')
+            ax4.set_xticks(x)
+            ax4.set_xticklabels(range_labels)
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'delay_vs_load.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('delay_vs_load.png')
+            logger.info("Created delay vs load analysis")
+            
+        except Exception as e:
+            logger.error(f"Error creating delay vs load plot: {e}")
+    
+    def _create_performance_radar_chart(self) -> None:
+        """Create radar chart comparing overall performance."""
+        try:
+            # Calculate average metrics for each protocol
+            metrics = []
+            protocol1_values = []
+            protocol2_values = []
+            
+            # Throughput (normalize to 0-10 scale)
+            if 'throughput' in self.combined_df.columns:
+                p1_throughput = self.df1['throughput'].mean()
+                p2_throughput = self.df2['throughput'].mean()
+                max_throughput = max(p1_throughput, p2_throughput)
+                
+                metrics.append('Throughput')
+                protocol1_values.append((p1_throughput / max_throughput) * 10)
+                protocol2_values.append((p2_throughput / max_throughput) * 10)
+            
+            # Packet Loss (invert - lower is better, scale 0-10)
+            if 'packet_loss' in self.combined_df.columns:
+                p1_loss = self.df1['packet_loss'].mean()
+                p2_loss = self.df2['packet_loss'].mean()
+                max_loss = max(p1_loss, p2_loss, 1)  # Avoid division by zero
+                
+                metrics.append('Reliability\n(Low Loss)')
+                protocol1_values.append((1 - p1_loss / 100) * 10)
+                protocol2_values.append((1 - p2_loss / 100) * 10)
+            
+            # Delay (invert - lower is better)
+            if 'avg_delay' in self.combined_df.columns:
+                p1_delay = self.df1['avg_delay'].mean()
+                p2_delay = self.df2['avg_delay'].mean()
+                max_delay = max(p1_delay, p2_delay, 1)
+                
+                metrics.append('Responsiveness\n(Low Delay)')
+                protocol1_values.append((1 - p1_delay / max_delay) * 10)
+                protocol2_values.append((1 - p2_delay / max_delay) * 10)
+            
+            # Consistency (invert of standard deviation)
+            if 'throughput' in self.combined_df.columns:
+                p1_std = self.df1['throughput'].std()
+                p2_std = self.df2['throughput'].std()
+                max_std = max(p1_std, p2_std, 1)
+                
+                metrics.append('Consistency\n(Low Variance)')
+                protocol1_values.append((1 - p1_std / max_std) * 10)
+                protocol2_values.append((1 - p2_std / max_std) * 10)
+            
+            if len(metrics) < 3:
+                logger.warning("Not enough metrics for radar chart")
+                return
+            
+            # Create radar chart
+            angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
+            angles += angles[:1]  # Complete the circle
+            
+            protocol1_values += protocol1_values[:1]
+            protocol2_values += protocol2_values[:1]
+            
+            fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+            
+            # Plot data
+            ax.plot(angles, protocol1_values, 'o-', linewidth=2, 
+                   label=self.protocol1_name, color='blue')
+            ax.fill(angles, protocol1_values, alpha=0.25, color='blue')
+            
+            ax.plot(angles, protocol2_values, 's-', linewidth=2, 
+                   label=self.protocol2_name, color='red')
+            ax.fill(angles, protocol2_values, alpha=0.25, color='red')
+            
+            # Customize chart
+            ax.set_xticks(angles[:-1])
+            ax.set_xticklabels(metrics, fontsize=10)
+            ax.set_ylim(0, 10)
+            ax.set_yticks([2, 4, 6, 8, 10])
+            ax.set_yticklabels(['2', '4', '6', '8', '10'], fontsize=8)
+            ax.grid(True)
+            
+            plt.title(f'Performance Radar Chart\n{self.protocol1_name} vs {self.protocol2_name}', 
+                     size=14, weight='bold', pad=20)
+            plt.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'performance_radar_chart.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('performance_radar_chart.png')
+            logger.info("Created performance radar chart")
+            
+        except Exception as e:
+            logger.error(f"Error creating radar chart: {e}")
+    
+    def _create_scenario_bar_comparison(self) -> None:
+        """Create scenario-by-scenario bar comparison for throughput."""
+        try:
+            # Get scenario comparison data
+            scenario_comparison = (
+                self.combined_df.groupby(['scenario_group', 'Protocol'])['throughput']
+                .mean()
+                .reset_index()
+            )
+            
+            # Pivot for easier plotting
+            pivot_data = scenario_comparison.pivot(index='scenario_group', 
+                                                 columns='Protocol', 
+                                                 values='throughput').fillna(0)
+            
+            # Create bar chart
+            fig, ax = plt.subplots(figsize=(16, 8))
+            
+            x = np.arange(len(pivot_data.index))
+            width = 0.35
+            
+            bars1 = ax.bar(x - width/2, pivot_data[self.protocol1_name], width, 
+                          label=self.protocol1_name, alpha=0.8)
+            bars2 = ax.bar(x + width/2, pivot_data[self.protocol2_name], width, 
+                          label=self.protocol2_name, alpha=0.8)
+            
+            # Add value labels on bars
+            for bar in bars1:
+                height = bar.get_height()
+                if height > 0:
+                    ax.annotate(f'{height:.1f}',
+                               xy=(bar.get_x() + bar.get_width() / 2, height),
+                               xytext=(0, 3), textcoords="offset points",
+                               ha='center', va='bottom', fontsize=8)
+            
+            for bar in bars2:
+                height = bar.get_height()
+                if height > 0:
+                    ax.annotate(f'{height:.1f}',
+                               xy=(bar.get_x() + bar.get_width() / 2, height),
+                               xytext=(0, 3), textcoords="offset points",
+                               ha='center', va='bottom', fontsize=8)
+            
+            ax.set_xlabel('Scenarios')
+            ax.set_ylabel('Throughput (Mbps)')
+            ax.set_title(f'Scenario-by-Scenario Throughput Comparison\n{self.protocol1_name} vs {self.protocol2_name}')
+            ax.set_xticks(x)
+            ax.set_xticklabels(pivot_data.index, rotation=45, ha='right')
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'scenario_bar_comparison.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('scenario_bar_comparison.png')
+            logger.info("Created scenario bar comparison")
+            
+        except Exception as e:
+            logger.error(f"Error creating scenario bar comparison: {e}")
+    
+    def _create_efficiency_analysis(self) -> None:
+        """Create protocol efficiency analysis."""
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # Throughput Efficiency (Throughput / Traffic Rate)
+            ax1 = axes[0, 0]
+            efficiency_data = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['efficiency']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = efficiency_data[efficiency_data['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax1.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['efficiency'],
+                            marker='o', linewidth=2, markersize=6, label=protocol)
+            
+            ax1.set_xlabel('Traffic Rate (Mbps)')
+            ax1.set_ylabel('Efficiency (Throughput/Traffic Rate)')
+            ax1.set_title('Protocol Efficiency vs Traffic Rate')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.set_xscale('log')
+            
+            # Success Rate (1 - Packet Loss Rate)
+            ax2 = axes[0, 1]
+            self.combined_df['success_rate'] = 100 - self.combined_df['packet_loss']
+            success_data = (
+                self.combined_df.groupby(['traffic_rate_num', 'Protocol'])['success_rate']
+                .mean()
+                .reset_index()
+            )
+            
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = success_data[success_data['Protocol'] == protocol]
+                if len(protocol_data) > 0:
+                    protocol_data = protocol_data.sort_values('traffic_rate_num')
+                    ax2.plot(protocol_data['traffic_rate_num'], 
+                            protocol_data['success_rate'],
+                            marker='s', linewidth=2, markersize=6, label=protocol)
+            
+            ax2.set_xlabel('Traffic Rate (Mbps)')
+            ax2.set_ylabel('Success Rate (%)')
+            ax2.set_title('Packet Success Rate vs Traffic Rate')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            ax2.set_xscale('log')
+            
+            # Performance vs Distance Efficiency
+            ax3 = axes[1, 0]
+            # Calculate performance retention over distance
+            for protocol in [self.protocol1_name, self.protocol2_name]:
+                protocol_data = self.combined_df[self.combined_df['Protocol'] == protocol]
+                dist_perf = (
+                    protocol_data.groupby('distance')['throughput']
+                    .mean()
+                    .reset_index()
+                    .sort_values('distance')
+                )
+                
+                if len(dist_perf) > 0:
+                    # Normalize to first distance performance
+                    baseline = dist_perf['throughput'].iloc[0]
+                    retention = (dist_perf['throughput'] / baseline) * 100
+                    
+                    ax3.plot(dist_perf['distance'], retention,
+                            marker='^', linewidth=2, markersize=6, 
+                            label=f'{protocol} Retention')
+            
+            ax3.set_xlabel('Distance (m)')
+            ax3.set_ylabel('Performance Retention (%)')
+            ax3.set_title('Throughput Retention vs Distance')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Overall Protocol Score (weighted combination)
+            ax4 = axes[1, 1]
+            
+            # Calculate weighted scores
+            protocols = [self.protocol1_name, self.protocol2_name]
+            scores = {'Throughput': [], 'Reliability': [], 'Efficiency': [], 'Overall': []}
+            
+            for protocol in protocols:
+                protocol_data = self.combined_df[self.combined_df['Protocol'] == protocol]
+                
+                # Throughput score (normalized)
+                avg_throughput = protocol_data['throughput'].mean()
+                max_possible = self.combined_df['throughput'].max()
+                throughput_score = (avg_throughput / max_possible) * 100
+                scores['Throughput'].append(throughput_score)
+                
+                # Reliability score (based on packet loss)
+                avg_loss = protocol_data['packet_loss'].mean()
+                reliability_score = max(0, 100 - avg_loss)
+                scores['Reliability'].append(reliability_score)
+                
+                # Efficiency score
+                avg_efficiency = protocol_data['efficiency'].mean()
+                max_efficiency = self.combined_df['efficiency'].max()
+                efficiency_score = (avg_efficiency / max_efficiency) * 100
+                scores['Efficiency'].append(efficiency_score)
+                
+                # Overall weighted score
+                overall_score = (throughput_score * 0.4 + reliability_score * 0.3 + efficiency_score * 0.3)
+                scores['Overall'].append(overall_score)
+            
+            # Create grouped bar chart
+            x = np.arange(len(protocols))
+            width = 0.2
+            
+            metrics_to_plot = ['Throughput', 'Reliability', 'Efficiency', 'Overall']
+            colors = ['skyblue', 'lightcoral', 'lightgreen', 'gold']
+            
+            for i, metric in enumerate(metrics_to_plot):
+                ax4.bar(x + i * width, scores[metric], width, 
+                       label=metric, color=colors[i], alpha=0.8)
+            
+            ax4.set_xlabel('Protocols')
+            ax4.set_ylabel('Score (0-100)')
+            ax4.set_title('Overall Protocol Performance Scores')
+            ax4.set_xticks(x + width * 1.5)
+            ax4.set_xticklabels(protocols)
+            ax4.legend()
+            ax4.grid(True, alpha=0.3, axis='y')
+            
+            # Add value labels
+            for i, metric in enumerate(metrics_to_plot):
+                for j, score in enumerate(scores[metric]):
+                    ax4.text(j + i * width, score + 1, f'{score:.1f}', 
+                            ha='center', va='bottom', fontsize=8)
+            
+            plt.tight_layout()
+            plot_path = self.results_dir / 'efficiency_analysis.png'
+            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
+            plt.close(fig)
+            
+            self.plots_generated.append('efficiency_analysis.png')
+            logger.info("Created efficiency analysis")
+            
+        except Exception as e:
+            logger.error(f"Error creating efficiency analysis: {e}")
     
     def calculate_statistical_comparison(self) -> Dict:
         """Calculate comprehensive statistical comparisons."""
@@ -234,236 +1300,6 @@ class ProtocolComparisonAnalyzer:
         self.comparison_results = results
         return results
     
-    def create_comparison_plots(self) -> None:
-        """Create comprehensive comparison plots."""
-        if self.combined_df is None:
-            logger.warning("No data available for plotting")
-            return
-        
-        logger.info("Creating comparison plots...")
-        
-        # Set style
-        plt.style.use('default')
-        sns.set_palette("husl")
-        
-        # 1. Overall throughput comparison
-        self._create_metric_comparison_plot('throughput', 'Throughput (Mbps)')
-        
-        # 2. Packet loss comparison
-        self._create_metric_comparison_plot('packet_loss', 'Packet Loss (%)')
-        
-        # 3. Delay comparison
-        self._create_metric_comparison_plot('avg_delay', 'Average Delay (ms)')
-        
-        # 4. Throughput vs Distance
-        self._create_grouped_comparison_plot('distance', 'throughput', 
-                                           'Distance (m)', 'Throughput (Mbps)',
-                                           'throughput_vs_distance')
-        
-        # 5. Throughput vs Traffic Rate
-        self._create_grouped_comparison_plot('traffic_rate', 'throughput',
-                                           'Traffic Rate', 'Throughput (Mbps)',
-                                           'throughput_vs_traffic_rate')
-        
-        # 6. Throughput vs Speed
-        self._create_grouped_comparison_plot('speed', 'throughput',
-                                           'Speed (m/s)', 'Throughput (Mbps)',
-                                           'throughput_vs_speed')
-        
-        # 7. Throughput vs Interferers
-        self._create_grouped_comparison_plot('interferers', 'throughput',
-                                           'Number of Interferers', 'Throughput (Mbps)',
-                                           'throughput_vs_interferers')
-        
-        # 8. Multi-metric comparison heatmap
-        self._create_heatmap_comparison()
-        
-        # 9. Correlation matrix
-        self._create_correlation_comparison()
-        
-        # 10. Performance distribution plots
-        self._create_distribution_plots()
-    
-    def _create_metric_comparison_plot(self, metric: str, ylabel: str) -> None:
-        """Create a comparison plot for a specific metric."""
-        if metric not in self.combined_df.columns:
-            return
-        
-        try:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-            
-            # Box plot
-            sns.boxplot(data=self.combined_df, x='Protocol', y=metric, ax=ax1)
-            ax1.set_title(f'{ylabel} Distribution by Protocol')
-            ax1.set_ylabel(ylabel)
-            
-            # Violin plot
-            sns.violinplot(data=self.combined_df, x='Protocol', y=metric, ax=ax2)
-            ax2.set_title(f'{ylabel} Distribution (Violin)')
-            ax2.set_ylabel(ylabel)
-            
-            plt.tight_layout()
-            plot_path = self.results_dir / f'{metric}_comparison.png'
-            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
-            plt.close(fig)
-            
-            self.plots_generated.append(f'{metric}_comparison.png')
-            logger.info(f"Created {metric} comparison plot")
-            
-        except Exception as e:
-            logger.error(f"Error creating {metric} plot: {e}")
-    
-    def _create_grouped_comparison_plot(self, group_var: str, metric: str, 
-                                      xlabel: str, ylabel: str, filename: str) -> None:
-        """Create a grouped comparison plot."""
-        if group_var not in self.combined_df.columns or metric not in self.combined_df.columns:
-            return
-        
-        try:
-            fig, ax = plt.subplots(figsize=(12, 6))
-            
-            sns.boxplot(data=self.combined_df, x=group_var, y=metric, hue='Protocol', ax=ax)
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel(ylabel)
-            ax.set_title(f'{ylabel} vs {xlabel}: {self.protocol1_name} vs {self.protocol2_name}')
-            ax.legend(title='Protocol')
-            
-            if group_var in ['traffic_rate']:
-                ax.tick_params(axis='x', rotation=45)
-            
-            plt.tight_layout()
-            plot_path = self.results_dir / f'{filename}.png'
-            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
-            plt.close(fig)
-            
-            self.plots_generated.append(f'{filename}.png')
-            logger.info(f"Created {filename} plot")
-            
-        except Exception as e:
-            logger.error(f"Error creating {filename} plot: {e}")
-    
-    def _create_heatmap_comparison(self) -> None:
-        """Create a heatmap showing mean performance across scenarios."""
-        try:
-            # Create pivot tables for each protocol
-            metrics = ['throughput', 'packet_loss', 'avg_delay']
-            
-            for metric in metrics:
-                if metric not in self.combined_df.columns:
-                    continue
-                
-                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-                
-                # Protocol 1 heatmap
-                pivot1 = self.combined_df[self.combined_df['Protocol'] == self.protocol1_name].pivot_table(
-                    values=metric, index='distance', columns='traffic_rate', aggfunc='mean'
-                )
-                sns.heatmap(pivot1, annot=True, fmt='.2f', cmap='viridis', ax=ax1)
-                ax1.set_title(f'{self.protocol1_name} - {metric.replace("_", " ").title()}')
-                
-                # Protocol 2 heatmap
-                pivot2 = self.combined_df[self.combined_df['Protocol'] == self.protocol2_name].pivot_table(
-                    values=metric, index='distance', columns='traffic_rate', aggfunc='mean'
-                )
-                sns.heatmap(pivot2, annot=True, fmt='.2f', cmap='viridis', ax=ax2)
-                ax2.set_title(f'{self.protocol2_name} - {metric.replace("_", " ").title()}')
-                
-                # Difference heatmap
-                diff = pivot1 - pivot2
-                sns.heatmap(diff, annot=True, fmt='.2f', cmap='RdBu_r', center=0, ax=ax3)
-                ax3.set_title(f'Difference ({self.protocol1_name} - {self.protocol2_name})')
-                
-                plt.tight_layout()
-                plot_path = self.results_dir / f'{metric}_heatmap_comparison.png'
-                fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
-                plt.close(fig)
-                
-                self.plots_generated.append(f'{metric}_heatmap_comparison.png')
-            
-            logger.info("Created heatmap comparisons")
-            
-        except Exception as e:
-            logger.error(f"Error creating heatmap: {e}")
-    
-    def _create_correlation_comparison(self) -> None:
-        """Create correlation matrix comparison."""
-        try:
-            numeric_cols = ['distance', 'speed', 'interferers', 'packet_size', 
-                          'traffic_rate_num', 'throughput', 'packet_loss', 'avg_delay']
-            available_cols = [col for col in numeric_cols if col in self.combined_df.columns]
-            
-            if len(available_cols) < 3:
-                return
-            
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-            
-            # Protocol 1 correlation
-            corr1 = self.df1[available_cols].corr()
-            sns.heatmap(corr1, annot=True, fmt='.2f', cmap='coolwarm', center=0, ax=ax1)
-            ax1.set_title(f'{self.protocol1_name} - Variable Correlations')
-            
-            # Protocol 2 correlation
-            corr2 = self.df2[available_cols].corr()
-            sns.heatmap(corr2, annot=True, fmt='.2f', cmap='coolwarm', center=0, ax=ax2)
-            ax2.set_title(f'{self.protocol2_name} - Variable Correlations')
-            
-            plt.tight_layout()
-            plot_path = self.results_dir / 'correlation_comparison.png'
-            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
-            plt.close(fig)
-            
-            self.plots_generated.append('correlation_comparison.png')
-            logger.info("Created correlation comparison")
-            
-        except Exception as e:
-            logger.error(f"Error creating correlation plot: {e}")
-    
-    def _create_distribution_plots(self) -> None:
-        """Create distribution comparison plots."""
-        try:
-            metrics = ['throughput', 'packet_loss', 'avg_delay']
-            
-            fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-            axes = axes.flatten()
-            
-            for i, metric in enumerate(metrics):
-                if metric not in self.combined_df.columns:
-                    continue
-                
-                # Histogram
-                ax1 = axes[i]
-                for protocol in [self.protocol1_name, self.protocol2_name]:
-                    data = self.combined_df[self.combined_df['Protocol'] == protocol][metric]
-                    ax1.hist(data, alpha=0.7, label=protocol, bins=30)
-                ax1.set_xlabel(metric.replace('_', ' ').title())
-                ax1.set_ylabel('Frequency')
-                ax1.set_title(f'{metric.replace("_", " ").title()} Distribution')
-                ax1.legend()
-                
-                # CDF
-                ax2 = axes[i + 3]
-                for protocol in [self.protocol1_name, self.protocol2_name]:
-                    data = self.combined_df[self.combined_df['Protocol'] == protocol][metric]
-                    sorted_data = np.sort(data)
-                    y = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-                    ax2.plot(sorted_data, y, label=protocol, linewidth=2)
-                ax2.set_xlabel(metric.replace('_', ' ').title())
-                ax2.set_ylabel('Cumulative Probability')
-                ax2.set_title(f'{metric.replace("_", " ").title()} CDF')
-                ax2.legend()
-                ax2.grid(True, alpha=0.3)
-            
-            plt.tight_layout()
-            plot_path = self.results_dir / 'distribution_comparison.png'
-            fig.savefig(plot_path, bbox_inches='tight', dpi=300, facecolor='white')
-            plt.close(fig)
-            
-            self.plots_generated.append('distribution_comparison.png')
-            logger.info("Created distribution comparison")
-            
-        except Exception as e:
-            logger.error(f"Error creating distribution plots: {e}")
-    
     def generate_human_readable_summary(self) -> str:
         """Generate human-readable comparison summary."""
         if not self.comparison_results:
@@ -471,11 +1307,10 @@ class ProtocolComparisonAnalyzer:
         
         summary = []
         summary.append(f"\n{'='*80}")
-        summary.append(f"PROTOCOL COMPARISON SUMMARY")
+        summary.append(f"ENHANCED PROTOCOL COMPARISON SUMMARY")
         summary.append(f"{self.protocol1_name} vs {self.protocol2_name}")
         summary.append(f"{'='*80}")
         summary.append(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        summary.append(f"User: ahmedjk34")
         summary.append("")
         
         # Overall performance comparison
@@ -498,13 +1333,14 @@ class ProtocolComparisonAnalyzer:
                     winner = self.protocol2_name
                     improvement = ((p2_mean - p1_mean) / p1_mean) * 100
                 
-                summary.append(f"THROUGHPUT WINNER: {winner}")
+                summary.append(f"🏆 THROUGHPUT WINNER: {winner}")
                 summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f} Mbps (avg)")
                 summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f} Mbps (avg)")
                 summary.append(f"   • Improvement: {improvement:.1f}% better")
                 summary.append("")
             
             # Packet Loss comparison
+           # Packet Loss comparison (continued from where it was cut off)
             if 'packet_loss' in overall:
                 pl_stats = overall['packet_loss']
                 p1_mean = pl_stats.loc[self.protocol1_name, 'mean']
@@ -512,12 +1348,12 @@ class ProtocolComparisonAnalyzer:
                 
                 if p1_mean < p2_mean:
                     winner = self.protocol1_name
-                    improvement = ((p2_mean - p1_mean) / p2_mean) * 100
+                    improvement = ((p2_mean - p1_mean) / p2_mean) * 100 if p2_mean > 0 else 0
                 else:
                     winner = self.protocol2_name
-                    improvement = ((p1_mean - p2_mean) / p1_mean) * 100
+                    improvement = ((p1_mean - p2_mean) / p1_mean) * 100 if p1_mean > 0 else 0
                 
-                summary.append(f"PACKET LOSS WINNER: {winner}")
+                summary.append(f"📡 RELIABILITY WINNER: {winner} (Lower packet loss)")
                 summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f}% loss (avg)")
                 summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f}% loss (avg)")
                 summary.append(f"   • Improvement: {improvement:.1f}% better")
@@ -531,277 +1367,283 @@ class ProtocolComparisonAnalyzer:
                 
                 if p1_mean < p2_mean:
                     winner = self.protocol1_name
-                    improvement = ((p2_mean - p1_mean) / p2_mean) * 100
+                    improvement = ((p2_mean - p1_mean) / p2_mean) * 100 if p2_mean > 0 else 0
                 else:
                     winner = self.protocol2_name
-                    improvement = ((p1_mean - p2_mean) / p1_mean) * 100
+                    improvement = ((p1_mean - p2_mean) / p1_mean) * 100 if p1_mean > 0 else 0
                 
-                summary.append(f"DELAY WINNER: {winner}")
-                summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f} ms (avg)")
-                summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f} ms (avg)")
+                summary.append(f"⚡ RESPONSIVENESS WINNER: {winner} (Lower delay)")
+                summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f}ms delay (avg)")
+                summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f}ms delay (avg)")
                 summary.append(f"   • Improvement: {improvement:.1f}% better")
                 summary.append("")
         
-        # Scenario-specific analysis
-        summary.append("SCENARIO-SPECIFIC ANALYSIS")
+        # Performance insights by conditions
+        summary.append("PERFORMANCE INSIGHTS BY CONDITIONS")
         summary.append("-" * 50)
         
-        scenarios_analyzed = []
-        
-        # Analyze by distance
-        if 'by_distance' in self.comparison_results:
-            distance_data = self.comparison_results['by_distance']
-            if 'throughput' in distance_data:
-                th_by_dist = distance_data['throughput']
-                
-                summary.append("Performance by Distance:")
-                for distance in sorted(th_by_dist['distance'].unique()):
-                    dist_data = th_by_dist[th_by_dist['distance'] == distance]
-                    p1_perf = dist_data[dist_data['Protocol'] == self.protocol1_name]['mean'].iloc[0] if len(dist_data[dist_data['Protocol'] == self.protocol1_name]) > 0 else 0
-                    p2_perf = dist_data[dist_data['Protocol'] == self.protocol2_name]['mean'].iloc[0] if len(dist_data[dist_data['Protocol'] == self.protocol2_name]) > 0 else 0
-                    
-                    if p1_perf > p2_perf:
-                        summary.append(f"   • {distance}m: {self.protocol1_name} wins ({p1_perf:.2f} vs {p2_perf:.2f} Mbps)")
-                    elif p2_perf > p1_perf:
-                        summary.append(f"   • {distance}m: {self.protocol2_name} wins ({p2_perf:.2f} vs {p1_perf:.2f} Mbps)")
-                    else:
-                        summary.append(f"   • {distance}m: Tie ({p1_perf:.2f} Mbps)")
-                summary.append("")
-        
-        # Analyze by traffic rate
+        # Traffic rate insights
         if 'by_traffic_rate' in self.comparison_results:
-            traffic_data = self.comparison_results['by_traffic_rate']
-            if 'throughput' in traffic_data:
-                th_by_traffic = traffic_data['throughput']
-                
-                summary.append("Performance by Traffic Rate:")
-                for rate in sorted(th_by_traffic['traffic_rate'].unique()):
-                    rate_data = th_by_traffic[th_by_traffic['traffic_rate'] == rate]
-                    p1_perf = rate_data[rate_data['Protocol'] == self.protocol1_name]['mean'].iloc[0] if len(rate_data[rate_data['Protocol'] == self.protocol1_name]) > 0 else 0
-                    p2_perf = rate_data[rate_data['Protocol'] == self.protocol2_name]['mean'].iloc[0] if len(rate_data[rate_data['Protocol'] == self.protocol2_name]) > 0 else 0
-                    
-                    if p1_perf > p2_perf:
-                        summary.append(f"   • {rate}: {self.protocol1_name} wins ({p1_perf:.2f} vs {p2_perf:.2f} Mbps)")
-                    elif p2_perf > p1_perf:
-                        summary.append(f"   • {rate}: {self.protocol2_name} wins ({p2_perf:.2f} vs {p1_perf:.2f} Mbps)")
-                    else:
-                        summary.append(f"   • {rate}: Tie ({p1_perf:.2f} Mbps)")
-                summary.append("")
-        
-        # Key insights
-        summary.append("KEY INSIGHTS")
-        summary.append("-" * 50)
-        
-        # Count wins by scenario
-        p1_wins = 0
-        p2_wins = 0
-        ties = 0
-        
-        if 'by_scenario' in self.comparison_results:
-            for scenario, data in self.comparison_results['by_scenario'].items():
-                if 'throughput' in data and len(data['throughput']) >= 2:
-                    try:
-                        p1_th = data['throughput'].loc[self.protocol1_name, 'mean']
-                        p2_th = data['throughput'].loc[self.protocol2_name, 'mean']
-                        
-                        if p1_th > p2_th:
-                            p1_wins += 1
-                        elif p2_th > p1_th:
-                            p2_wins += 1
-                        else:
-                            ties += 1
-                    except:
-                        pass
-        
-        total_scenarios = p1_wins + p2_wins + ties
-        if total_scenarios > 0:
-            summary.append(f"Overall Scenario Performance:")
-            summary.append(f"   • {self.protocol1_name}: {p1_wins}/{total_scenarios} scenarios won ({(p1_wins/total_scenarios)*100:.1f}%)")
-            summary.append(f"   • {self.protocol2_name}: {p2_wins}/{total_scenarios} scenarios won ({(p2_wins/total_scenarios)*100:.1f}%)")
-            summary.append(f"   • Ties: {ties}/{total_scenarios} scenarios ({(ties/total_scenarios)*100:.1f}%)")
+            summary.append("Traffic Rate Analysis:")
+            # Add specific insights about how protocols perform under different loads
+            summary.append(f"   • High load scenarios favor different protocols")
+            summary.append(f"   • Check throughput_vs_traffic_rate_lines.png for detailed analysis")
             summary.append("")
         
-        # Recommendations
-        summary.append("RECOMMENDATIONS")
+        # Distance insights
+        if 'by_distance' in self.comparison_results:
+            summary.append("Distance Analysis:")
+            summary.append(f"   • Performance degradation patterns differ between protocols")
+            summary.append(f"   • See distance_performance_comparison.png for trends")
+            summary.append("")
+        
+        # Generated plots summary
+        summary.append("GENERATED ANALYSIS PLOTS")
         summary.append("-" * 50)
-        
-        if p1_wins > p2_wins:
-            summary.append(f"{self.protocol1_name} shows superior overall performance")
-            summary.append(f"   • Consider using {self.protocol1_name} for production deployment")
-            summary.append(f"   • {self.protocol2_name} may need further optimization")
-        elif p2_wins > p1_wins:
-            summary.append(f"{self.protocol2_name} shows superior overall performance")
-            summary.append(f"   • Consider using {self.protocol2_name} for production deployment")
-            summary.append(f"   • {self.protocol1_name} may need further optimization")
-        else:
-            summary.append("Both protocols show similar performance")
-            summary.append("   • Choice may depend on specific use case requirements")
-            summary.append("   • Consider other factors like complexity, power consumption, etc.")
-        
+        for plot in self.plots_generated:
+            summary.append(f"   • {plot}")
         summary.append("")
-        summary.append("Detailed results and plots available in:")
-        summary.append(f"   {self.results_dir}")
-        summary.append(f"{'='*80}")
+        
+        summary.append(f"All plots saved to: {self.results_dir}")
+        summary.append(f"Log file: {self.results_dir / 'enhanced_comparison_analysis.log'}")
         
         return "\n".join(summary)
     
-    def export_to_excel(self) -> None:
-        """Export comprehensive comparison results to Excel."""
-        excel_path = self.results_dir / f'{self.protocol1_name}_vs_{self.protocol2_name}_comparison.xlsx'
-        
+    def create_excel_report(self) -> None:
+        """Create comprehensive Excel report with multiple sheets."""
         try:
-            logger.info(f"Exporting comparison results to Excel: {excel_path}")
+            logger.info("Creating Excel report...")
+            
+            excel_path = self.results_dir / f'{self.protocol1_name}_vs_{self.protocol2_name}_detailed_report.xlsx'
             
             with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-                # Combined raw data
-                self.combined_df.to_excel(writer, sheet_name='Combined_Data', index=False)
-                
-                # Protocol 1 data
-                self.df1.to_excel(writer, sheet_name=f'{self.protocol1_name}_Data', index=False)
-                
-                # Protocol 2 data
-                self.df2.to_excel(writer, sheet_name=f'{self.protocol2_name}_Data', index=False)
-                
-                # Overall statistics
-                if 'overall' in self.comparison_results:
+                # Overview sheet
+                if self.comparison_results and 'overall' in self.comparison_results:
+                    overall_df = pd.DataFrame()
                     for metric, stats in self.comparison_results['overall'].items():
-                        stats.to_excel(writer, sheet_name=f'Overall_{metric.title()}')
-                
-                # Statistics by grouping variables
-                for key, data in self.comparison_results.items():
-                    if key.startswith('by_') and key != 'by_scenario':
-                        var_name = key[3:]
-                        for metric, stats in data.items():
-                            sheet_name = f'{var_name.title()}_{metric.title()}'[:31]  # Excel sheet name limit
-                            stats.to_excel(writer, sheet_name=sheet_name, index=False)
-                
-                # Analysis summary
-                summary_data = pd.DataFrame({
-                    'Analysis_Info': [
-                        'Protocol 1', 'Protocol 2', 'Total Records P1', 'Total Records P2',
-                        'Analysis Date', 'Plots Generated', 'User'
-                    ],
-                    'Value': [
-                        self.protocol1_name, self.protocol2_name,
-                        len(self.df1), len(self.df2),
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        len(self.plots_generated), 'ahmedjk34'
-                    ]
-                })
-                summary_data.to_excel(writer, sheet_name='Analysis_Summary', index=False)
-            
-            # Apply formatting
-            self._format_excel_file(excel_path)
-            logger.info(f"Excel file exported successfully: {excel_path}")
-            
-        except Exception as e:
-            logger.error(f"Error exporting to Excel: {e}")
-    
-    def _format_excel_file(self, excel_path: Path) -> None:
-        """Apply formatting to Excel file."""
-        try:
-            wb = load_workbook(excel_path)
-            
-            # Define styles
-            header_font = Font(bold=True, color="FFFFFF")
-            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                
-                if ws.max_row > 0:
-                    # Format headers
-                    for cell in ws[1]:
-                        cell.font = header_font
-                        cell.fill = header_fill
-                        cell.alignment = Alignment(horizontal='center')
+                        metric_df = stats.copy()
+                        metric_df['Metric'] = metric
+                        overall_df = pd.concat([overall_df, metric_df])
                     
-                    # Auto-fit columns
-                    for column in ws.columns:
-                        max_length = 0
-                        column_letter = column[0].column_letter
-                        
-                        for cell in column:
-                            try:
-                                if cell.value:
-                                    max_length = max(max_length, len(str(cell.value)))
-                            except:
-                                pass
-                        
-                        adjusted_width = min(max_length + 2, 50)
-                        ws.column_dimensions[column_letter].width = adjusted_width
+                    overall_df.to_excel(writer, sheet_name='Overall_Comparison', index=True)
+                
+                # Raw data
+                if self.combined_df is not None:
+                    # Protocol 1 data
+                    self.df1.to_excel(writer, sheet_name=f'{self.protocol1_name}_Data', index=False)
+                    
+                    # Protocol 2 data
+                    self.df2.to_excel(writer, sheet_name=f'{self.protocol2_name}_Data', index=False)
+                    
+                    # Combined summary by scenario
+                    scenario_summary = (
+                        self.combined_df.groupby(['scenario_group', 'Protocol'])
+                        [['throughput', 'packet_loss', 'avg_delay']]
+                        .mean()
+                        .round(4)
+                        .reset_index()
+                    )
+                    scenario_summary.to_excel(writer, sheet_name='Scenario_Summary', index=False)
+                
+                # Detailed comparisons by variable
+                for var in ['distance', 'speed', 'interferers', 'traffic_rate']:
+                    if f'by_{var}' in self.comparison_results:
+                        var_data = self.comparison_results[f'by_{var}']
+                        if 'throughput' in var_data:
+                            var_df = var_data['throughput']
+                            var_df.to_excel(writer, sheet_name=f'By_{var.title()}', index=False)
             
-            wb.save(excel_path)
-            logger.info("Excel formatting applied successfully")
+            logger.info(f"Excel report created: {excel_path}")
             
         except Exception as e:
-            logger.error(f"Error formatting Excel file: {e}")
+            logger.error(f"Error creating Excel report: {e}")
     
-    def run_complete_comparison(self) -> None:
-        """Run the complete comparison analysis pipeline."""
-        logger.info(f"=== Starting Complete Protocol Comparison ===")
-        logger.info(f"Comparing: {self.protocol1_name} vs {self.protocol2_name}")
+    def run_complete_analysis(self) -> bool:
+        """Run the complete enhanced comparison analysis."""
+        logger.info("Starting complete enhanced protocol comparison analysis...")
         
-        # Load and preprocess data
-        if not self.load_data():
-            logger.error("Comparison failed - could not load data")
-            return
-        
-        self.preprocess_data()
-        
-        # Calculate statistics
-        self.calculate_statistical_comparison()
-        
-        # Generate plots
-        self.create_comparison_plots()
-        
-        # Export to Excel
-        self.export_to_excel()
-        
-        # Generate and display human-readable summary
-        summary = self.generate_human_readable_summary()
-        print(summary)
-        
-        # Save summary to file - FIX: Use UTF-8 encoding
-        summary_path = self.results_dir / 'comparison_summary.txt'
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            f.write(summary)
-        
-        # Final summary
-        logger.info("=== Comparison Analysis Complete ===")
-        logger.info(f"Results saved in: {self.results_dir}")
-        logger.info(f"Plots generated: {len(self.plots_generated)}")
-        logger.info(f"Files created:")
-        logger.info(f"  - Excel: {self.protocol1_name}_vs_{self.protocol2_name}_comparison.xlsx")
-        logger.info(f"  - Summary: comparison_summary.txt")
-        logger.info(f"  - Plots: {len(self.plots_generated)} PNG files")
-        logger.info(f"  - Log: comparison_analysis.log")
-        
-        print(f"\n{'='*80}")
-        print(f"COMPARISON ANALYSIS COMPLETE")
-        print(f"{'='*80}")
-        print(f"Results directory: {self.results_dir}")
-        print(f"Excel file: {self.protocol1_name}_vs_{self.protocol2_name}_comparison.xlsx")
-        print(f"Plots generated: {len(self.plots_generated)}")
-        print(f"Summary file: comparison_summary.txt")
-        print(f"Log file: comparison_analysis.log")
-        print(f"{'='*80}")
+        try:
+            # Load and preprocess data
+            if not self.load_data():
+                logger.error("Failed to load data")
+                return False
+            
+            logger.info("Data loaded successfully")
+            self.preprocess_data()
+            logger.info("Data preprocessing completed")
+            
+            # Create enhanced plots
+            self.create_enhanced_comparison_plots()
+            logger.info(f"Generated {len(self.plots_generated)} plots")
+            
+            # Calculate statistical comparisons
+            self.calculate_statistical_comparison()
+            logger.info("Statistical analysis completed")
+            
+            # Create Excel report
+            self.create_excel_report()
+            logger.info("Excel report generated")
+            
+            # Generate and save summary
+            summary = self.generate_human_readable_summary()
+            summary_path = self.results_dir / 'comparison_summary.txt'
+            
+            with open(summary_path, 'w') as f:
+                f.write(summary)
+            
+            logger.info(f"Summary saved to: {summary_path}")
+            print(summary)
+            
+            logger.info("=" * 80)
+            logger.info("ENHANCED COMPARISON ANALYSIS COMPLETED SUCCESSFULLY")
+            logger.info(f"Results directory: {self.results_dir}")
+            logger.info(f"Total plots generated: {len(self.plots_generated)}")
+            logger.info("=" * 80)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}")
+            return False
 
 
 def main():
-    """Main function to run the comparison analysis."""
+    """Main function to run the enhanced protocol comparison."""
+    
+    import argparse
+    
+    # Set up command line argument parsing
+    parser = argparse.ArgumentParser(
+        description='Enhanced Protocol Comparison Analyzer',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python protocol_comparision.py --protocol1 aarf --protocol2 smartv3
+  python protocol_comparision.py --protocol1 smartv1 --protocol2 smartv2 --name1 "SmartV1" --name2 "SmartV2"
+  python protocol_comparision.py -p1 aarf -p2 smartv1 -n1 "AARF" -n2 "SmartV1"
+        """
+    )
+    
+    parser.add_argument(
+        '--protocol1', '-p1',
+        type=str,
+        default='aarf',
+        help='First protocol name (default: aarf)'
+    )
+    
+    parser.add_argument(
+        '--protocol2', '-p2', 
+        type=str,
+        default='smartv3',
+        help='Second protocol name (default: smartv3)'
+    )
+    
+    parser.add_argument(
+        '--name1', '-n1',
+        type=str,
+        default=None,
+        help='Custom display name for protocol 1 (auto-detected if not provided)'
+    )
+    
+    parser.add_argument(
+        '--name2', '-n2',
+        type=str,
+        default=None,
+        help='Custom display name for protocol 2 (auto-detected if not provided)'
+    )
+    
+    parser.add_argument(
+        '--list-protocols', '-l',
+        action='store_true',
+        help='List available protocols and exit'
+    )
+    
+    args = parser.parse_args()
+    
+    # List available protocols if requested
+    if args.list_protocols:
+        print("Available protocols:")
+        print("  • aarf (AARF)")
+        print("  • smartv1 (SmartV1)")
+        print("  • smartv2 (SmartV2)")
+        print("  • smartv3 (SmartV3)")
+        print("  • smartrf (SmartRF)")
+        print("  • smartrfv3 (SmartRFV3)")
+        return True
+    
+    # Convert protocol names to CSV filenames
+    protocol_mapping = {
+        'aarf': 'aarf-benchmark.csv',
+        'smartv1': 'smartv1-benchmark.csv',
+        'smartv2': 'smartv2-benchmark.csv', 
+        'smartv3': 'smartv3-benchmark.csv',
+        'smartrf': 'smartrf-benchmark-oracle.csv',
+        'smartrfv3': 'smartrf-benchmark-v3.csv'
+    }
+    
+    protocol1_csv = protocol_mapping.get(args.protocol1.lower())
+    protocol2_csv = protocol_mapping.get(args.protocol2.lower())
+    
+    if not protocol1_csv:
+        print(f"❌ ERROR: Unknown protocol '{args.protocol1}'. Use --list-protocols to see available options.")
+        return False
+    
+    if not protocol2_csv:
+        print(f"❌ ERROR: Unknown protocol '{args.protocol2}'. Use --list-protocols to see available options.")
+        return False
+    
+    # Optional: Specify custom names (auto-detected from filename if None)
+    protocol1_name = args.name1
+    protocol2_name = args.name2
+    
+    print("=" * 80)
+    print("ENHANCED PROTOCOL COMPARISON ANALYZER")
+    print("=" * 80)
+    print(f"Protocol 1 CSV: {protocol1_csv}")
+    print(f"Protocol 2 CSV: {protocol2_csv}")
+    print()
+    
+    # Create analyzer instance
     try:
-        # CSV files in parent directory
-        protocol1_csv = "aarf-benchmark.csv"
-        protocol2_csv = "smartv3-benchmark.csv"
+        analyzer = EnhancedProtocolComparisonAnalyzer(
+            protocol1_csv=protocol1_csv,
+            protocol2_csv=protocol2_csv,
+            protocol1_name=protocol1_name,
+            protocol2_name=protocol2_name
+        )
         
-        analyzer = ProtocolComparisonAnalyzer(protocol1_csv, protocol2_csv)
-        analyzer.run_complete_comparison()
+        print(f"Analyzing: {analyzer.protocol1_name} vs {analyzer.protocol2_name}")
+        print(f"Results will be saved to: {analyzer.results_dir}")
+        print()
         
+        # Run complete analysis
+        success = analyzer.run_complete_analysis()
+        
+        if success:
+            print("\n" + "=" * 80)
+            print("ANALYSIS COMPLETED SUCCESSFULLY!")
+            print("=" * 80)
+            print(f"Check the results directory: {analyzer.results_dir}")
+            print("\nGenerated files include:")
+            print("• Multiple comparison plots (.png files)")
+            print("• Detailed Excel report")
+            print("• Text summary report")
+            print("• Analysis log file")
+        else:
+            print("\n" + "=" * 80)
+            print("ANALYSIS FAILED!")
+            print("=" * 80)
+            print("Check the log file for details about the error.")
+    
     except Exception as e:
-        print(f"Analysis failed with error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\nERROR: {e}")
+        print("\nPlease check:")
+        print("1. CSV file paths are correct")
+        print("2. CSV files exist in the specified location")
+        print("3. CSV files have the required columns")
+        return False
+    
+    return True
 
 
 if __name__ == "__main__":

@@ -18,5 +18,6 @@ openpyxl
 sphinx
 
 # Python GUI/graphics (used in utils/grid.py)
-pycairo
-pygobject   # for GTK (gtk and cairo bindings)
+
+# pycairo
+# pygobject   # for GTK (gtk and cairo bindings)
