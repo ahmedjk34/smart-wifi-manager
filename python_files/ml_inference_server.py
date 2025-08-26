@@ -233,11 +233,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
-        default="/home/ahmedjk34/ns-allinone-3.41/ns-3.41/step3_rf_oracle_best_rateIdx_model_FIXED.joblib",
+        default="step3_rf_oracle_best_rateIdx_model_FIXED.joblib",
     )
     parser.add_argument(
         "--scaler",
-        default="/home/ahmedjk34/ns-allinone-3.41/ns-3.41/step3_scaler_FIXED.joblib",
+        default="step3_scaler_FIXED.joblib",
     )
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()

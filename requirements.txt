@@ -1,0 +1,23 @@
+# Core scientific/data packages
+pandas
+numpy
+scikit-learn
+lightgbm
+xgboost
+joblib
+tqdm
+
+# Plotting/visualization
+matplotlib
+seaborn
+
+# Excel I/O (pandas engine + styling)
+openpyxl
+
+# Documentation (Sphinx for conf.py)
+sphinx
+
+# Python GUI/graphics (used in utils/grid.py)
+
+# pycairo
+# pygobject   # for GTK (gtk and cairo bindings)
