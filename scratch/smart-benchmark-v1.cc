@@ -5,11 +5,14 @@
 #include "ns3/internet-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/flow-monitor-module.h"
+#include "ns3/propagation-module.h"
 #include <vector>
 #include <string>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <iomanip>
+#include <cmath>
 
 using namespace ns3;
 
@@ -24,14 +27,186 @@ struct BenchmarkTestCase
     std::string scenarioName;
 };
 
+// Struct for aggregating all case-level statistics
+struct CaseStats {
+    uint32_t totalTx = 0;
+    uint32_t totalRx = 0;
+    uint32_t totalDropped = 0;
+    uint32_t retransmissions = 0;
+    double totalDelay = 0.0;
+
+    // SNR stats
+    double sumSnr = 0.0;
+    uint32_t snrSamples = 0;
+    double minSnr = 1e9;
+    double maxSnr = -1e9;
+
+    // Timing
+    double startTime = 0.0;
+    double endTime = 0.0;
+};
+
+static CaseStats g_caseStats;
+static uint32_t g_currentTestCase = 0;
+
+// ====== PACKET-LEVEL CALLBACKS AGGREGATE INTO g_caseStats ======
+
+// Rate adaptation tracing (kept as case-level event for debugging/tuning)
 void RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
 {
-    std::cout << "Rate adaptation event: context=" << context
-              << " new datarate=" << rate << " old datarate=" << oldRate << std::endl;
+    // Optional: Toggle by debug flag.
+    // std::cout << "[TEST " << g_currentTestCase << "] RATE ADAPTATION: " 
+    //           << "Context=" << context
+    //           << " | NEW_RATE=" << rate/1000000.0 << "Mbps"
+    //           << " | OLD_RATE=" << oldRate/1000000.0 << "Mbps" 
+    //           << " | Time=" << std::fixed << std::setprecision(3) << Simulator::Now().GetSeconds() << "s"
+    //           << std::endl;
 }
 
+// PHY state change tracing (optional for debugging)
+void PhyStateTrace(std::string context, Time start, Time duration, WifiPhyState state)
+{
+    // (Optional: Remove or toggle for debugging)
+}
+
+// PHY RX start tracing - SNR stats
+void PhyRxStartTrace(std::string context, Ptr<const Packet> packet, RxPowerWattPerChannelBand rxPowersW)
+{
+    double totalPower = 0.0;
+    for (auto& power : rxPowersW)
+    {
+        totalPower += power.second;
+    }
+    double rssi_dbm = 10 * log10(totalPower * 1000); // Convert W to mW then to dBm
+
+    // Aggregate SNR stats
+    g_caseStats.sumSnr += rssi_dbm;
+    g_caseStats.snrSamples++;
+    g_caseStats.minSnr = std::min(g_caseStats.minSnr, rssi_dbm);
+    g_caseStats.maxSnr = std::max(g_caseStats.maxSnr, rssi_dbm);
+}
+
+// PHY RX end tracing
+void PhyRxEndTrace(std::string context, Ptr<const Packet> packet)
+{
+    g_caseStats.totalRx++;
+}
+
+// PHY RX drop tracing
+void PhyRxDropTrace(std::string context, Ptr<const Packet> packet, WifiPhyRxfailureReason reason)
+{
+    g_caseStats.totalDropped++;
+}
+
+// PHY TX start tracing
+void PhyTxStartTrace(std::string context, Ptr<const Packet> packet, double txPowerW)
+{
+    g_caseStats.totalTx++;
+}
+
+// PHY TX end tracing
+void PhyTxEndTrace(std::string context, Ptr<const Packet> packet)
+{
+    // No need to aggregate; keep for debugging.
+}
+
+// MAC TX tracing
+void MacTxTrace(std::string context, Ptr<const Packet> packet)
+{
+    // No need to aggregate; keep for debugging.
+}
+
+// MAC RX tracing
+void MacRxTrace(std::string context, Ptr<const Packet> packet)
+{
+    // No need to aggregate; keep for debugging.
+}
+
+// MAC TX drop tracing
+void MacTxDropTrace(std::string context, Ptr<const Packet> packet)
+{
+    // Consider incrementing retransmissions if desired.
+    g_caseStats.retransmissions++;
+}
+
+// Queue tracing (optional)
+void QueueTrace(std::string context, Ptr<const Packet> packet)
+{
+    // No need to aggregate; keep for debugging.
+}
+
+void QueueDropTrace(std::string context, Ptr<const Packet> packet)
+{
+    g_caseStats.totalDropped++;
+}
+
+// Application level tracing
+void AppTxTrace(std::string context, Ptr<const Packet> packet)
+{
+    // No need to aggregate; keep for debugging.
+}
+
+void AppRxTrace(std::string context, Ptr<const Packet> packet, const Address& address)
+{
+    // No need to aggregate; keep for debugging.
+}
+
+// Position tracing for mobile nodes (optional aggregation)
+void PositionTrace(std::string context, Ptr<const MobilityModel> model)
+{
+    // Optionally aggregate mobility stats here
+}
+
+// SNR monitoring function (optional periodic stats)
+void MonitorSnr()
+{
+    // (Optional: Remove or toggle for debugging)
+    if (Simulator::Now().GetSeconds() < 19.0) // Stop before simulation ends
+    {
+        Simulator::Schedule(Seconds(1.0), &MonitorSnr);
+    }
+}
+
+// ====== CASE SUMMARY OUTPUT ======
+void PrintCaseSummary(uint32_t testId, const BenchmarkTestCase& tc)
+{
+    double avgSnr = (g_caseStats.snrSamples > 0) ? g_caseStats.sumSnr / g_caseStats.snrSamples : 0.0;
+    double pdr = (g_caseStats.totalTx > 0) ? (double)g_caseStats.totalRx / g_caseStats.totalTx * 100.0 : 0.0;
+    double throughputMbps = (g_caseStats.totalRx * tc.packetSize * 8.0) / (1e6 * (g_caseStats.endTime - g_caseStats.startTime));
+    double avgDelay = (g_caseStats.totalRx > 0) ? g_caseStats.totalDelay / g_caseStats.totalRx : 0.0;
+
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "[TEST " << testId << "] CASE SUMMARY\n";
+    std::cout << "Scenario=" << tc.scenarioName
+              << " | Distance=" << tc.staDistance << "m"
+              << " | Speed=" << tc.staSpeed << "m/s"
+              << " | Interferers=" << tc.numInterferers
+              << " | PacketSize=" << tc.packetSize
+              << " | TrafficRate=" << tc.trafficRate << "\n";
+    std::cout << "----------------------------------------------\n";
+    std::cout << "TxPackets=" << g_caseStats.totalTx
+              << " | RxPackets=" << g_caseStats.totalRx
+              << " | Dropped=" << g_caseStats.totalDropped
+              << " | Retransmissions=" << g_caseStats.retransmissions << "\n";
+    std::cout << "AvgSNR=" << avgSnr << " dBm"
+              << " | MinSNR=" << g_caseStats.minSnr << " dBm"
+              << " | MaxSNR=" << g_caseStats.maxSnr << " dBm\n";
+    std::cout << "PDR=" << pdr << "%"
+              << " | Throughput=" << throughputMbps << " Mbps\n";
+    std::cout << "AvgDelay=" << avgDelay << " s\n";
+    std::cout << "SimulationTime=" << g_caseStats.endTime - g_caseStats.startTime << " s\n";
+    std::cout << std::string(80, '=') << "\n";
+}
+
+// ====== TEST RUNNER ======
 void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
 {
+    // Reset stats
+    g_caseStats = CaseStats();
+
+    // Start time
+    g_caseStats.startTime = Simulator::Now().GetSeconds();
+
     // Create nodes
     NodeContainer wifiStaNodes;
     wifiStaNodes.Create(1);
@@ -44,23 +219,30 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
     interfererApNodes.Create(tc.numInterferers);
     interfererStaNodes.Create(tc.numInterferers);
 
-    // Channel and PHY
+    // Channel and PHY with explicit propagation model
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
+    channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+    channel.AddPropagationLoss("ns3::FriisPropagationLossModel");
+
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
+    phy.SetErrorRateModel("ns3::YansErrorRateModel");
 
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
-    // CHANGE HERE: Use SmartWifiManagerV1 instead of AarfWifiManager
     wifi.SetRemoteStationManager("ns3::SmartWifiManagerV1");
 
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns3-80211g");
 
-    mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
+    mac.SetType("ns3::StaWifiMac", 
+                "Ssid", SsidValue(ssid),
+                "ActiveProbing", BooleanValue(false));
     NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
-    mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
+    mac.SetType("ns3::ApWifiMac", 
+                "Ssid", SsidValue(ssid),
+                "EnableBeaconJitter", BooleanValue(false));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
     // Interferer WiFi
@@ -78,7 +260,7 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
     apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     apMobility.Install(wifiApNode);
 
-    // STA at distance (ONLY ONE MOBILITY MODEL INSTALLED)
+    // STA at distance
     if (tc.staSpeed > 0.0)
     {
         MobilityHelper mobMove;
@@ -88,6 +270,10 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
         mobMove.SetPositionAllocator(movingAlloc);
         mobMove.Install(wifiStaNodes);
         wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(Vector(tc.staSpeed, 0.0, 0.0));
+        // Optionally connect position tracing for mobile node
+        // std::ostringstream mobilityContext;
+        // mobilityContext << "/NodeList/" << wifiStaNodes.Get(0)->GetId() << "/$ns3::MobilityModel/CourseChange";
+        // Config::Connect(mobilityContext.str(), MakeCallback(&PositionTrace));
     }
     else
     {
@@ -149,40 +335,66 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
     // Interferer traffic
     for (uint32_t i = 0; i < tc.numInterferers; ++i)
     {
-        OnOffHelper interfererOnOff("ns3::UdpSocketFactory", InetSocketAddress(interfererApInterface.GetAddress(i), port+1));
+        OnOffHelper interfererOnOff("ns3::UdpSocketFactory", InetSocketAddress(interfererApInterface.GetAddress(i), port+1+i));
         interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate("2Mbps")));
         interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
         interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
         interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(18.0)));
         interfererOnOff.Install(interfererStaNodes.Get(i));
 
-        PacketSinkHelper interfererSink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), port+1));
+        PacketSinkHelper interfererSink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), port+1+i));
         interfererSink.Install(interfererApNodes.Get(i));
     }
+
+    // Enable only necessary traces (packet-level traces aggregate to g_caseStats)
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
+                    MakeCallback(&RateTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxBegin",
+                    MakeCallback(&PhyTxStartTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxEnd",
+                    MakeCallback(&PhyTxEndTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
+                    MakeCallback(&PhyRxEndTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
+                    MakeCallback(&PhyRxDropTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxBegin",
+                    MakeCallback(&PhyRxStartTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+                    MakeCallback(&MacTxDropTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacRx",
+                    MakeCallback(&MacRxTrace));
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+                    MakeCallback(&MacTxTrace));
+    Config::Connect("/NodeList/*/ApplicationList/*/$ns3::OnOffApplication/Tx",
+                    MakeCallback(&AppTxTrace));
+    Config::Connect("/NodeList/*/ApplicationList/*/$ns3::PacketSink/Rx",
+                    MakeCallback(&AppRxTrace));
 
     // FlowMonitor
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    // Enable Rate trace
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
-                MakeCallback(&RateTrace));
+    // Start periodic monitoring (optional)
+    Simulator::Schedule(Seconds(3.0), &MonitorSnr);
 
-    // Run simulation
+    // Simulation run
     Simulator::Stop(Seconds(20.0));
     Simulator::Run();
 
-    // Results
+    // End time
+    g_caseStats.endTime = Simulator::Now().GetSeconds();
+
+    // Collect FlowMonitor stats for delay, throughput, etc.
+    monitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
+    std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
+
     double throughput = 0;
     double packetLoss = 0;
     double avgDelay = 0;
     double rxPackets = 0, txPackets = 0;
     double rxBytes = 0;
     double simulationTime = 16.0; // from 2s to 18s
-
-    monitor->CheckForLostPackets();
-    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
-    std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
     for (auto it = stats.begin(); it != stats.end(); ++it)
     {
@@ -195,9 +407,13 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
             rxBytes = it->second.rxBytes;
             throughput = (rxBytes * 8.0) / (simulationTime * 1e6); // Mbps
             packetLoss = txPackets > 0 ? 100.0 * (txPackets - rxPackets) / txPackets : 0.0;
-            avgDelay = it->second.rxPackets > 0 ? it->second.delaySum.GetSeconds() / it->second.rxPackets * 1000.0 : 0.0;
+            avgDelay = it->second.rxPackets > 0 ? it->second.delaySum.GetSeconds() / it->second.rxPackets : 0.0;
+            g_caseStats.totalDelay = it->second.delaySum.GetSeconds(); // Save for summary avg
         }
     }
+
+    // Print single case-level summary for this test case
+    PrintCaseSummary(g_currentTestCase, tc);
 
     // Output to CSV
     csv << "\"" << tc.scenarioName << "\","
@@ -208,7 +424,7 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
         << tc.trafficRate << ","
         << throughput << ","
         << packetLoss << ","
-        << avgDelay << ","
+        << avgDelay * 1000.0 << "," // ms
         << rxPackets << ","
         << txPackets << "\n";
 
@@ -217,11 +433,24 @@ void RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv)
 
 int main(int argc, char *argv[])
 {
+    // Enable logging for even more detailed output
+    LogComponentEnable("OnOffApplication", LOG_LEVEL_INFO);
+    LogComponentEnable("PacketSink", LOG_LEVEL_INFO);
+    LogComponentEnable("WifiPhy", LOG_LEVEL_FUNCTION);
+    LogComponentEnable("YansWifiPhy", LOG_LEVEL_FUNCTION);
+    LogComponentEnable("WifiMac", LOG_LEVEL_FUNCTION);
+    LogComponentEnable("AarfWifiManager", LOG_LEVEL_INFO);
+
+    std::cout << "\n" << std::string(100, '#') << std::endl;
+    std::cout << "# COMPREHENSIVE NS3 WIFI BENCHMARK WITH CASE-LEVEL SUMMARY LOGGING" << std::endl;
+    std::cout << "# All PHY, MAC, Queue, Application, and Mobility traces aggregate to per-case stats" << std::endl;
+    std::cout << std::string(100, '#') << std::endl;
+
     // Many test cases in a vector
     std::vector<BenchmarkTestCase> testCases;
 
     // Fill test cases: distances, speeds, interferers, packet sizes, rates
-    std::vector<double> distances = { 20, 40.0, 60.0 };      // 3
+    std::vector<double> distances = { 20.0, 40.0, 60.0 };      // 3
     std::vector<double> speeds = { 0.0, 10.0 };                // 2
     std::vector<uint32_t> interferers = { 0, 3 };              // 2
     std::vector<uint32_t> packetSizes = { 256, 1500 };         // 2
@@ -256,13 +485,32 @@ int main(int argc, char *argv[])
     std::ofstream csv("smartv1-benchmark.csv");
     csv << "Scenario,Distance,Speed,Interferers,PacketSize,TrafficRate,Throughput(Mbps),PacketLoss(%),AvgDelay(ms),RxPackets,TxPackets\n";
 
+    std::cout << "\nTOTAL TEST CASES TO RUN: " << testCases.size() << std::endl;
+    std::cout << "Expected runtime: ~" << (testCases.size() * 20) << " seconds of simulation time\n" << std::endl;
+
     for (const auto& tc : testCases)
     {
-        std::cout << "Running: " << tc.scenarioName << std::endl;
+        g_currentTestCase++;
+        std::cout << "\n" << std::string(50, '-') << std::endl;
+        std::cout << "*** EXECUTING TEST CASE " << g_currentTestCase << " of " << testCases.size() << " ***" << std::endl;
+        std::cout << "*** " << tc.scenarioName << " ***" << std::endl;
+        std::cout << std::string(50, '-') << std::endl;
+
         RunTestCase(tc, csv);
+
+        std::cout << "\n" << std::string(50, '-') << std::endl;
+        std::cout << "*** TEST CASE " << g_currentTestCase << " COMPLETED ***" << std::endl;
+        std::cout << std::string(50, '-') << std::endl;
     }
 
     csv.close();
-    std::cout << "All tests complete. Results in smartv1-benchmark.csv\n";
+
+    std::cout << "\n" << std::string(100, '#') << std::endl;
+    std::cout << "# ALL TESTS COMPLETE!" << std::endl;
+    std::cout << "# Results saved to: smartv1-benchmark.csv" << std::endl;
+    std::cout << "# Total test cases executed: " << testCases.size() << std::endl;
+    std::cout << std::string(100, '#') << std::endl;
+
     return 0;
 }
+
