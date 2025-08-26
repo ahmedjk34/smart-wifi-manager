@@ -482,7 +482,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    std::ofstream csv("aarf-benchmark-case-summary.csv");
+    std::ofstream csv("aarf-benchmark.csv");
     csv << "Scenario,Distance,Speed,Interferers,PacketSize,TrafficRate,Throughput(Mbps),PacketLoss(%),AvgDelay(ms),RxPackets,TxPackets\n";
 
     std::cout << "\nTOTAL TEST CASES TO RUN: " << testCases.size() << std::endl;
@@ -507,7 +507,7 @@ int main(int argc, char *argv[])
 
     std::cout << "\n" << std::string(100, '#') << std::endl;
     std::cout << "# ALL TESTS COMPLETE!" << std::endl;
-    std::cout << "# Results saved to: aarf-benchmark-case-summary.csv" << std::endl;
+    std::cout << "# Results saved to: aarf-benchmark.csv" << std::endl;
     std::cout << "# Total test cases executed: " << testCases.size() << std::endl;
     std::cout << std::string(100, '#') << std::endl;
 
