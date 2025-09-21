@@ -197,4 +197,10 @@ DecisionCountController::GetDataCollectionEfficiency() const
     return std::min(1.0, double(m_adaptationEvents) / double(m_targetSuccesses));
 }
 
+std::string
+DecisionCountController::GetLogFilePath() const
+{
+    return m_logFilePath;
+}
+
 } // namespace ns3

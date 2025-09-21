@@ -32,6 +32,7 @@ class DecisionCountController
 
     // Core functionality
     void SetLogFilePath(const std::string& path);
+    std::string GetLogFilePath() const; // *** NEW METHOD ***
     void IncrementSuccess();
     void IncrementFailure();
     void IncrementAdaptationEvent(); // New method for rate adaptation events
