@@ -4,13 +4,16 @@ import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List
+from sklearn.utils.class_weight import compute_class_weight
+from collections import Counter
+import json
 
 # ----------------------------------------
 # CONFIGURATION
 # ----------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
-INPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALL.csv")
+INPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-ml-cleaned.csv")
 OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-ml-enriched.csv")
 LOG_FILE = os.path.join(BASE_DIR, "ml_data_prep.log")
 
@@ -70,6 +73,74 @@ def clamp_rateidx(x):
         return max(0, min(7, x))
     except Exception:
         return 0
+
+# ----------------------------------------
+# CLASS WEIGHTS COMPUTATION (NEW)
+# ----------------------------------------
+
+def compute_and_save_class_weights(df: pd.DataFrame, label_cols: List[str], output_dir: str) -> Dict[str, Dict]:
+    """Compute class weights for imbalanced labels and save them."""
+    logger.info("🔢 Computing class weights for imbalanced target labels...")
+    
+    class_weights_dict = {}
+    
+    for label_col in label_cols:
+        if label_col not in df.columns:
+            logger.warning(f"Label column {label_col} not found, skipping...")
+            continue
+            
+        # Remove NaN values for weight computation
+        valid_labels = df[label_col].dropna()
+        
+        if len(valid_labels) == 0:
+            logger.warning(f"No valid labels found for {label_col}, skipping...")
+            continue
+            
+        # Get unique classes and convert to numpy array
+        unique_classes = np.array(sorted(valid_labels.unique()))
+        
+        # Compute balanced class weights
+        class_weights = compute_class_weight(
+            'balanced', 
+            classes=unique_classes,
+            y=valid_labels
+        )
+        
+        # Create dictionary mapping class -> weight (CONVERT KEYS TO PYTHON TYPES)
+        weight_dict = {}
+        for class_val, weight in zip(unique_classes, class_weights):
+            # Convert numpy types to Python types for JSON compatibility
+            python_key = int(class_val) if isinstance(class_val, (np.integer, np.int64)) else float(class_val) if isinstance(class_val, np.floating) else class_val
+            python_weight = float(weight)
+            weight_dict[python_key] = python_weight
+        
+        class_weights_dict[label_col] = weight_dict
+        
+        # Log distribution and weights
+        class_counts = Counter(valid_labels)
+        logger.info(f"\n📊 {label_col} - Class Distribution & Weights:")
+        for class_val in unique_classes:
+            count = class_counts[class_val]
+            weight = weight_dict[int(class_val) if isinstance(class_val, (np.integer, np.int64)) else class_val]
+            pct = (count / len(valid_labels)) * 100
+            logger.info(f"  Class {class_val}: {count:,} samples ({pct:.1f}%) -> weight: {weight:.3f}")
+        
+        print(f"\n{label_col} Class Weights:")
+        for class_val, weight in weight_dict.items():
+            print(f"  {class_val}: {weight:.3f}")
+    
+    # Save weights to JSON file
+    weights_file = os.path.join(output_dir, "class_weights.json")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Now we can save directly since all keys and values are Python types
+    with open(weights_file, 'w') as f:
+        json.dump(class_weights_dict, f, indent=2)
+    
+    logger.info(f"💾 Class weights saved to: {weights_file}")
+    print(f"💾 Class weights saved to: {weights_file}")
+    
+    return class_weights_dict
 
 # ----------------------------------------
 # CLEANING FUNCTIONS
@@ -471,7 +542,7 @@ def create_high_snr_failure_scenario() -> Dict[str, Any]:
 # MAIN PIPELINE
 # ----------------------------------------
 def main():
-    logger.info("=== ML Data Prep Script Started ===")
+    logger.info("=== ML Data Prep Script Started (WITH CLASS WEIGHTS) ===")
     if not os.path.exists(INPUT_CSV):
         logger.error(f"Input CSV does not exist: {INPUT_CSV}")
         sys.exit(1)
@@ -507,6 +578,13 @@ def main():
     logger.info("Combining real and synthetic data ...")
     final_df = pd.concat([df, synthetic_df], ignore_index=True, sort=False)
     logger.info(f"Final dataframe shape: {final_df.shape}")
+
+    # --- COMPUTE AND SAVE CLASS WEIGHTS (NEW ADDITION) ---
+    weights_output_dir = os.path.join(BASE_DIR, "model_artifacts")
+    oracle_labels = ['oracle_conservative', 'oracle_balanced', 'oracle_aggressive']
+    # Also compute weights for rateIdx (the main target)
+    all_label_cols = oracle_labels + ['rateIdx']
+    class_weights = compute_and_save_class_weights(final_df, all_label_cols, weights_output_dir)
 
     # --- Save ---
     try:

@@ -1,30 +1,54 @@
 ============================================================
-ULTIMATE ML MODEL TRAINING PIPELINE RESULTS (RF ONLY, RATEIDX MODEL)
+FIXED ML MODEL TRAINING PIPELINE RESULTS (NO DATA LEAKAGE)
 ============================================================
-Timestamp: 2025-08-23 01:36:17
+Timestamp: 2025-09-22 16:20:38
 User: ahmedjk34
-Total Pipeline Runtime: 65.42 seconds (1.09 minutes)
+Total Pipeline Runtime: 104.58 seconds (1.74 minutes)
 
-DATASET USED:
-- smart-v3-ml-enriched.csv
+DATASET CONFIGURATION:
+- Source File: smart-v3-ml-enriched.csv
+- Row Limiting: DISABLED
+- Using FULL dataset (no sampling)
 - Dataset includes context, oracle labels, synthetic edge cases, and new features
+- BULLETPROOF class preservation - all 8 rate classes guaranteed
+- Used class weights for imbalanced data: True
+
+CRITICAL FIXES APPLIED:
+- Removed phyRate (1.000 correlation with target - critical leakage)
+- Removed optimalRateDistance (perfect class mapping - critical leakage)
+- Removed recentThroughputTrend (0.853 correlation - high leakage)
+- Removed conservativeFactor (-0.809 correlation - high leakage)
+- Removed aggressiveFactor and recommendedSafeRate (potential leakage)
+- Result: Realistic 75-95% accuracy instead of suspicious 100%
+
 MODELS TRAINED:
-1. RandomForestClassifier (rateIdx)
-   Validation Accuracy: 1.0000
-   Test Accuracy: 1.0000
-   Training Time: 53.60s
+1. RandomForestClassifier (rateIdx) - FIXED VERSION
+   Validation Accuracy: 0.9782 (97.8%)
+   Test Accuracy: 0.9789 (97.9%)
+   Cross-Validation: 0.9785 (97.8%)
+   Training Time: 10.19s
+   Used Class Weights: True
 
 CONFIGURATION:
+- Algorithm: Random Forest Classifier
+- Estimators: 100 trees
+- Max Depth: 15
 - Scaler: StandardScaler
-- Features (22): rateIdx, phyRate, lastSnr, snrFast, snrSlow, shortSuccRatio, medSuccRatio, consecSuccess, consecFailure, severity, confidence, T1, T2, T3, decisionReason, packetSuccess, offeredLoad, queueLen, retryCount, channelWidth, mobilityMetric, snrVariance
-- Split: 80/10/10 stratified
+- Features (28): lastSnr, snrFast, snrSlow, snrTrendShort, snrStabilityIndex, snrPredictionConfidence, shortSuccRatio, medSuccRatio, consecSuccess, consecFailure, packetLossRate, retrySuccessRatio, recentRateChanges, timeSinceLastRateChange, rateStabilityScore, severity, confidence, T1, T2, T3, decisionReason, packetSuccess, offeredLoad, queueLen, retryCount, channelWidth, mobilityMetric, snrVariance
+- Split: 60/20/20 stratified (train/val/test)
 - Random State: 42
+- Imbalance Handling: Class Weights (preserves realistic distributions)
 
 FILES GENERATED:
 - step3_scaler_FIXED.joblib (StandardScaler)
 - step3_rf_rateIdx_model_FIXED.joblib (Random Forest for rateIdx)
 - step3_ultimate_models_FIXED_versions.txt (this file)
 
+PERFORMANCE ANALYSIS:
+- EXCELLENT: Model achieves >90% accuracy with realistic features
+
 NEXT STEPS:
-- Test models in simulation
-- Integrate with ns-3 or deployment pipeline
+- Deploy model in ns-3 WiFi simulation environment
+- Compare performance against existing rate adaptation algorithms
+- Monitor real-world performance and collect feedback data
+- Consider ensemble methods if higher accuracy needed
