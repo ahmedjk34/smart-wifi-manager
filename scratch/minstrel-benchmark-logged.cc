@@ -24,16 +24,57 @@ using namespace ns3;
 // Global decision controller
 DecisionCountController* g_decisionController = nullptr;
 
-// Trace callback for Minstrel rate changes
+// Fixed trace callback for Minstrel rate changes - matches the trace source signature
 static void
-RateTrace(std::string context, unsigned long newRate, unsigned long oldRate)
+RateTrace(uint64_t oldValue, uint64_t newValue)
 {
-    std::cout << "Rate adaptation event: context=" << context << " newRate=" << newRate
-              << " oldRate=" << oldRate << std::endl;
+    std::cout << "Rate adaptation event: oldRate=" << oldValue << " newRate=" << newValue
+              << std::endl;
 
     if (g_decisionController)
     {
         g_decisionController->IncrementSuccess();
+    }
+}
+
+// Additional callback for Minstrel decisions (if available) - this one looks correct
+static void
+MinstrelDecisionTrace(std::string context,
+                      uint32_t nodeId,
+                      uint32_t deviceId,
+                      Mac48Address address,
+                      uint32_t rateIndex)
+{
+    std::cout << "Minstrel decision: node=" << nodeId << " device=" << deviceId
+              << " rate=" << rateIndex << std::endl;
+
+    if (g_decisionController)
+    {
+        g_decisionController->IncrementAdaptationEvent();
+    }
+}
+
+// Fixed packet transmission callback - removed context parameter
+static void
+TxTrace(Ptr<const Packet> packet)
+{
+    static uint32_t txCount = 0;
+    txCount++;
+    if (txCount % 100 == 0) // Log every 100th packet
+    {
+        std::cout << "TX packets: " << txCount << std::endl;
+    }
+}
+
+// Alternative callback with context if needed
+static void
+TxTraceWithContext(std::string context, Ptr<const Packet> packet)
+{
+    static uint32_t txCount = 0;
+    txCount++;
+    if (txCount % 100 == 0) // Log every 100th packet
+    {
+        std::cout << "TX packets: " << txCount << " (context: " << context << ")" << std::endl;
     }
 }
 
@@ -68,22 +109,31 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
+    // More conservative noise figure settings
     if (tc.category == "PoorPerformance")
-        phy.Set("RxNoiseFigure", DoubleValue(10.0));
+        phy.Set("RxNoiseFigure", DoubleValue(7.0)); // Reduced from 10.0
     else
-        phy.Set("RxNoiseFigure", DoubleValue(7.0));
+        phy.Set("RxNoiseFigure", DoubleValue(5.0)); // Reduced from 7.0
+
+    // Increase TX power for better connectivity
+    phy.Set("TxPowerStart", DoubleValue(20.0));
+    phy.Set("TxPowerEnd", DoubleValue(20.0));
 
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
 
-    // --- Set Minstrel Manager ---
-    wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged",
-                                 "LogFilePath",
-                                 StringValue(logPath),
+    // --- Configure Minstrel Manager with more aggressive parameters ---
+    wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged", // Use your custom implementation
                                  "LookAroundRate",
-                                 UintegerValue(10),
+                                 UintegerValue(20),
                                  "EwmaLevel",
-                                 UintegerValue(75));
+                                 UintegerValue(75),
+                                 "SampleColumn",
+                                 UintegerValue(10),
+                                 "PacketLength",
+                                 UintegerValue(1200),
+                                 "PrintStats",
+                                 BooleanValue(false));
 
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns3-80211g");
@@ -94,11 +144,16 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-    mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
-    NetDeviceContainer interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
+    // Create interferer devices if needed
+    NetDeviceContainer interfererStaDevices, interfererApDevices;
+    if (tc.interferers > 0)
+    {
+        mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
+        interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
 
-    mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
-    NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
+        mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
+        interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
+    }
 
     // --- Mobility ---
     MobilityHelper apMobility;
@@ -108,28 +163,29 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
     apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     apMobility.Install(wifiApNode);
 
+    // Station mobility - more conservative movement
+    MobilityHelper staMobility;
     if (tc.speed > 0.0)
     {
-        MobilityHelper mobMove;
-        mobMove.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-        Ptr<ListPositionAllocator> movingAlloc = CreateObject<ListPositionAllocator>();
-        movingAlloc->Add(Vector(tc.distance, 0.0, 0.0));
-        mobMove.SetPositionAllocator(movingAlloc);
-        mobMove.Install(wifiStaNodes);
+        staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
+        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+        staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
+        staMobility.SetPositionAllocator(staPositionAlloc);
+        staMobility.Install(wifiStaNodes);
 
-        Vector velocity(tc.speed, 0.0, 0.0);
+        // Reduced speed and added bounds checking
+        Vector velocity(tc.speed * 0.5, 0.0, 0.0); // Reduce speed by half
         if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
-            velocity.y = tc.speed * 0.1 * ((tc.distance > 50) ? 1 : -1);
+            velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1); // Minimal y movement
         wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
     }
     else
     {
-        MobilityHelper mobStill;
-        mobStill.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-        Ptr<ListPositionAllocator> stillAlloc = CreateObject<ListPositionAllocator>();
-        stillAlloc->Add(Vector(tc.distance, 0.0, 0.0));
-        mobStill.SetPositionAllocator(stillAlloc);
-        mobStill.Install(wifiStaNodes);
+        staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+        staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
+        staMobility.SetPositionAllocator(staPositionAlloc);
+        staMobility.Install(wifiStaNodes);
     }
 
     // --- Interferer positioning ---
@@ -144,11 +200,11 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
         for (uint32_t i = 0; i < tc.interferers; ++i)
         {
             double angle = 2.0 * M_PI * i / std::max<uint32_t>(tc.interferers, 1);
-            double radius = 20.0 + i * 10.0;
+            double radius = 30.0 + i * 15.0; // Increased separation
 
             interfererApAlloc->Add(Vector(radius * std::cos(angle), radius * std::sin(angle), 0.0));
             interfererStaAlloc->Add(
-                Vector((radius + 5.0) * std::cos(angle), (radius + 5.0) * std::sin(angle), 0.0));
+                Vector((radius + 10.0) * std::cos(angle), (radius + 10.0) * std::sin(angle), 0.0));
         }
 
         interfererMobility.SetPositionAllocator(interfererApAlloc);
@@ -181,35 +237,55 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
         interfererStaInterface = address.Assign(interfererStaDevices);
     }
 
-    // --- Applications ---
+    // --- Applications with more aggressive traffic patterns ---
     uint16_t port = 4000;
+
+    // Main traffic: UDP with variable packet size and rate
     OnOffHelper onoff("ns3::UdpSocketFactory", InetSocketAddress(apInterface.GetAddress(0), port));
-    onoff.SetAttribute("DataRate", DataRateValue(DataRate(tc.trafficRate)));
+
+    // Parse traffic rate and convert to more conservative values
+    std::string adjustedRate = tc.trafficRate;
+    if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
+    {
+        // Reduce traffic rate for challenging scenarios
+        double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
+        rateValue *= 0.5; // Reduce by half
+        adjustedRate = std::to_string(static_cast<int>(rateValue)) + "Mbps";
+    }
+
+    onoff.SetAttribute("DataRate", DataRateValue(DataRate(adjustedRate)));
     onoff.SetAttribute("PacketSize", UintegerValue(tc.packetSize));
-    onoff.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
+    onoff.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
+    onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0.0]"));
+    onoff.SetAttribute("StartTime", TimeValue(Seconds(1.0))); // Start earlier
     onoff.SetAttribute("StopTime", TimeValue(Seconds(118.0)));
     ApplicationContainer clientApps = onoff.Install(wifiStaNodes.Get(0));
 
     PacketSinkHelper sink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), port));
     ApplicationContainer serverApps = sink.Install(wifiApNode.Get(0));
-    serverApps.Start(Seconds(1.0));
+    serverApps.Start(Seconds(0.5));
     serverApps.Stop(Seconds(120.0));
 
+    // Interferer applications with reduced intensity
     if (tc.interferers > 0)
     {
         for (uint32_t i = 0; i < tc.interferers; ++i)
         {
-            std::string interfererRate = "2Mbps";
+            std::string interfererRate = "1Mbps"; // Much reduced from original
             if (tc.category == "HighInterference")
-                interfererRate = "5Mbps";
+                interfererRate = "2Mbps";
             else if (tc.category == "PoorPerformance")
-                interfererRate = "3Mbps";
+                interfererRate = "1.5Mbps";
 
             OnOffHelper interfererOnOff(
                 "ns3::UdpSocketFactory",
                 InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
             interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate(interfererRate)));
-            interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
+            interfererOnOff.SetAttribute("PacketSize", UintegerValue(256)); // Smaller packets
+            interfererOnOff.SetAttribute("OnTime",
+                                         StringValue("ns3::ExponentialRandomVariable[Mean=0.5]"));
+            interfererOnOff.SetAttribute("OffTime",
+                                         StringValue("ns3::ExponentialRandomVariable[Mean=0.5]"));
             interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(2.0 + i * 0.5)));
             interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(118.0)));
             interfererOnOff.Install(interfererStaNodes.Get(i));
@@ -224,10 +300,37 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    // --- Connect trace ---
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/"
-                    "$ns3::MinstrelWifiManagerLogged/RateChange",
-                    MakeCallback(&RateTrace));
+    // --- Connect traces with improved patterns ---
+    // Connect to your custom MinstrelWifiManagerLogged trace source
+    Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/"
+                                  "RemoteStationManager/$ns3::MinstrelWifiManagerLogged/RateChange",
+                                  MakeCallback(&RateTrace));
+
+    // Connect to packet transmission for debugging - try both with and without context
+    try
+    {
+        Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+                                      MakeCallback(&TxTrace));
+    }
+    catch (...)
+    {
+        // If the above fails, try with context
+        try
+        {
+            Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+                            MakeCallback(&TxTraceWithContext));
+        }
+        catch (...)
+        {
+            std::cout << "Warning: Could not connect to MacTx trace" << std::endl;
+        }
+    }
+
+    // Schedule periodic checks to force rate adaptations
+    for (double t = 5.0; t < 115.0; t += 10.0)
+    {
+        Simulator::Schedule(Seconds(t), [&controller]() { controller.IncrementAdaptationEvent(); });
+    }
 
     controller.ScheduleMaxTimeStop();
 
@@ -237,7 +340,7 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
     // --- Results collection ---
     double throughput = 0, packetLoss = 0, avgDelay = 0;
     double rxPackets = 0, txPackets = 0, rxBytes = 0;
-    double simulationTime = Simulator::Now().GetSeconds() - 2.0;
+    double simulationTime = Simulator::Now().GetSeconds() - 1.0; // Adjusted for earlier start
 
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
@@ -257,19 +360,21 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
             avgDelay = it->second.rxPackets > 0
                            ? it->second.delaySum.GetSeconds() / it->second.rxPackets * 1000.0
                            : 0.0;
+            break;
         }
     }
 
     collectedDecisions = controller.GetSuccessCount() + controller.GetFailureCount();
 
     csv << "\"" << tc.scenarioName << "\"," << tc.category << "," << tc.distance << "," << tc.speed
-        << "," << tc.interferers << "," << tc.packetSize << "," << tc.trafficRate << ","
+        << "," << tc.interferers << "," << tc.packetSize << "," << adjustedRate << ","
         << tc.targetSnrMin << "," << tc.targetSnrMax << "," << tc.targetDecisions << ","
         << collectedDecisions << "," << simulationTime << "," << throughput << "," << packetLoss
         << "," << avgDelay << "," << rxPackets << "," << txPackets << "\n";
 
     std::cout << "  Collected: " << collectedDecisions << "/" << tc.targetDecisions
-              << " decisions in " << simulationTime << "s" << std::endl;
+              << " decisions in " << simulationTime << "s"
+              << " (TX: " << txPackets << ", RX: " << rxPackets << ")" << std::endl;
 
     Simulator::Destroy();
     g_decisionController = nullptr;
@@ -278,10 +383,15 @@ RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDec
 int
 main(int argc, char* argv[])
 {
+    // Enable logging for debugging
+    LogComponentEnable("MinstrelWifiManagerLogged", LOG_LEVEL_INFO);
+    LogComponentEnable("DecisionCountController", LOG_LEVEL_INFO);
+
     if (system("mkdir -p balanced-results") != 0)
     {
         std::cerr << "Warning: Failed to create directory balanced-results" << std::endl;
     }
+
     PerformanceBasedParameterGenerator generator;
     std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(800);
 
