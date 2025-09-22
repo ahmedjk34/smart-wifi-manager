@@ -13,29 +13,29 @@ PerformanceBasedParameterGenerator::GenerateStratifiedScenarios(uint32_t totalSc
 {
     std::vector<ScenarioParams> scenarios;
 
-    // Rebalanced for more challenging scenarios but with guaranteed data collection
-    // Category A: Poor Performance Scenarios (45% - increased from 40%)
-    uint32_t categoryA = totalScenarios * 0.45;
+    // Adjusted distribution to ensure better data collection
+    // Category A: Poor Performance Scenarios (30% - reduced for better overall success)
+    uint32_t categoryA = totalScenarios * 0.30;
     for (uint32_t i = 0; i < categoryA; ++i)
     {
         scenarios.push_back(GeneratePoorPerformanceScenario(i));
     }
 
-    // Category B: Medium Performance/Boundary Scenarios (30%)
-    uint32_t categoryB = totalScenarios * 0.30;
+    // Category B: Medium Performance/Boundary Scenarios (40% - increased)
+    uint32_t categoryB = totalScenarios * 0.40;
     for (uint32_t i = 0; i < categoryB; ++i)
     {
         scenarios.push_back(GenerateMediumPerformanceScenario(i));
     }
 
-    // Category C: High Interference/Stress Testing (15% - reduced from 20%)
+    // Category C: High Interference/Stress Testing (15%)
     uint32_t categoryC = totalScenarios * 0.15;
     for (uint32_t i = 0; i < categoryC; ++i)
     {
         scenarios.push_back(GenerateHighInterferenceScenario(i));
     }
 
-    // Category D: Good Performance/Baseline (10% - reduced from 10%)
+    // Category D: Good Performance/Baseline (15% - increased)
     uint32_t categoryD = totalScenarios - (categoryA + categoryB + categoryC);
     for (uint32_t i = 0; i < categoryD; ++i)
     {
@@ -50,15 +50,17 @@ PerformanceBasedParameterGenerator::GeneratePoorPerformanceScenario(uint32_t ind
 {
     ScenarioParams params;
     params.category = "PoorPerformance";
-    params.targetDecisions = 600 + (index % 300); // 600-900 decisions (reduced from 800-1200)
 
-    // Adjusted SNR ranges - still poor but not so harsh that no packets get through
+    // Reduced targets to more achievable levels
+    params.targetDecisions = 100 + (index % 200); // 100-300 decisions
+
+    // More achievable SNR ranges - still poor but functional
     std::vector<std::pair<double, double>> snrRanges = {
-        {8.0, 12.0},  // Poor but workable (raised from 3.0-6.0)
-        {10.0, 14.0}, // Poor-medium transition (raised from 6.0-9.0)
-        {12.0, 16.0}, // Below average but functional (raised from 9.0-12.0)
-        {9.0, 13.0},  // Overlapping poor range (raised from 5.0-8.0)
-        {11.0, 15.0}  // Mixed poor-medium (raised from 7.0-11.0)
+        {10.0, 15.0}, // Low but workable
+        {12.0, 18.0}, // Poor-medium transition
+        {8.0, 14.0},  // Variable poor range
+        {11.0, 16.0}, // Overlapping range
+        {9.0, 13.0}   // Consistently poor
     };
 
     auto range = snrRanges[index % snrRanges.size()];
@@ -68,21 +70,18 @@ PerformanceBasedParameterGenerator::GeneratePoorPerformanceScenario(uint32_t ind
     double targetSnr = range.first + (range.second - range.first) * ((index % 10) / 10.0);
     params.distance = CalculateDistanceForSnr(targetSnr);
 
-    // Reduced mobility for better connectivity
-    params.speed = 2.0 + (index % 8); // 2-10 m/s (reduced from 5-20)
+    // Much reduced mobility
+    params.speed = 0.5 + (index % 4); // 0.5-4 m/s
 
-    // Fewer interferers to allow some packets through
-    params.interferers = 1 + (index % 2); // 1-2 interferers (reduced from 2-5)
+    // Minimal interference
+    params.interferers = (index % 3 == 0) ? 0 : 1; // 0-1 interferers
 
-    // Smaller packet sizes for better success rate
-    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024, 1280}; // Reduced max size
+    // Conservative packet sizes
+    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024};
     params.packetSize = packetSizes[index % packetSizes.size()];
 
-    // Reduced traffic rates to prevent overwhelming the poor channel
-    std::vector<std::string> trafficRates = {"15Mbps",
-                                             "20Mbps",
-                                             "25Mbps",
-                                             "30Mbps"}; // Reduced from 35-50
+    // Very conservative traffic rates
+    std::vector<std::string> trafficRates = {"5Mbps", "8Mbps", "10Mbps", "12Mbps"};
     params.trafficRate = trafficRates[index % trafficRates.size()];
 
     std::ostringstream name;
@@ -98,16 +97,18 @@ PerformanceBasedParameterGenerator::GenerateMediumPerformanceScenario(uint32_t i
 {
     ScenarioParams params;
     params.category = "MediumPerformance";
-    params.targetDecisions = 800 + (index % 400); // 800-1200 decisions (reduced from 1000-1500)
 
-    // Medium SNR ranges - adjusted for reliable packet transmission
+    // Moderate targets
+    params.targetDecisions = 150 + (index % 250); // 150-400 decisions
+
+    // Solid medium SNR ranges
     std::vector<std::pair<double, double>> snrRanges = {
-        {15.0, 19.0}, // Medium-low (raised from 12.0-16.0)
-        {17.0, 21.0}, // Medium (raised from 15.0-19.0)
-        {19.0, 23.0}, // Medium-high (raised from 18.0-22.0)
-        {16.0, 20.0}, // Overlapping medium-low (raised from 14.0-17.0)
-        {18.0, 22.0}, // Overlapping medium (raised from 16.0-20.0)
-        {14.0, 20.0}  // Wide medium range (slightly raised from 13.0-18.0)
+        {15.0, 20.0}, // Medium-low
+        {18.0, 23.0}, // Medium
+        {16.0, 21.0}, // Medium range
+        {17.0, 22.0}, // Overlapping medium
+        {14.0, 19.0}, // Lower medium
+        {19.0, 24.0}  // Higher medium
     };
 
     auto range = snrRanges[index % snrRanges.size()];
@@ -117,18 +118,18 @@ PerformanceBasedParameterGenerator::GenerateMediumPerformanceScenario(uint32_t i
     double targetSnr = range.first + (range.second - range.first) * ((index % 8) / 8.0);
     params.distance = CalculateDistanceForSnr(targetSnr);
 
-    // Reduced mobility for more stable connections
-    params.speed = 1.0 + (index % 6); // 1-7 m/s (reduced from 2-10)
+    // Low to moderate mobility
+    params.speed = 0.5 + (index % 5); // 0.5-5 m/s
 
-    // Controlled interference
-    params.interferers = 1 + (index % 2); // 1-2 interferers (reduced from 1-3)
+    // Limited interference
+    params.interferers = (index % 4 == 0) ? 0 : 1; // Mostly 1, sometimes 0
 
-    // Conservative packet sizes
-    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024}; // Reduced max size
+    // Standard packet sizes
+    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024, 1280};
     params.packetSize = packetSizes[index % packetSizes.size()];
 
     // Moderate traffic rates
-    std::vector<std::string> trafficRates = {"20Mbps", "25Mbps", "30Mbps"}; // Reduced from 25-35
+    std::vector<std::string> trafficRates = {"10Mbps", "15Mbps", "20Mbps", "25Mbps"};
     params.trafficRate = trafficRates[index % trafficRates.size()];
 
     std::ostringstream name;
@@ -144,14 +145,16 @@ PerformanceBasedParameterGenerator::GenerateHighInterferenceScenario(uint32_t in
 {
     ScenarioParams params;
     params.category = "HighInterference";
-    params.targetDecisions = 500 + (index % 300); // 500-800 decisions (reduced from 600-1000)
 
-    // Better SNR ranges to compensate for high interference
+    // Lower targets due to interference challenges
+    params.targetDecisions = 80 + (index % 150); // 80-230 decisions
+
+    // Good SNR to compensate for high interference
     std::vector<std::pair<double, double>> snrRanges = {
-        {12.0, 18.0}, // Decent SNR with high interference (raised from 8.0-15.0)
-        {15.0, 22.0}, // Good SNR with high interference (raised from 12.0-20.0)
-        {10.0, 20.0}, // Wide range with interference (raised from 6.0-18.0)
-        {14.0, 19.0}  // Focused range (raised from 10.0-16.0)
+        {18.0, 25.0}, // Good SNR with interference
+        {20.0, 27.0}, // Very good SNR with interference
+        {16.0, 23.0}, // Decent SNR with interference
+        {19.0, 24.0}  // Stable good SNR
     };
 
     auto range = snrRanges[index % snrRanges.size()];
@@ -161,18 +164,18 @@ PerformanceBasedParameterGenerator::GenerateHighInterferenceScenario(uint32_t in
     double targetSnr = range.first + (range.second - range.first) * ((index % 6) / 6.0);
     params.distance = CalculateDistanceForSnr(targetSnr);
 
-    // Reduced mobility to help with interference challenges
-    params.speed = 3.0 + (index % 8); // 3-11 m/s (reduced from 8-20)
+    // Low mobility to help with interference
+    params.speed = 1.0 + (index % 6); // 1-7 m/s
 
-    // High interference but not overwhelming
-    params.interferers = 2 + (index % 3); // 2-4 interferers (reduced from 4-7)
+    // Significant but not overwhelming interference
+    params.interferers = 2 + (index % 2); // 2-3 interferers
 
-    // Smaller packet sizes to improve success rate in interference
-    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024, 1280}; // Reduced max size
+    // Smaller packet sizes for better success in interference
+    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024};
     params.packetSize = packetSizes[index % packetSizes.size()];
 
-    // Controlled traffic rates despite high interference
-    std::vector<std::string> trafficRates = {"25Mbps", "30Mbps", "35Mbps"}; // Reduced from 40-55
+    // Moderate traffic rates
+    std::vector<std::string> trafficRates = {"15Mbps", "20Mbps", "25Mbps"};
     params.trafficRate = trafficRates[index % trafficRates.size()];
 
     std::ostringstream name;
@@ -188,14 +191,17 @@ PerformanceBasedParameterGenerator::GenerateGoodPerformanceScenario(uint32_t ind
 {
     ScenarioParams params;
     params.category = "GoodPerformance";
-    params.targetDecisions = 1000 + (index % 400); // 1000-1400 decisions (reduced from 1200-1500)
 
-    // High SNR ranges for good performance
+    // Higher targets for good performance scenarios
+    params.targetDecisions = 200 + (index % 300); // 200-500 decisions
+
+    // High SNR ranges for excellent performance
     std::vector<std::pair<double, double>> snrRanges = {
         {22.0, 28.0}, // Good
         {25.0, 30.0}, // Very good
-        {20.0, 25.0}, // Good-medium
-        {23.0, 27.0}  // Stable good
+        {20.0, 26.0}, // Good-medium high
+        {24.0, 29.0}, // Excellent
+        {21.0, 27.0}  // Consistently good
     };
 
     auto range = snrRanges[index % snrRanges.size()];
@@ -205,18 +211,18 @@ PerformanceBasedParameterGenerator::GenerateGoodPerformanceScenario(uint32_t ind
     double targetSnr = range.first + (range.second - range.first) * ((index % 4) / 4.0);
     params.distance = CalculateDistanceForSnr(targetSnr);
 
-    // Low mobility for stable performance
-    params.speed = 0.5 + (index % 4); // 0.5-4 m/s (reduced from 0.5-6)
+    // Very low mobility for stable performance
+    params.speed = 0.0 + (index % 3); // 0-2 m/s (including stationary)
 
-    // Minimal interference
-    params.interferers = (index % 2) ? 0 : 1; // 0-1 interferers (reduced from 1-2)
+    // No or minimal interference
+    params.interferers = (index % 5 == 0) ? 1 : 0; // Mostly 0, occasionally 1
 
-    // Optimal packet sizes for good performance
-    std::vector<uint32_t> packetSizes = {256, 512, 768, 1024};
+    // Optimal packet sizes
+    std::vector<uint32_t> packetSizes = {512, 768, 1024, 1280};
     params.packetSize = packetSizes[index % packetSizes.size()];
 
-    // Conservative traffic rates for reliable performance
-    std::vector<std::string> trafficRates = {"15Mbps", "20Mbps", "25Mbps"}; // Reduced from 20-30
+    // Higher traffic rates for good performance scenarios
+    std::vector<std::string> trafficRates = {"20Mbps", "25Mbps", "30Mbps", "35Mbps"};
     params.trafficRate = trafficRates[index % trafficRates.size()];
 
     std::ostringstream name;
@@ -238,9 +244,8 @@ PerformanceBasedParameterGenerator::CalculateDistanceForSnr(double targetSnr)
     double logDistance = (requiredPathLoss - FREQUENCY_OFFSET) / 40.0;
     double distance = pow(10.0, logDistance);
 
-    return std::max(
-        1.0,
-        std::min(100.0, distance)); // Reduced max distance to 100m for better connectivity
+    // More conservative distance limits for better connectivity
+    return std::max(1.0, std::min(80.0, distance)); // Max 80m for reliable communication
 }
 
 } // namespace ns3
