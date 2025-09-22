@@ -77,6 +77,7 @@ def clamp_rateidx(x):
 # ----------------------------------------
 # CLASS WEIGHTS COMPUTATION (NEW)
 # ----------------------------------------
+
 def compute_and_save_class_weights(df: pd.DataFrame, label_cols: List[str], output_dir: str) -> Dict[str, Dict]:
     """Compute class weights for imbalanced labels and save them."""
     logger.info("🔢 Computing class weights for imbalanced target labels...")
@@ -95,18 +96,24 @@ def compute_and_save_class_weights(df: pd.DataFrame, label_cols: List[str], outp
             logger.warning(f"No valid labels found for {label_col}, skipping...")
             continue
             
-        # Get unique classes
-        unique_classes = sorted(valid_labels.unique())
+        # Get unique classes and convert to numpy array
+        unique_classes = np.array(sorted(valid_labels.unique()))
         
         # Compute balanced class weights
         class_weights = compute_class_weight(
             'balanced', 
-            classes=unique_classes, 
+            classes=unique_classes,
             y=valid_labels
         )
         
-        # Create dictionary mapping class -> weight
-        weight_dict = dict(zip(unique_classes, class_weights))
+        # Create dictionary mapping class -> weight (CONVERT KEYS TO PYTHON TYPES)
+        weight_dict = {}
+        for class_val, weight in zip(unique_classes, class_weights):
+            # Convert numpy types to Python types for JSON compatibility
+            python_key = int(class_val) if isinstance(class_val, (np.integer, np.int64)) else float(class_val) if isinstance(class_val, np.floating) else class_val
+            python_weight = float(weight)
+            weight_dict[python_key] = python_weight
+        
         class_weights_dict[label_col] = weight_dict
         
         # Log distribution and weights
@@ -114,7 +121,7 @@ def compute_and_save_class_weights(df: pd.DataFrame, label_cols: List[str], outp
         logger.info(f"\n📊 {label_col} - Class Distribution & Weights:")
         for class_val in unique_classes:
             count = class_counts[class_val]
-            weight = weight_dict[class_val]
+            weight = weight_dict[int(class_val) if isinstance(class_val, (np.integer, np.int64)) else class_val]
             pct = (count / len(valid_labels)) * 100
             logger.info(f"  Class {class_val}: {count:,} samples ({pct:.1f}%) -> weight: {weight:.3f}")
         
@@ -126,6 +133,7 @@ def compute_and_save_class_weights(df: pd.DataFrame, label_cols: List[str], outp
     weights_file = os.path.join(output_dir, "class_weights.json")
     os.makedirs(output_dir, exist_ok=True)
     
+    # Now we can save directly since all keys and values are Python types
     with open(weights_file, 'w') as f:
         json.dump(class_weights_dict, f, indent=2)
     
