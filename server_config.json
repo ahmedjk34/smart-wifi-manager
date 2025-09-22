@@ -1,0 +1,30 @@
+{
+  "server": {
+    "port": 8765,
+    "host": "localhost",
+    "max_connections": 100,
+    "socket_timeout": 1.0,
+    "log_level": "INFO",
+    "log_file": "ml_inference_server.log",
+    "enable_monitoring": true,
+    "monitoring_window": 1000
+  },
+  "models": [
+    {
+      "name": "oracle_balanced",
+      "model_path": "step3_rf_oracle_balanced_model_FIXED.joblib",
+      "scaler_path": "step3_scaler_oracle_balanced_FIXED.joblib",
+      "description": "Oracle balanced strategy - optimal for real-world scenarios (98.1% CV accuracy)",
+      "features_count": 28,
+      "rate_classes": 8
+    },
+    {
+      "name": "rateIdx",
+      "model_path": "step3_rf_rateIdx_model_FIXED.joblib",
+      "scaler_path": "step3_scaler_FIXED.joblib",
+      "description": "Original rateIdx model - current protocol behavior (97.8% CV accuracy)",
+      "features_count": 28,
+      "rate_classes": 8
+    }
+  ]
+}
