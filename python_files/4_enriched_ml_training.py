@@ -1,17 +1,18 @@
 """
-Ultimate ML Model Training Pipeline (Random Forest, Large CSV-Compatible, RAM-Efficient)
-Trains and outputs the rateIdx model using Phase 4 Step 3 naming/style.
+Ultimate ML Model Training Pipeline with Class Weights (Random Forest, Large CSV-Compatible, RAM-Efficient)
+Trains and outputs the rateIdx model using Phase 4 Step 3 naming/style with CLASS WEIGHTS instead of downsampling.
 
 Features:
 - Chunked CSV loading with balanced sampling for large datasets.
 - Handles all new features, context labels, and oracle label nuances.
+- USES CLASS WEIGHTS for imbalanced data instead of aggressive downsampling.
 - Step-by-step logging and documentation.
 - Stratified splits and feature scaling.
 - Model saving and top feature reporting.
 - Output model is named step3_rf_rateIdx_model_FIXED.joblib (matching Phase 4 Step 3 convention).
 
 Author: ahmedjk34
-Date: 2025-08-22
+Date: 2025-09-22
 """
 
 import pandas as pd
@@ -19,6 +20,7 @@ import joblib
 import logging
 import time
 import sys
+import json
 from pathlib import Path
 from datetime import datetime
 from sklearn.model_selection import train_test_split
@@ -47,13 +49,14 @@ USER = "ahmedjk34"
 SCALER_FILE = "step3_scaler_FIXED.joblib"  # <--- DO NOT CHANGE
 MODEL_FILE = "step3_rf_rateIdx_model_FIXED.joblib"  # <--- Matches output style of Phase 4 Step 3
 DOC_FILE = "step3_ultimate_models_FIXED_versions.txt" # <--- Matches output style
+CLASS_WEIGHTS_FILE = "python_files/model_artifacts/class_weights.json"  # <--- NEW: Load class weights
 # ============================================
 
 def setup_logging():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"ultimate_ml_training_{timestamp}.log"
+    log_file = log_dir / f"ultimate_ml_training_with_weights_{timestamp}.log"
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -61,9 +64,42 @@ def setup_logging():
     )
     logger = logging.getLogger(__name__)
     logger.info("="*60)
-    logger.info("ULTIMATE ML MODEL TRAINING PIPELINE STARTED (RF ONLY, RATEIDX MODEL, PATCHED FOR LARGE FILES)")
+    logger.info("ULTIMATE ML MODEL TRAINING PIPELINE WITH CLASS WEIGHTS (RF ONLY, RATEIDX MODEL)")
     logger.info("="*60)
     return logger
+
+def load_class_weights(filepath, target_label, logger):
+    """Load pre-computed class weights for handling imbalanced data."""
+    logger.info(f"📊 Loading class weights from {filepath}...")
+    try:
+        with open(filepath, 'r') as f:
+            all_weights = json.load(f)
+        
+        if target_label not in all_weights:
+            logger.warning(f"⚠️ No class weights found for {target_label}, using balanced weights")
+            return None
+        
+        weights = all_weights[target_label]
+        # Convert string keys to integers for rateIdx
+        if target_label == 'rateIdx':
+            weights = {int(k): v for k, v in weights.items()}
+        
+        logger.info(f"✅ Loaded class weights for {target_label}:")
+        for class_val, weight in weights.items():
+            logger.info(f"  Class {class_val}: {weight:.3f}")
+        
+        print(f"Class weights for {target_label}:")
+        for class_val, weight in weights.items():
+            print(f"  {class_val}: {weight:.3f}")
+        
+        return weights
+    except FileNotFoundError:
+        logger.warning(f"⚠️ Class weights file not found: {filepath}")
+        logger.info("Will train without class weights (balanced approach)")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Error loading class weights: {e}")
+        return None
 
 def load_balanced_dataset(filepath, feature_cols, label, logger, context_label):
     logger.info(f"📂 Loading dataset from {filepath} with chunked sampling...")
@@ -91,7 +127,7 @@ def load_balanced_dataset(filepath, feature_cols, label, logger, context_label):
     logger.info(f"🎯 Final label percentages:\n{(df[label].value_counts() / len(df) * 100).round(2)}")
     if context_label in df.columns:
         logger.info(f"🎯 Final context distribution:\n{df[context_label].value_counts().sort_index()}")
-    print("Final sampled label balance:")
+    print("Final sampled label balance (PRESERVED - NO AGGRESSIVE DOWNSAMPLING):")
     print(df[label].value_counts(normalize=True))
     if context_label in df.columns:
         print("Final sampled context balance:")
@@ -137,10 +173,19 @@ def scale_features(X_train, X_val, X_test, logger):
         logger.error(f"❌ Feature scaling failed: {str(e)}")
         raise
 
-def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_name, logger):
+def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_name, logger, class_weights=None):
     model_name = f"RF - {label_name}"
+    if class_weights:
+        model_name += " (WITH CLASS WEIGHTS)"
     logger.info(f"\n{'='*20} TRAINING {model_name} {'='*20}")
     try:
+        # Set class weights if provided
+        if class_weights:
+            model.set_params(class_weight=class_weights)
+            logger.info(f"🔢 Using class weights: {class_weights}")
+        else:
+            logger.info("⚖️ Training without specific class weights (balanced)")
+        
         start_time = time.time()
         logger.info(f"🚀 Starting training for {model_name}...")
         with tqdm(total=100, desc=f"Training RF", unit="%") as pbar:
@@ -179,13 +224,13 @@ def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_
         logger.error(f"❌ Training/evaluation failed for {model_name}: {str(e)}")
         raise
 
-def save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name):
+def save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name, used_class_weights=False):
     logger.info("📝 Saving comprehensive documentation...")
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(DOC_FILE, "w", encoding="utf-8") as f:
             f.write("="*60 + "\n")
-            f.write("ULTIMATE ML MODEL TRAINING PIPELINE RESULTS (RF ONLY, RATEIDX MODEL)\n")
+            f.write("ULTIMATE ML MODEL TRAINING PIPELINE RESULTS (RF WITH CLASS WEIGHTS)\n")
             f.write("="*60 + "\n")
             f.write(f"Timestamp: {timestamp}\n")
             f.write(f"User: {USER}\n")
@@ -193,17 +238,21 @@ def save_comprehensive_documentation(results, feature_cols, total_time, logger, 
             f.write("DATASET USED:\n")
             f.write(f"- {CSV_FILE}\n")
             f.write("- Dataset includes context, oracle labels, synthetic edge cases, and new features\n")
+            f.write("- PRESERVED NATURAL CLASS DISTRIBUTION (NO AGGRESSIVE DOWNSAMPLING)\n")
+            f.write(f"- Used class weights for imbalanced data: {used_class_weights}\n\n")
             f.write("MODELS TRAINED:\n")
             val_acc, test_acc, train_time = results[0]
             f.write(f"1. RandomForestClassifier ({label_name})\n")
             f.write(f"   Validation Accuracy: {val_acc:.4f}\n")
             f.write(f"   Test Accuracy: {test_acc:.4f}\n")
-            f.write(f"   Training Time: {train_time:.2f}s\n\n")
+            f.write(f"   Training Time: {train_time:.2f}s\n")
+            f.write(f"   Used Class Weights: {used_class_weights}\n\n")
             f.write("CONFIGURATION:\n")
             f.write(f"- Scaler: StandardScaler\n")
             f.write(f"- Features ({len(feature_cols)}): {', '.join(feature_cols)}\n")
             f.write("- Split: 80/10/10 stratified\n")
-            f.write("- Random State: 42\n\n")
+            f.write("- Random State: 42\n")
+            f.write("- Imbalance Handling: Class Weights (NOT downsampling)\n\n")
             f.write("FILES GENERATED:\n")
             f.write(f"- {SCALER_FILE} (StandardScaler)\n")
             f.write(f"- {MODEL_FILE} (Random Forest for {label_name})\n")
@@ -222,23 +271,35 @@ def main():
     try:
         feature_cols = FEATURE_COLS
         label_name = RATEIDX_LABEL
+        
+        # STEP 0: LOAD CLASS WEIGHTS (NEW)
+        class_weights = load_class_weights(CLASS_WEIGHTS_FILE, label_name, logger)
+        
         # STEP 1: LOAD DATA
         df = load_balanced_dataset(CSV_FILE, feature_cols, label_name, logger, CONTEXT_LABEL)
         df = df.dropna(subset=feature_cols + [label_name])
         X = df[feature_cols]
         y = df[label_name].astype(int)
+        
         # STEP 2: SPLIT DATA
         X_train, X_val, X_test, y_train, y_val, y_test = perform_train_split(X, y, logger)
+        
         # STEP 3: SCALE FEATURES
         X_train_scaled, X_val_scaled, X_test_scaled, scaler = scale_features(X_train, X_val, X_test, logger)
-        # STEP 4: TRAIN RF
+        
+        # STEP 4: TRAIN RF (WITH CLASS WEIGHTS)
         results = []
         rf_model = RandomForestClassifier(n_estimators=120, max_depth=16, random_state=42, n_jobs=-1)
-        model_results = train_and_eval(rf_model, X_train_scaled, y_train, X_val_scaled, y_val, X_test_scaled, y_test, label_name, logger)
+        model_results = train_and_eval(
+            rf_model, X_train_scaled, y_train, X_val_scaled, y_val, 
+            X_test_scaled, y_test, label_name, logger, class_weights=class_weights
+        )
         results.append(model_results)
+        
         # STEP 5: SAVE DOCS (style and output name match Phase 4 Step 3)
         total_time = time.time() - pipeline_start
-        save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name)
+        save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name, used_class_weights=(class_weights is not None))
+        
         return True
     except Exception as e:
         logger.error(f"❌ Pipeline failed: {e}")
