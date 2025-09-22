@@ -1,53 +1,57 @@
+#include "ns3/applications-module.h"
 #include "ns3/core-module.h"
+#include "ns3/flow-monitor-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
 #include "ns3/wifi-module.h"
-#include "ns3/mobility-module.h"
-#include "ns3/internet-module.h"
-#include "ns3/applications-module.h"
-#include "ns3/flow-monitor-module.h"
 
-// *** INCLUDE THE 3 NEW FILES HERE ***
-#include "ns3/performance-based-parameter-generator.h"
+// New components
 #include "ns3/decision-count-controller.h"
+#include "ns3/performance-based-parameter-generator.h"
 
-#include <vector>
-#include <string>
+#include <cmath>
 #include <fstream>
-#include <iostream>
-#include <sstream>
 #include <iomanip>
+#include <iostream>
+#include <map>
+#include <sstream>
+#include <string>
+#include <vector>
 
 using namespace ns3;
 
 // Global decision controller
 DecisionCountController* g_decisionController = nullptr;
 
-void RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
+// Match SmartWifiManagerV3Logged trace signature
+// expected=CallbackImpl<void, std::string, unsigned long, unsigned long>
+static void
+RateTrace(std::string context, unsigned long newRate, unsigned long oldRate)
 {
-    std::cout << "Rate adaptation event: context=" << context
-              << " new datarate=" << rate << " old datarate=" << oldRate << std::endl;
-    
-    // *** COUNT DECISIONS ***
-    // FIX: Use IncrementSuccess or IncrementFailure based on your logic
-    // Here, we assume every RateTrace is a "decision" (success or not)
-    // If you have packet outcome info, call IncrementSuccess/Failure accordingly.
-    if (g_decisionController) {
+    std::cout << "Rate adaptation event: context=" << context << " newRate=" << newRate
+              << " oldRate=" << oldRate << std::endl;
+
+    // Count each rate-change as a "decision" event
+    if (g_decisionController)
+    {
         g_decisionController->IncrementSuccess();
-        // OR if you want to count failures as well, use IncrementFailure()
-        // g_decisionController->IncrementFailure();
     }
 }
 
-void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDecisions)
+void
+RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collectedDecisions)
 {
     // Reset decision controller for this scenario
     DecisionCountController controller(tc.targetDecisions, 120); // 2 min max
     g_decisionController = &controller;
-    
+
+    // Per-scenario rich log path (SmartWifiManagerV3Logged writes here)
     std::string logPath = "balanced-results/" + tc.scenarioName + ".csv";
     controller.SetLogFilePath(logPath);
-    
-    std::cout << "  Target: " << tc.targetDecisions << " decisions (" << tc.category << ")" << std::endl;
+
+    std::cout << "  Target: " << tc.targetDecisions << " decisions (" << tc.category << ")"
+              << std::endl;
 
     // --- Simulation Setup ---
     NodeContainer wifiStaNodes;
@@ -60,24 +64,43 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     interfererApNodes.Create(tc.interferers);
     interfererStaNodes.Create(tc.interferers);
 
+    // Channel and PHY with improved realism
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
+    channel.AddPropagationLoss("ns3::FriisPropagationLossModel");
+    channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
+    // Slightly adjust noise figure based on scenario category
+    if (tc.category == "PoorPerformance")
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(10.0));
+    }
+    else
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(7.0));
+    }
+
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211g);
-    wifi.SetRemoteStationManager("ns3::SmartWifiManagerV3Logged", 
-        "LogFilePath", StringValue(logPath));
-        
+
+    // Use SmartWifiManagerV3Logged as in File 1 to keep tracing and per-scenario CSV format
+    wifi.SetRemoteStationManager("ns3::SmartWifiManagerV3Logged",
+                                 "LogFilePath",
+                                 StringValue(logPath));
+
     WifiMacHelper mac;
     Ssid ssid = Ssid("ns3-80211g");
 
+    // Main STA and AP
     mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
+    // Interferer STA/AP devices (use same manager so all events log to scenario file)
     mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
 
@@ -101,7 +124,14 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
         movingAlloc->Add(Vector(tc.distance, 0.0, 0.0));
         mobMove.SetPositionAllocator(movingAlloc);
         mobMove.Install(wifiStaNodes);
-        wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(Vector(tc.speed, 0.0, 0.0));
+
+        // Introduce slight lateral motion for some challenging categories (optional)
+        Vector velocity(tc.speed, 0.0, 0.0);
+        if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
+        {
+            velocity.y = tc.speed * 0.1 * ((tc.distance > 50) ? 1 : -1);
+        }
+        wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
     }
     else
     {
@@ -113,37 +143,55 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
         mobStill.Install(wifiStaNodes);
     }
 
-    // Interferers
-    MobilityHelper interfererMobility;
-    Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
-    Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
-    for (uint32_t i = 0; i < tc.interferers; ++i)
+    // Interferers positioning (radial spread for diversity)
+    if (tc.interferers > 0)
     {
-        interfererApAlloc->Add(Vector(50.0 + 40*i, 50.0, 0.0));
-        interfererStaAlloc->Add(Vector(50.0 + 40*i, 55.0, 0.0));
+        MobilityHelper interfererMobility;
+        interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+
+        Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
+        Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
+
+        for (uint32_t i = 0; i < tc.interferers; ++i)
+        {
+            double angle = 2.0 * M_PI * i / std::max<uint32_t>(tc.interferers, 1);
+            double radius = 20.0 + i * 10.0;
+
+            interfererApAlloc->Add(Vector(radius * std::cos(angle), radius * std::sin(angle), 0.0));
+            interfererStaAlloc->Add(
+                Vector((radius + 5.0) * std::cos(angle), (radius + 5.0) * std::sin(angle), 0.0));
+        }
+
+        interfererMobility.SetPositionAllocator(interfererApAlloc);
+        interfererMobility.Install(interfererApNodes);
+
+        interfererMobility.SetPositionAllocator(interfererStaAlloc);
+        interfererMobility.Install(interfererStaNodes);
     }
-    interfererMobility.SetPositionAllocator(interfererApAlloc);
-    interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    interfererMobility.Install(interfererApNodes);
-    interfererMobility.SetPositionAllocator(interfererStaAlloc);
-    interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    interfererMobility.Install(interfererStaNodes);
 
     // Internet stack
     InternetStackHelper stack;
     stack.Install(wifiApNode);
     stack.Install(wifiStaNodes);
-    stack.Install(interfererApNodes);
-    stack.Install(interfererStaNodes);
+    if (tc.interferers > 0)
+    {
+        stack.Install(interfererApNodes);
+        stack.Install(interfererStaNodes);
+    }
 
+    // IP addressing
     Ipv4AddressHelper address;
     address.SetBase("10.1.3.0", "255.255.255.0");
     Ipv4InterfaceContainer apInterface = address.Assign(apDevices);
     Ipv4InterfaceContainer staInterface = address.Assign(staDevices);
 
-    address.SetBase("10.1.4.0", "255.255.255.0");
-    Ipv4InterfaceContainer interfererApInterface = address.Assign(interfererApDevices);
-    Ipv4InterfaceContainer interfererStaInterface = address.Assign(interfererStaDevices);
+    Ipv4InterfaceContainer interfererApInterface, interfererStaInterface;
+    if (tc.interferers > 0)
+    {
+        address.SetBase("10.1.4.0", "255.255.255.0");
+        interfererApInterface = address.Assign(interfererApDevices);
+        interfererStaInterface = address.Assign(interfererStaDevices);
+    }
 
     // Applications
     uint16_t port = 4000;
@@ -159,33 +207,52 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     serverApps.Start(Seconds(1.0));
     serverApps.Stop(Seconds(120.0));
 
-    // Interferer traffic
-    for (uint32_t i = 0; i < tc.interferers; ++i)
+    // Interferer traffic with category-based intensity
+    if (tc.interferers > 0)
     {
-        OnOffHelper interfererOnOff("ns3::UdpSocketFactory", InetSocketAddress(interfererApInterface.GetAddress(i), port+1));
-        interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate("2Mbps")));
-        interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
-        interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(2.0)));
-        interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(118.0)));
-        interfererOnOff.Install(interfererStaNodes.Get(i));
+        for (uint32_t i = 0; i < tc.interferers; ++i)
+        {
+            std::string interfererRate = "2Mbps";
+            if (tc.category == "HighInterference")
+            {
+                interfererRate = "5Mbps";
+            }
+            else if (tc.category == "PoorPerformance")
+            {
+                interfererRate = "3Mbps";
+            }
 
-        PacketSinkHelper interfererSink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), port+1));
-        interfererSink.Install(interfererApNodes.Get(i));
+            OnOffHelper interfererOnOff(
+                "ns3::UdpSocketFactory",
+                InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
+            interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate(interfererRate)));
+            interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
+            interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(2.0 + i * 0.5)));
+            interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(118.0)));
+            interfererOnOff.Install(interfererStaNodes.Get(i));
+
+            PacketSinkHelper interfererSink("ns3::UdpSocketFactory",
+                                            InetSocketAddress(Ipv4Address::GetAny(), port + 1 + i));
+            interfererSink.Install(interfererApNodes.Get(i));
+        }
     }
 
+    // Flow Monitor
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
-                MakeCallback(&RateTrace));
+    // Tracing: keep File 1 style - connect to SmartWifiManagerV3Logged RateChange
+    Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/"
+                    "$ns3::SmartWifiManagerV3Logged/RateChange",
+                    MakeCallback(&RateTrace));
 
-    // *** SCHEDULE EARLY TERMINATION ***
+    // Early termination safety
     controller.ScheduleMaxTimeStop();
 
     Simulator::Stop(Seconds(120.0));
     Simulator::Run();
 
-    // Results calculation
+    // Results calculation (aggregate, keep File 1 CSV format)
     double throughput = 0;
     double packetLoss = 0;
     double avgDelay = 0;
@@ -200,101 +267,94 @@ void RunTestCase(const ScenarioParams& tc, std::ofstream& csv, uint32_t& collect
     for (auto it = stats.begin(); it != stats.end(); ++it)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
-        if (t.sourceAddress == staInterface.GetAddress(0) && t.destinationAddress == apInterface.GetAddress(0))
+        if (t.sourceAddress == staInterface.GetAddress(0) &&
+            t.destinationAddress == apInterface.GetAddress(0))
         {
             rxPackets = it->second.rxPackets;
             txPackets = it->second.txPackets;
             rxBytes = it->second.rxBytes;
             throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
             packetLoss = txPackets > 0 ? 100.0 * (txPackets - rxPackets) / txPackets : 0.0;
-            avgDelay = it->second.rxPackets > 0 ? it->second.delaySum.GetSeconds() / it->second.rxPackets * 1000.0 : 0.0;
+            avgDelay = it->second.rxPackets > 0
+                           ? it->second.delaySum.GetSeconds() / it->second.rxPackets * 1000.0
+                           : 0.0;
         }
     }
 
-    // *** CAPTURE DECISION COUNT BEFORE NULLIFYING POINTER ***
-    // FIX: Use GetSuccessCount + GetFailureCount
+    // Capture decision count consistent with File 1
     collectedDecisions = controller.GetSuccessCount() + controller.GetFailureCount();
 
-    // *** ENHANCED CSV OUTPUT ***
-    csv << "\"" << tc.scenarioName << "\","
-        << tc.category << ","
-        << tc.distance << ","
-        << tc.speed << ","
-        << tc.interferers << ","
-        << tc.packetSize << ","
-        << tc.trafficRate << ","
-        << tc.targetSnrMin << ","
-        << tc.targetSnrMax << ","
-        << tc.targetDecisions << ","
-        << collectedDecisions << ","
-        << simulationTime << ","
-        << throughput << ","
-        << packetLoss << ","
-        << avgDelay << ","
-        << rxPackets << ","
-        << txPackets << "\n";
+    // Append to main CSV (exact File 1 format and order)
+    csv << "\"" << tc.scenarioName << "\"," << tc.category << "," << tc.distance << "," << tc.speed
+        << "," << tc.interferers << "," << tc.packetSize << "," << tc.trafficRate << ","
+        << tc.targetSnrMin << "," << tc.targetSnrMax << "," << tc.targetDecisions << ","
+        << collectedDecisions << "," << simulationTime << "," << throughput << "," << packetLoss
+        << "," << avgDelay << "," << rxPackets << "," << txPackets << "\n";
 
-    std::cout << "  Collected: " << collectedDecisions << "/" << tc.targetDecisions 
+    std::cout << "  Collected: " << collectedDecisions << "/" << tc.targetDecisions
               << " decisions in " << simulationTime << "s" << std::endl;
 
     Simulator::Destroy();
     g_decisionController = nullptr;
 }
 
-int main(int argc, char *argv[])
+int
+main(int argc, char* argv[])
 {
-    // *** CREATE OUTPUT DIRECTORY ***
+    // Ensure output directory exists
     system("mkdir -p balanced-results");
-    
-    // *** USE THE PERFORMANCE-BASED GENERATOR ***
+
+    // Use the performance-based generator
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(200);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(800);
 
     std::cout << "Generated " << testCases.size() << " performance-based scenarios" << std::endl;
 
-    // *** ENHANCED CSV HEADER ***
+    // Main CSV with File 1 header/format
     std::ofstream csv("smartv3-benchmark-performance-based.csv");
     csv << "Scenario,Category,Distance,Speed,Interferers,PacketSize,TrafficRate,"
            "TargetSnrMin,TargetSnrMax,TargetDecisions,CollectedDecisions,SimTime(s),"
            "Throughput(Mbps),PacketLoss(%),AvgDelay(ms),RxPackets,TxPackets\n";
 
-    // *** STATISTICS TRACKING ***
+    // Statistics tracking
     std::map<std::string, uint32_t> categoryStats;
     std::map<std::string, std::vector<uint32_t>> decisionCountsByCategory;
 
     for (size_t i = 0; i < testCases.size(); ++i)
     {
         const auto& tc = testCases[i];
-        std::cout << "Running scenario " << (i + 1) << "/" << testCases.size() 
-                  << ": " << tc.scenarioName << std::endl;
-        
+        std::cout << "Running scenario " << (i + 1) << "/" << testCases.size() << ": "
+                  << tc.scenarioName << std::endl;
+
         uint32_t collectedDecisions = 0;
         RunTestCase(tc, csv, collectedDecisions);
-        
+
         categoryStats[tc.category]++;
         decisionCountsByCategory[tc.category].push_back(collectedDecisions);
     }
 
     csv.close();
 
-    // *** FINAL PERFORMANCE REPORT ***
+    // Final performance report (as in File 1)
     std::cout << "\n=== PERFORMANCE-BASED SIMULATION RESULTS ===" << std::endl;
     uint32_t totalDecisions = 0;
-    for (const auto& category : categoryStats) {
+    for (const auto& category : categoryStats)
+    {
         const auto& counts = decisionCountsByCategory[category.first];
         uint32_t categoryTotal = 0;
-        for (uint32_t count : counts) categoryTotal += count;
+        for (uint32_t count : counts)
+            categoryTotal += count;
         totalDecisions += categoryTotal;
-        
+
         double avgDecisions = counts.size() > 0 ? double(categoryTotal) / counts.size() : 0.0;
-        
-        std::cout << "Category " << category.first << ": " 
-                  << category.second << " scenarios, "
-                  << "avg " << std::fixed << std::setprecision(0) << avgDecisions << " decisions/scenario" << std::endl;
+
+        std::cout << "Category " << category.first << ": " << category.second << " scenarios, "
+                  << "avg " << std::fixed << std::setprecision(0) << avgDecisions
+                  << " decisions/scenario" << std::endl;
     }
-    
+
     std::cout << "\nTotal decisions collected: " << totalDecisions << std::endl;
     std::cout << "Results in: smartv3-benchmark-performance-based.csv" << std::endl;
-    
+
     return 0;
 }
