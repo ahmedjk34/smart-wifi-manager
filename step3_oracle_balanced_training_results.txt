@@ -1,0 +1,32 @@
+============================================================
+CONFIGURABLE ML MODEL TRAINING RESULTS - TARGET: oracle_balanced
+============================================================
+Timestamp: 2025-09-22 16:27:11
+User: ahmedjk34
+Target Label: oracle_balanced
+Total Pipeline Runtime: 88.92 seconds (1.48 minutes)
+
+DATASET CONFIGURATION:
+- Source File: smart-v3-ml-enriched.csv
+- Target Label: oracle_balanced
+- Label Description: Balanced oracle strategy (middle ground)
+- Row Limiting: DISABLED
+- Used class weights for imbalanced data: True
+
+MODELS TRAINED:
+1. RandomForestClassifier (oracle_balanced)
+   Validation Accuracy: 0.9798 (98.0%)
+   Test Accuracy: 0.9796 (98.0%)
+   Cross-Validation: 0.9801 (98.0%)
+   Training Time: 8.89s
+
+CONFIGURATION:
+- Algorithm: Random Forest Classifier
+- Features (28): lastSnr, snrFast, snrSlow, snrTrendShort, snrStabilityIndex, snrPredictionConfidence, shortSuccRatio, medSuccRatio, consecSuccess, consecFailure, packetLossRate, retrySuccessRatio, recentRateChanges, timeSinceLastRateChange, rateStabilityScore, severity, confidence, T1, T2, T3, decisionReason, packetSuccess, offeredLoad, queueLen, retryCount, channelWidth, mobilityMetric, snrVariance
+- Split: 60/20/20 stratified (train/val/test)
+- Random State: 42
+
+FILES GENERATED:
+- step3_scaler_oracle_balanced_FIXED.joblib (StandardScaler)
+- step3_rf_oracle_balanced_model_FIXED.joblib (Random Forest for oracle_balanced)
+- step3_oracle_balanced_training_results.txt (this file)
