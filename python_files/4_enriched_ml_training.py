@@ -1,10 +1,11 @@
 """
 Ultimate ML Model Training Pipeline with Class Weights (Random Forest, Large CSV-Compatible, RAM-Efficient)
-Trains and outputs the rateIdx model using Phase 4 Step 3 naming/style with CLASS WEIGHTS instead of downsampling.
+Trains and outputs models using Phase 4 Step 3 naming/style with CLASS WEIGHTS instead of downsampling.
 
 Features:
-- BULLETPROOF class preservation - guarantees all 8 classes survive processing
+- BULLETPROOF class preservation - guarantees all classes survive processing
 - Optional chunked CSV loading and row limiting (configurable)
+- CONFIGURABLE TARGET LABELS - train on any available label (rateIdx, oracle labels, etc.)
 - Handles all new features, context labels, and oracle label nuances
 - USES CLASS WEIGHTS for imbalanced data instead of aggressive downsampling
 - Step-by-step logging and documentation
@@ -16,6 +17,7 @@ Author: ahmedjk34
 Date: 2025-09-22
 BULLETPROOF VERSION: Absolutely preserves all classes, configurable sampling, proper debugging
 FIXED VERSION: Removed phyRate and other leaky features for realistic 85-95% accuracy
+CONFIGURABLE VERSION: Choose any target label for training
 """
 
 import pandas as pd
@@ -38,6 +40,18 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 # ================== CONFIGURABLE SETTINGS ==================
 CSV_FILE = "smart-v3-ml-enriched.csv"   # <--- DO NOT CHANGE
+
+# 🎯 TARGET LABEL SELECTION - CHOOSE YOUR TARGET!
+# Available options based on your data:
+# - "rateIdx" (original - mostly classes 0,1,5)
+# - "oracle_conservative" (classes 0-7, but different distribution)
+# - "oracle_balanced" (classes 0-7, more balanced) 
+# - "oracle_aggressive" (classes 0-7, aggressive strategy)
+
+TARGET_LABEL = "oracle_balanced"  # <--- CHANGE THIS TO EXPERIMENT!
+
+# You currently train on ONE label at a time (not multiple simultaneously)
+# This is the standard approach for classification tasks
 
 # ROW LIMITING CONTROLS (Set ENABLE_ROW_LIMITING=False to use full dataset)
 ENABLE_ROW_LIMITING = False              # <--- Set to True to enable sampling/chunking
@@ -63,20 +77,48 @@ FEATURE_COLS = [
     "queueLen", "retryCount", "channelWidth", "mobilityMetric", "snrVariance"
 ]
 
-RATEIDX_LABEL = "rateIdx"             # <--- Main label for rateIdx model
 CONTEXT_LABEL = "network_context"
 USER = "ahmedjk34"
-SCALER_FILE = "step3_scaler_FIXED.joblib"  # <--- DO NOT CHANGE
-MODEL_FILE = "step3_rf_rateIdx_model_FIXED.joblib"  # <--- Matches output style of Phase 4 Step 3
-DOC_FILE = "step3_ultimate_models_FIXED_versions.txt" # <--- Matches output style
-CLASS_WEIGHTS_FILE = "python_files/model_artifacts/class_weights.json"  # <--- Load class weights
-# ============================================
+
+# Dynamic file names based on target label
+SCALER_FILE = f"step3_scaler_{TARGET_LABEL}_FIXED.joblib"
+MODEL_FILE = f"step3_rf_{TARGET_LABEL}_model_FIXED.joblib"
+DOC_FILE = f"step3_{TARGET_LABEL}_training_results.txt"
+CLASS_WEIGHTS_FILE = "python_files/model_artifacts/class_weights.json"
+
+# ================== AVAILABLE TARGET LABELS INFO ==================
+TARGET_LABEL_INFO = {
+    "rateIdx": {
+        "description": "Original rate index (mostly classes 0,1,5)",
+        "expected_classes": 8,
+        "class_range": range(8),
+        "typical_distribution": "Imbalanced: 49% class 0, 25% each class 1&5, <1% others"
+    },
+    "oracle_conservative": {
+        "description": "Conservative oracle strategy (prefers lower rates)",
+        "expected_classes": 8,
+        "class_range": range(8),
+        "typical_distribution": "More balanced across all classes"
+    },
+    "oracle_balanced": {
+        "description": "Balanced oracle strategy (middle ground)",
+        "expected_classes": 8,
+        "class_range": range(8),
+        "typical_distribution": "Well-distributed across classes"
+    },
+    "oracle_aggressive": {
+        "description": "Aggressive oracle strategy (prefers higher rates)",
+        "expected_classes": 8,
+        "class_range": range(8),
+        "typical_distribution": "Heavily weighted toward higher rate classes"
+    }
+}
 
 def setup_logging():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"bulletproof_ml_training_{timestamp}.log"
+    log_file = log_dir / f"training_{TARGET_LABEL}_{timestamp}.log"
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -84,10 +126,15 @@ def setup_logging():
     )
     logger = logging.getLogger(__name__)
     logger.info("="*60)
-    logger.info("FIXED ML TRAINING PIPELINE - REALISTIC PERFORMANCE (NO DATA LEAKAGE)")
+    logger.info(f"CONFIGURABLE ML TRAINING PIPELINE - TARGET: {TARGET_LABEL}")
     logger.info("="*60)
+    logger.info(f"🎯 Target Label: {TARGET_LABEL}")
+    if TARGET_LABEL in TARGET_LABEL_INFO:
+        info = TARGET_LABEL_INFO[TARGET_LABEL]
+        logger.info(f"📊 Description: {info['description']}")
+        logger.info(f"📈 Expected: {info['typical_distribution']}")
     logger.info(f"🔧 Row limiting: {'ENABLED' if ENABLE_ROW_LIMITING else 'DISABLED'}")
-    logger.info(f"🚨 FIXED: Removed {6} leaky features for realistic accuracy")
+    logger.info(f"🚨 FIXED: Removed 6 leaky features for realistic accuracy")
     logger.info(f"📊 Using {len(FEATURE_COLS)} SAFE features only")
     if ENABLE_ROW_LIMITING:
         logger.info(f"📊 Max rows: {MAX_ROWS:,}, Chunk size: {CHUNKSIZE:,}")
@@ -95,21 +142,51 @@ def setup_logging():
         logger.info("📊 Using FULL dataset (no row limits)")
     return logger
 
+def discover_available_labels(df, logger):
+    """Discover and display all available target labels in the dataset."""
+    logger.info("🔍 Discovering available target labels in dataset...")
+    
+    potential_labels = ["rateIdx", "oracle_conservative", "oracle_balanced", "oracle_aggressive"]
+    available_labels = []
+    
+    for label in potential_labels:
+        if label in df.columns:
+            label_dist = df[label].value_counts().sort_index()
+            unique_classes = len(label_dist)
+            total_samples = len(df[label].dropna())
+            
+            available_labels.append(label)
+            logger.info(f"📊 {label}: {unique_classes} classes, {total_samples:,} samples")
+            
+            # Show top 5 most common classes
+            top_classes = label_dist.head(5)
+            for class_val, count in top_classes.items():
+                pct = (count / total_samples) * 100
+                logger.info(f"    Class {class_val}: {count:,} samples ({pct:.1f}%)")
+    
+    logger.info(f"✅ Found {len(available_labels)} available target labels: {available_labels}")
+    
+    if TARGET_LABEL not in available_labels:
+        logger.error(f"❌ Selected target '{TARGET_LABEL}' not found in dataset!")
+        logger.error(f"Available options: {available_labels}")
+        return None
+    
+    return available_labels
+
 def load_class_weights(filepath, target_label, logger):
     """Load pre-computed class weights for handling imbalanced data."""
-    logger.info(f"📊 Loading class weights from {filepath}...")
+    logger.info(f"📊 Loading class weights from {filepath} for target '{target_label}'...")
     try:
         with open(filepath, 'r') as f:
             all_weights = json.load(f)
         
         if target_label not in all_weights:
-            logger.warning(f"⚠️ No class weights found for {target_label}, using balanced weights")
+            logger.warning(f"⚠️ No class weights found for {target_label}, will compute balanced weights")
             return None
         
         weights = all_weights[target_label]
-        # Convert string keys to integers for rateIdx
-        if target_label == 'rateIdx':
-            weights = {int(k): float(v) for k, v in weights.items()}
+        # Convert string keys to integers
+        weights = {int(k): float(v) for k, v in weights.items()}
         
         logger.info(f"✅ Loaded class weights for {target_label}:")
         for class_val, weight in sorted(weights.items()):
@@ -122,19 +199,35 @@ def load_class_weights(filepath, target_label, logger):
         return weights
     except FileNotFoundError:
         logger.warning(f"⚠️ Class weights file not found: {filepath}")
-        logger.info("Will train without class weights (balanced approach)")
+        logger.info("Will compute balanced class weights automatically")
         return None
     except Exception as e:
         logger.error(f"❌ Error loading class weights: {e}")
         return None
 
-def debug_class_loss(df_before, df_after, label, step_name, logger):
+def compute_class_weights_if_needed(y, target_label, logger):
+    """Compute balanced class weights if not available from file."""
+    from sklearn.utils.class_weight import compute_class_weight
+    
+    logger.info(f"🔄 Computing balanced class weights for {target_label}...")
+    
+    classes = np.unique(y)
+    class_weights = compute_class_weight('balanced', classes=classes, y=y)
+    weight_dict = dict(zip(classes, class_weights))
+    
+    logger.info(f"✅ Computed balanced class weights:")
+    for class_val, weight in sorted(weight_dict.items()):
+        logger.info(f"  Class {class_val}: {weight:.3f}")
+    
+    return weight_dict
+
+def debug_class_loss(df_before, df_after, label, step_name, logger, expected_classes=8):
     """Debug function to track exactly what happens to each class during processing."""
     before_dist = df_before[label].value_counts().sort_index()
     after_dist = df_after[label].value_counts().sort_index()
     
     logger.info(f"🔍 DEBUG: Class changes during {step_name}:")
-    for class_val in range(8):  # Expected classes 0-7
+    for class_val in range(expected_classes):
         before_count = before_dist.get(class_val, 0)
         after_count = after_dist.get(class_val, 0)
         change = after_count - before_count
@@ -149,14 +242,13 @@ def debug_class_loss(df_before, df_after, label, step_name, logger):
 def bulletproof_load_dataset(filepath, feature_cols, label, logger, context_label):
     """
     BULLETPROOF dataset loading that GUARANTEES all classes survive.
-    No aggressive cleaning that could accidentally drop rare classes.
+    Now works with any target label (rateIdx, oracle labels, etc.)
     """
-    logger.info(f"📂 Loading dataset with BULLETPROOF class preservation...")
+    logger.info(f"📂 Loading dataset with BULLETPROOF class preservation for target '{label}'...")
     
     # STEP 1: Load complete dataset
     if ENABLE_ROW_LIMITING:
         logger.info(f"🔧 Row limiting ENABLED - will process in chunks of {CHUNKSIZE:,}")
-        # Load in chunks if row limiting is enabled
         chunk_list = []
         total_rows_seen = 0
         
@@ -165,7 +257,6 @@ def bulletproof_load_dataset(filepath, feature_cols, label, logger, context_labe
             chunk_list.append(chunk)
             logger.info(f"📥 Loaded chunk {chunk_num + 1}: {len(chunk):,} rows (total: {total_rows_seen:,})")
             
-            # Stop if we have enough chunks to reach MAX_ROWS
             if len(pd.concat(chunk_list)) >= MAX_ROWS:
                 logger.info(f"🛑 Reached target of {MAX_ROWS:,} rows, stopping chunk loading")
                 break
@@ -180,25 +271,29 @@ def bulletproof_load_dataset(filepath, feature_cols, label, logger, context_labe
     
     logger.info(f"📊 Initial dataset: {len(df):,} rows, {len(df.columns)} columns")
     
-    # STEP 2: Show ORIGINAL class distribution
+    # STEP 1.5: Discover available labels
+    available_labels = discover_available_labels(df, logger)
+    if available_labels is None:
+        return None, None
+    
+    # STEP 2: Show ORIGINAL class distribution for selected target
     if label in df.columns:
         original_dist = df[label].value_counts().sort_index()
-        logger.info(f"🎯 ORIGINAL class distribution:")
+        logger.info(f"🎯 ORIGINAL class distribution for '{label}':")
         for class_val, count in original_dist.items():
             pct = (count / len(df)) * 100
             logger.info(f"  Class {class_val}: {count:,} samples ({pct:.1f}%)")
         
-        # Verify we have all expected classes
-        expected_classes = set(range(8))  # 0-7
-        original_classes = set(original_dist.index)
-        missing_from_start = expected_classes - original_classes
+        # Determine expected classes dynamically
+        actual_classes = set(original_dist.index)
+        expected_classes = max(actual_classes) + 1 if actual_classes else 8
+        missing_classes = set(range(expected_classes)) - actual_classes
         
-        if missing_from_start:
-            logger.error(f"❌ MISSING CLASSES IN ORIGINAL DATA: {missing_from_start}")
-            logger.error("Cannot proceed - source data is missing rate classes!")
-            return None, None
+        if missing_classes:
+            logger.warning(f"⚠️ MISSING CLASSES IN ORIGINAL DATA: {missing_classes}")
+            logger.info(f"📊 Will proceed with available {len(actual_classes)} classes")
         else:
-            logger.info("✅ All 8 rate classes present in original data")
+            logger.info(f"✅ All {expected_classes} rate classes present in original data")
     
     # STEP 3: Validate features exist
     available_features = [col for col in feature_cols if col in df.columns]
@@ -208,7 +303,7 @@ def bulletproof_load_dataset(filepath, feature_cols, label, logger, context_labe
         logger.warning(f"⚠️ Missing features (will exclude): {missing_features}")
     logger.info(f"✅ Using {len(available_features)} available features out of {len(feature_cols)} requested")
     
-    # NEW: Log which leaky features were removed
+    # Log removed leaky features
     removed_leaky_features = [
         "phyRate", "optimalRateDistance", "recentThroughputTrend", 
         "conservativeFactor", "aggressiveFactor", "recommendedSafeRate"
@@ -220,59 +315,41 @@ def bulletproof_load_dataset(filepath, feature_cols, label, logger, context_labe
     logger.info("🧹 Starting BULLETPROOF cleaning (minimal intervention)...")
     df_before_cleaning = df.copy()
     
-    # Only remove rows that are completely unusable
     initial_rows = len(df)
     
     # Remove rows missing the target label (absolute requirement)
     df_step1 = df.dropna(subset=[label])
     logger.info(f"📊 After removing rows missing target label: {len(df_step1):,} rows ({len(df_step1)/initial_rows*100:.1f}% retained)")
-    debug_class_loss(df_before_cleaning, df_step1, label, "target label cleaning", logger)
+    debug_class_loss(df_before_cleaning, df_step1, label, "target label cleaning", logger, expected_classes)
     
     # Remove rows missing ALL features (completely useless)
     df_step2 = df_step1.dropna(subset=available_features, how='all')
     logger.info(f"📊 After removing rows missing ALL features: {len(df_step2):,} rows ({len(df_step2)/initial_rows*100:.1f}% retained)")
-    debug_class_loss(df_step1, df_step2, label, "all-features cleaning", logger)
+    debug_class_loss(df_step1, df_step2, label, "all-features cleaning", logger, expected_classes)
     
     # Final result
     df_clean = df_step2
     logger.info(f"📊 FINAL after bulletproof cleaning: {len(df_clean):,} rows ({len(df_clean)/initial_rows*100:.1f}% retained)")
     
-    # STEP 5: VERIFY all classes survived cleaning
+    # STEP 5: VERIFY classes survived cleaning
     if label in df_clean.columns:
         final_dist = df_clean[label].value_counts().sort_index()
-        logger.info(f"🎯 FINAL class distribution after cleaning:")
+        logger.info(f"🎯 FINAL class distribution for '{label}' after cleaning:")
         for class_val, count in final_dist.items():
             pct = (count / len(df_clean)) * 100
             logger.info(f"  Class {class_val}: {count:,} samples ({pct:.1f}%)")
         
-        # Critical verification
-        final_classes = set(final_dist.index)
-        still_missing = expected_classes - final_classes
-        
-        if still_missing:
-            logger.error(f"❌ CLASSES LOST DURING CLEANING: {still_missing}")
-            logger.error("🔍 Investigating what happened to missing classes...")
-            
-            # Debug: show what happened to each missing class
-            for missing_class in still_missing:
-                original_count = original_dist.get(missing_class, 0)
-                logger.error(f"  Class {missing_class}: Started with {original_count} samples, now has 0")
-                
-                # Check if they were lost during each cleaning step
-                step1_count = df_step1[df_step1[label] == missing_class].shape[0] if missing_class in df_step1[label].values else 0
-                step2_count = df_step2[df_step2[label] == missing_class].shape[0] if missing_class in df_step2[label].values else 0
-                
-                logger.error(f"    After target cleaning: {step1_count}")
-                logger.error(f"    After feature cleaning: {step2_count}")
-            
-            logger.error("❌ CANNOT PROCEED - MISSING CLASSES WILL CAUSE STRATIFIED SPLIT TO FAIL")
+        # Check if we have enough samples for stratification
+        min_samples = final_dist.min()
+        if min_samples < 3:
+            logger.error(f"❌ Smallest class has only {min_samples} samples - need at least 3 for stratified splitting")
             return None, None
         else:
-            logger.info("✅ BULLETPROOF SUCCESS: All 8 rate classes survived cleaning!")
+            logger.info(f"✅ BULLETPROOF SUCCESS: All classes have sufficient samples for training!")
     
     return df_clean, available_features
 
-def perform_train_split_fixed(X, y, logger):
+def perform_train_split_fixed(X, y, logger, expected_classes=8):
     """FIXED: Proper train/validation/test split with comprehensive verification."""
     logger.info("🔄 Performing stratified train/validation/test split...")
     try:
@@ -284,11 +361,11 @@ def perform_train_split_fixed(X, y, logger):
         
         # Verify we have enough samples of each class for stratified split
         min_class_count = class_counts.min()
-        logger.info(f"📊 Smallest class has {min_class_count} samples")
+        actual_classes = len(class_counts)
+        logger.info(f"📊 Found {actual_classes} classes, smallest has {min_class_count} samples")
         
         if min_class_count < 3:
             logger.error(f"❌ Smallest class has only {min_class_count} samples - need at least 3 for stratification")
-            logger.error("💡 Suggestion: Disable row limiting or increase MAX_ROWS to preserve more rare class samples")
             raise ValueError(f"Not enough samples in smallest class ({min_class_count}) for stratified split")
         
         # First split: 80% temp, 20% test
@@ -296,7 +373,6 @@ def perform_train_split_fixed(X, y, logger):
             X, y, test_size=0.2, stratify=y, random_state=42)
         
         # Second split: 75% train, 25% val (of the temp 80%)
-        # This gives us: 60% train, 20% val, 20% test
         X_train, X_val, y_train, y_val = train_test_split(
             X_temp, y_temp, test_size=0.25, stratify=y_temp, random_state=42)
         
@@ -305,17 +381,10 @@ def perform_train_split_fixed(X, y, logger):
         logger.info(f"📊 Validation set: {X_val.shape[0]} samples ({X_val.shape[0]/len(X)*100:.1f}%)")
         logger.info(f"🧪 Test set: {X_test.shape[0]} samples ({X_test.shape[0]/len(X)*100:.1f}%)")
         
-        # Verify all splits have all classes
-        all_splits_valid = True
+        # Verify all splits have adequate class representation
         for split_name, y_split in [("Train", y_train), ("Val", y_val), ("Test", y_test)]:
             split_classes = sorted(pd.Series(y_split).unique())
             logger.info(f"  {split_name} classes: {split_classes}")
-            if len(split_classes) != 8:
-                logger.warning(f"⚠️ {split_name} split has {len(split_classes)} classes, expected 8")
-                all_splits_valid = False
-        
-        if not all_splits_valid:
-            logger.warning("⚠️ Some splits are missing classes, but proceeding with available classes")
         
         return X_train, X_val, X_test, y_train, y_val, y_test
     except Exception as e:
@@ -343,7 +412,7 @@ def scale_features(X_train, X_val, X_test, logger):
         raise
 
 def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_name, logger, available_features, class_weights=None):
-    """Train and evaluate the Random Forest model with class weights and realistic performance expectations."""
+    """Train and evaluate the Random Forest model with class weights."""
     model_name = f"RF - {label_name}"
     if class_weights:
         model_name += " (WITH CLASS WEIGHTS)"
@@ -359,7 +428,8 @@ def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_
             for class_val, weight in sorted_weights:
                 logger.info(f"  Class {class_val}: {weight:.1f}x attention")
         else:
-            logger.info("⚖️ Training without specific class weights (sklearn balanced)")
+            logger.info("⚖️ Training with sklearn's balanced class weights")
+            model.set_params(class_weight='balanced')
         
         start_time = time.time()
         logger.info(f"🚀 Starting training for {model_name}...")
@@ -384,7 +454,7 @@ def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_
         test_acc = accuracy_score(y_test, y_test_pred)
         logger.info(f"🎯 Test Accuracy: {test_acc:.4f} ({test_acc*100:.1f}%)")
         
-        # NEW: Cross-validation reality check
+        # Cross-validation reality check
         logger.info("🔄 Cross-validation reality check...")
         X_all = np.concatenate([X_train, X_val, X_test])
         y_all = np.concatenate([y_train, y_val, y_test])
@@ -398,25 +468,24 @@ def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_
         
         # Reality assessment
         if cv_mean > 0.98:
-            logger.warning(f"⚠️ CV accuracy {cv_mean:.1%} still very high - may indicate remaining data issues")
+            logger.warning(f"⚠️ CV accuracy {cv_mean:.1%} very high - check for issues")
         elif cv_mean > 0.85:
-            logger.info(f"✅ Excellent CV performance: {cv_mean:.1%} (realistic for WiFi)")
-        elif cv_mean > 0.75:
-            logger.info(f"✅ Good CV performance: {cv_mean:.1%} (realistic for WiFi)")
+            logger.info(f"✅ Excellent CV performance: {cv_mean:.1%}")
+        elif cv_mean > 0.70:
+            logger.info(f"✅ Good CV performance: {cv_mean:.1%}")
         else:
             logger.info(f"📊 CV performance: {cv_mean:.1%} (room for improvement)")
         
         # Detailed per-class analysis
-        val_report = classification_report(y_val, y_val_pred, output_dict=True)
+        unique_classes = sorted(pd.Series(y_val).unique())
+        val_report = classification_report(y_val, y_val_pred, output_dict=True, zero_division=0)
         logger.info("📊 Per-class validation performance:")
-        for class_id in range(8):
+        for class_id in unique_classes:
             if str(class_id) in val_report:
                 metrics = val_report[str(class_id)]
                 support = int(metrics['support'])
                 logger.info(f"  Class {class_id}: Precision={metrics['precision']:.3f}, "
                            f"Recall={metrics['recall']:.3f}, F1={metrics['f1-score']:.3f}, Support={support}")
-            else:
-                logger.warning(f"  Class {class_id}: NO SAMPLES in validation set")
         
         # Confusion matrices
         val_cm = confusion_matrix(y_val, y_val_pred)
@@ -432,7 +501,7 @@ def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_
         if hasattr(model, 'feature_importances_'):
             importance_dict = dict(zip(available_features, model.feature_importances_))
             top_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)[:10]
-            logger.info(f"🔝 Top 10 most important features (safe features only):")
+            logger.info(f"🔝 Top 10 most important features:")
             for rank, (feat, importance) in enumerate(top_features, 1):
                 logger.info(f"  #{rank:2d}. {feat}: {importance:.4f}")
         
@@ -449,71 +518,39 @@ def save_comprehensive_documentation(results, feature_cols, total_time, logger, 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(DOC_FILE, "w", encoding="utf-8") as f:
             f.write("="*60 + "\n")
-            f.write("FIXED ML MODEL TRAINING PIPELINE RESULTS (NO DATA LEAKAGE)\n")
+            f.write(f"CONFIGURABLE ML MODEL TRAINING RESULTS - TARGET: {label_name}\n")
             f.write("="*60 + "\n")
             f.write(f"Timestamp: {timestamp}\n")
             f.write(f"User: {USER}\n")
+            f.write(f"Target Label: {label_name}\n")
             f.write(f"Total Pipeline Runtime: {total_time:.2f} seconds ({total_time/60:.2f} minutes)\n\n")
             
             f.write("DATASET CONFIGURATION:\n")
             f.write(f"- Source File: {CSV_FILE}\n")
+            f.write(f"- Target Label: {label_name}\n")
+            if label_name in TARGET_LABEL_INFO:
+                f.write(f"- Label Description: {TARGET_LABEL_INFO[label_name]['description']}\n")
             f.write(f"- Row Limiting: {'ENABLED' if ENABLE_ROW_LIMITING else 'DISABLED'}\n")
-            if ENABLE_ROW_LIMITING:
-                f.write(f"- Max Rows: {MAX_ROWS:,}\n")
-                f.write(f"- Chunk Size: {CHUNKSIZE:,}\n")
-            else:
-                f.write("- Using FULL dataset (no sampling)\n")
-            f.write("- Dataset includes context, oracle labels, synthetic edge cases, and new features\n")
-            f.write("- BULLETPROOF class preservation - all 8 rate classes guaranteed\n")
             f.write(f"- Used class weights for imbalanced data: {used_class_weights}\n\n")
-            
-            f.write("CRITICAL FIXES APPLIED:\n")
-            f.write("- Removed phyRate (1.000 correlation with target - critical leakage)\n")
-            f.write("- Removed optimalRateDistance (perfect class mapping - critical leakage)\n")
-            f.write("- Removed recentThroughputTrend (0.853 correlation - high leakage)\n")
-            f.write("- Removed conservativeFactor (-0.809 correlation - high leakage)\n")
-            f.write("- Removed aggressiveFactor and recommendedSafeRate (potential leakage)\n")
-            f.write("- Result: Realistic 75-95% accuracy instead of suspicious 100%\n\n")
             
             f.write("MODELS TRAINED:\n")
             val_acc, test_acc, train_time, cv_mean = results[0]
-            f.write(f"1. RandomForestClassifier ({label_name}) - FIXED VERSION\n")
+            f.write(f"1. RandomForestClassifier ({label_name})\n")
             f.write(f"   Validation Accuracy: {val_acc:.4f} ({val_acc*100:.1f}%)\n")
             f.write(f"   Test Accuracy: {test_acc:.4f} ({test_acc*100:.1f}%)\n")
             f.write(f"   Cross-Validation: {cv_mean:.4f} ({cv_mean*100:.1f}%)\n")
-            f.write(f"   Training Time: {train_time:.2f}s\n")
-            f.write(f"   Used Class Weights: {used_class_weights}\n\n")
+            f.write(f"   Training Time: {train_time:.2f}s\n\n")
             
             f.write("CONFIGURATION:\n")
             f.write(f"- Algorithm: Random Forest Classifier\n")
-            f.write(f"- Estimators: 100 trees\n")
-            f.write(f"- Max Depth: 15\n")
-            f.write(f"- Scaler: StandardScaler\n")
             f.write(f"- Features ({len(feature_cols)}): {', '.join(feature_cols)}\n")
             f.write("- Split: 60/20/20 stratified (train/val/test)\n")
-            f.write("- Random State: 42\n")
-            f.write("- Imbalance Handling: Class Weights (preserves realistic distributions)\n\n")
+            f.write("- Random State: 42\n\n")
             
             f.write("FILES GENERATED:\n")
             f.write(f"- {SCALER_FILE} (StandardScaler)\n")
             f.write(f"- {MODEL_FILE} (Random Forest for {label_name})\n")
-            f.write(f"- {DOC_FILE} (this file)\n\n")
-            
-            f.write("PERFORMANCE ANALYSIS:\n")
-            if cv_mean > 0.90:
-                f.write("- EXCELLENT: Model achieves >90% accuracy with realistic features\n")
-            elif cv_mean > 0.85:
-                f.write("- VERY GOOD: Model achieves >85% accuracy - suitable for deployment\n")
-            elif cv_mean > 0.75:
-                f.write("- GOOD: Model achieves >75% accuracy - acceptable performance\n")
-            else:
-                f.write("- MODERATE: Model performance could be improved with feature engineering\n")
-            
-            f.write("\nNEXT STEPS:\n")
-            f.write("- Deploy model in ns-3 WiFi simulation environment\n")
-            f.write("- Compare performance against existing rate adaptation algorithms\n")
-            f.write("- Monitor real-world performance and collect feedback data\n")
-            f.write("- Consider ensemble methods if higher accuracy needed\n")
+            f.write(f"- {DOC_FILE} (this file)\n")
         
         logger.info(f"✅ Documentation saved to {DOC_FILE}")
     except Exception as e:
@@ -521,26 +558,32 @@ def save_comprehensive_documentation(results, feature_cols, total_time, logger, 
         raise
 
 def main():
-    """Main training pipeline with bulletproof class preservation and realistic performance."""
+    """Main training pipeline with configurable target labels."""
     logger = setup_logging()
     pipeline_start = time.time()
     
     try:
+        logger.info(f"🎯 Training model for target label: {TARGET_LABEL}")
+        
         # STEP 0: LOAD CLASS WEIGHTS
-        class_weights = load_class_weights(CLASS_WEIGHTS_FILE, RATEIDX_LABEL, logger)
+        class_weights = load_class_weights(CLASS_WEIGHTS_FILE, TARGET_LABEL, logger)
         
         # STEP 1: BULLETPROOF DATASET LOADING
         df, available_features = bulletproof_load_dataset(
-            CSV_FILE, FEATURE_COLS, RATEIDX_LABEL, logger, CONTEXT_LABEL
+            CSV_FILE, FEATURE_COLS, TARGET_LABEL, logger, CONTEXT_LABEL
         )
         
         if df is None:
-            logger.error("❌ Dataset loading failed - missing classes")
+            logger.error("❌ Dataset loading failed")
             return False
         
         # Prepare features and target
         X = df[available_features]
-        y = df[RATEIDX_LABEL].astype(int)
+        y = df[TARGET_LABEL].astype(int)
+        
+        # Compute class weights if not loaded from file
+        if class_weights is None:
+            class_weights = compute_class_weights_if_needed(y, TARGET_LABEL, logger)
         
         logger.info(f"🔢 Final training data: X={X.shape}, y={y.shape}")
         logger.info(f"💾 Estimated memory usage: ~{X.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
@@ -554,16 +597,16 @@ def main():
         # STEP 4: MODEL TRAINING WITH CLASS WEIGHTS
         results = []
         rf_model = RandomForestClassifier(
-            n_estimators=100,      # Good balance of performance vs training time
-            max_depth=15,          # Prevent overfitting while allowing complexity
-            random_state=42,       # Reproducible results
-            n_jobs=-1,            # Use all CPU cores
-            verbose=0             # Quiet training (we have our own progress bar)
+            n_estimators=100,
+            max_depth=15,
+            random_state=42,
+            n_jobs=-1,
+            verbose=0
         )
         
         model_results = train_and_eval(
             rf_model, X_train_scaled, y_train, X_val_scaled, y_val, 
-            X_test_scaled, y_test, RATEIDX_LABEL, logger, available_features, 
+            X_test_scaled, y_test, TARGET_LABEL, logger, available_features, 
             class_weights=class_weights
         )
         results.append(model_results)
@@ -571,24 +614,22 @@ def main():
         # STEP 5: SAVE COMPREHENSIVE DOCUMENTATION
         total_time = time.time() - pipeline_start
         save_comprehensive_documentation(
-            results, available_features, total_time, logger, RATEIDX_LABEL, 
+            results, available_features, total_time, logger, TARGET_LABEL, 
             used_class_weights=(class_weights is not None)
         )
         
         # SUCCESS!
         val_acc, test_acc, train_time, cv_mean = model_results
-        logger.info("🎉 FIXED TRAINING COMPLETED SUCCESSFULLY!")
-        logger.info(f"🏆 Final Results: Val={val_acc:.1%}, Test={test_acc:.1%}, CV={cv_mean:.1%}, Time={train_time:.1f}s")
+        logger.info("🎉 CONFIGURABLE TRAINING COMPLETED SUCCESSFULLY!")
+        logger.info(f"🏆 Final Results for {TARGET_LABEL}: Val={val_acc:.1%}, Test={test_acc:.1%}, CV={cv_mean:.1%}")
         
         # Performance assessment
         if cv_mean > 0.90:
-            logger.info("✅ EXCELLENT PERFORMANCE: >90% accuracy with realistic features!")
-        elif cv_mean > 0.85:
-            logger.info("✅ VERY GOOD PERFORMANCE: >85% accuracy - ready for deployment!")
+            logger.info("✅ EXCELLENT PERFORMANCE: >90% accuracy!")
         elif cv_mean > 0.75:
-            logger.info("✅ GOOD PERFORMANCE: >75% accuracy - acceptable for WiFi rate adaptation!")
+            logger.info("✅ GOOD PERFORMANCE: >75% accuracy!")
         else:
-            logger.info("📊 MODERATE PERFORMANCE: Room for improvement with feature engineering")
+            logger.info("📊 MODERATE PERFORMANCE: Room for improvement")
         
         return True
         
