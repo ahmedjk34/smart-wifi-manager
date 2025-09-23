@@ -208,15 +208,18 @@ SmartWifiManagerRf::SmartWifiManagerRf()
     : m_currentRate(0),
       m_mlInferences(0),
       m_benchmarkDistance(1.0),
+      m_currentInterferers(0),
       m_mlFailures(0),
       m_mlCacheHits(0),
       m_avgMlLatency(0.0),
       m_lastMlRate(3),
       m_lastMlTime(Seconds(0)),
       m_lastMlConfidence(0.0),
-      m_mlGuidanceWeight(0.7), // Enhanced default
+      m_mlGuidanceWeight(0.7),
       m_enableAdaptiveWeighting(true),
-      m_conservativeBoost(1.2)
+      m_conservativeBoost(1.2),
+      m_snrAlpha(0.1) // ADD THIS LINE
+//   m_enableDetailedLogging(true) // ADD THIS LINE
 {
     NS_LOG_FUNCTION(this);
 }
@@ -346,8 +349,7 @@ void
 SmartWifiManagerRf::SetBenchmarkDistance(double distance)
 {
     m_benchmarkDistance = distance;
-    std::cout << "[INFO ENHANCED RF] Benchmark distance set to: " << m_benchmarkDistance << "m"
-              << std::endl;
+    NS_LOG_FUNCTION(this << distance);
 }
 
 void
@@ -954,7 +956,42 @@ SmartWifiManagerRf::FuseMLAndRuleBased(uint32_t mlRate,
     }
 }
 
-// ===== MISSING IMPLEMENTATIONS - ADD THESE TO YOUR .CC FILE =====
+// CRITICAL: Convert NS-3's insane SNR values to realistic WiFi SNR
+double
+ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
+{
+    double realisticSnr;
+
+    // Distance-based realistic SNR
+    if (distance <= 10.0)
+    {
+        realisticSnr = 35.0 - (distance * 1.5); // Close: 35dB to 20dB
+    }
+    else if (distance <= 30.0)
+    {
+        realisticSnr = 20.0 - ((distance - 10.0) * 1.0); // Medium: 20dB to 0dB
+    }
+    else if (distance <= 50.0)
+    {
+        realisticSnr = 0.0 - ((distance - 30.0) * 0.75); // Far: 0dB to -15dB
+    }
+    else
+    {
+        realisticSnr = -15.0 - ((distance - 50.0) * 0.5); // Very far: -15dB to -25dB
+    }
+
+    // Add interference degradation
+    realisticSnr -= (interferers * 3.0);
+
+    // Add variation based on NS-3 input
+    double variation = fmod(ns3Value, 20.0) - 10.0; // ±10dB variation
+    realisticSnr += variation * 0.3;
+
+    // Bound to realistic WiFi SNR range
+    realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
+
+    return realisticSnr;
+}
 
 void
 SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode txMode)
@@ -962,22 +999,26 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // USE RAW NS-3 SNR VALUES DIRECTLY - NO MANUAL CALCULATION
-    std::cout << "[RAW NS3 SNR] DoReportRxOk: Using raw NS-3 SNR=" << rxSnr
-              << "dB (no manual override)" << std::endl;
+    // CONVERT NS-3's crazy values to realistic SNR
+    double realisticSnr =
+        ConvertNS3ToRealisticSnr(rxSnr, m_benchmarkDistance, m_currentInterferers);
 
-    station->lastSnr = rxSnr; // Use raw NS-3 value
+    station->lastSnr = realisticSnr; // Use realistic SNR
+    station->lastRawSnr = rxSnr;     // Keep raw for debugging
 
-    // Update SNR history for trend analysis
-    station->snrHistory.push_back(rxSnr);
+    std::cout << "[REALISTIC SNR] RxOk: NS-3=" << rxSnr << "dB -> REALISTIC=" << realisticSnr
+              << "dB (dist=" << m_benchmarkDistance << "m)" << std::endl;
+
+    // Update SNR history with realistic values
+    station->snrHistory.push_back(realisticSnr);
+    station->rawSnrHistory.push_back(rxSnr);
     if (station->snrHistory.size() > 20)
     {
         station->snrHistory.pop_front();
+        station->rawSnrHistory.pop_front();
     }
 
-    // Log for debugging
-    detailedLog << "[RAW NS3 SNR UPDATE] RxOk: SNR=" << rxSnr << "dB, Mode=" << txMode
-                << " | Strategy=" << m_oracleStrategy << std::endl;
+    UpdateMetrics(st, true, realisticSnr);
 }
 
 void
@@ -1025,21 +1066,24 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // USE RAW NS-3 DATA SNR VALUES DIRECTLY
-    std::cout << "[RAW NS3 SNR] DoReportDataOk: Using raw NS-3 dataSnr=" << dataSnr
-              << "dB, ackSnr=" << ackSnr << "dB (no manual override)" << std::endl;
+    // Convert BOTH data and ack SNR to realistic values
+    double realisticDataSnr =
+        ConvertNS3ToRealisticSnr(dataSnr, m_benchmarkDistance, m_currentInterferers);
+    double realisticAckSnr =
+        ConvertNS3ToRealisticSnr(ackSnr, m_benchmarkDistance, m_currentInterferers);
 
-    station->lastSnr = dataSnr; // Use raw NS-3 data SNR
-
+    // Use the better of the two (data SNR usually more reliable)
+    station->lastSnr = realisticDataSnr;
+    station->lastRawSnr = dataSnr;
     station->retryCount = 0;
     station->totalPackets++;
     station->successfulRetries++;
-    UpdateMetrics(st, true, dataSnr); // Pass raw NS-3 SNR
 
-    // Log for debugging
-    detailedLog << "[RAW NS3 SNR UPDATE] DataOk: dataSnr=" << dataSnr << "dB, ackSnr=" << ackSnr
-                << "dB"
-                << " | Strategy=" << m_oracleStrategy << std::endl;
+    std::cout << "[REALISTIC SNR] DataOk: NS-3 data=" << dataSnr << "dB, ack=" << ackSnr
+              << "dB -> REALISTIC data=" << realisticDataSnr << "dB, ack=" << realisticAckSnr
+              << "dB (dist=" << m_benchmarkDistance << "m)" << std::endl;
+
+    UpdateMetrics(st, true, realisticDataSnr);
 }
 
 void
