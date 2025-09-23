@@ -2,7 +2,7 @@
  * Enhanced Smart WiFi Manager Benchmark - REALISTIC SNR VERSION (FULLY FIXED)
  * Compatible with ahmedjk34's Enhanced ML Pipeline (98.1% CV accuracy)
  *
- * FIXED: Converts NS-3's insane SNR values (575dB) to realistic WiFi SNR (-30 to +45 dB)
+ * FIXED: Converts NS-3's insane SNR values to realistic WiFi SNR (-30 to +45 dB)
  *
  * Author: ahmedjk34 (https://github.com/ahmedjk34)
  * Date: 2025-09-23
@@ -768,7 +768,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     Simulator::Destroy();
 }
 
-// Main function with comprehensive test cases
+// Main function with test cases matching the second file
 int
 main(int argc, char* argv[])
 {
@@ -791,73 +791,70 @@ main(int argc, char* argv[])
     logFile << "Enhanced Pipeline: 28 safe features, 98.1% CV accuracy" << std::endl;
     logFile << "FIXED: Physics-based SNR conversion (-30dB to +45dB)" << std::endl;
 
-    // Comprehensive test cases
+    // TEST CASES MATCHING THE SECOND FILE - ONLY oracle_balanced
     std::vector<EnhancedBenchmarkTestCase> testCases;
 
-    // Oracle strategies to test
-    std::vector<std::string> strategies = {"oracle_balanced",
-                                           "oracle_aggressive",
-                                           "oracle_conservative"};
+    // Match the exact test case structure from the second file
+    std::vector<double> distances = {20.0, 40.0, 60.0};                    // 3
+    std::vector<double> speeds = {0.0, 10.0};                              // 2
+    std::vector<uint32_t> interferers = {0, 3};                            // 2
+    std::vector<uint32_t> packetSizes = {256, 1500};                       // 2
+    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"}; // 3
 
-    // Test scenarios with realistic parameters
-    for (const auto& strategy : strategies)
+    // Generate test cases with ONLY oracle_balanced strategy
+    std::string strategy = "oracle_balanced";
+    for (double d : distances)
     {
-        // Close range scenarios (excellent SNR expected)
-        EnhancedBenchmarkTestCase tc1;
-        tc1.staDistance = 10.0;
-        tc1.staSpeed = 0.0;
-        tc1.numInterferers = 0;
-        tc1.packetSize = 1024;
-        tc1.trafficRate = "5Mbps";
-        tc1.oracleStrategy = strategy;
-        tc1.scenarioName = "close_static_" + strategy + "_dist=10_speed=0_intf=0";
-        tc1.expectedContext = "excellent_stable";
-        tc1.expectedMinThroughput = 4.0;
-        testCases.push_back(tc1);
+        for (double s : speeds)
+        {
+            for (uint32_t i : interferers)
+            {
+                for (uint32_t p : packetSizes)
+                {
+                    for (const std::string& r : trafficRates)
+                    {
+                        EnhancedBenchmarkTestCase tc;
+                        tc.staDistance = d;
+                        tc.staSpeed = s;
+                        tc.numInterferers = i;
+                        tc.packetSize = p;
+                        tc.trafficRate = r;
+                        tc.oracleStrategy = strategy;
 
-        // Medium range scenarios (good SNR expected)
-        EnhancedBenchmarkTestCase tc2;
-        tc2.staDistance = 25.0;
-        tc2.staSpeed = 1.0;
-        tc2.numInterferers = 1;
-        tc2.packetSize = 512;
-        tc2.trafficRate = "3Mbps";
-        tc2.oracleStrategy = strategy;
-        tc2.scenarioName = "medium_mobile_" + strategy + "_dist=25_speed=1_intf=1";
-        tc2.expectedContext = "good_stable";
-        tc2.expectedMinThroughput = 2.5;
-        testCases.push_back(tc2);
+                        std::ostringstream name;
+                        name << "dist=" << d << "_speed=" << s << "_intf=" << i << "_pkt=" << p
+                             << "_rate=" << r;
+                        tc.scenarioName = name.str();
 
-        // Far range scenarios (marginal SNR expected)
-        EnhancedBenchmarkTestCase tc3;
-        tc3.staDistance = 45.0;
-        tc3.staSpeed = 2.0;
-        tc3.numInterferers = 2;
-        tc3.packetSize = 256;
-        tc3.trafficRate = "1Mbps";
-        tc3.oracleStrategy = strategy;
-        tc3.scenarioName = "far_mobile_" + strategy + "_dist=45_speed=2_intf=2";
-        tc3.expectedContext = "marginal_conditions";
-        tc3.expectedMinThroughput = 0.8;
-        testCases.push_back(tc3);
+                        // Set expected context based on realistic conditions
+                        if (d <= 20.0 && i == 0)
+                        {
+                            tc.expectedContext = "excellent_stable";
+                            tc.expectedMinThroughput = 4.0;
+                        }
+                        else if (d <= 40.0 && i <= 3)
+                        {
+                            tc.expectedContext = "good_stable";
+                            tc.expectedMinThroughput = 2.5;
+                        }
+                        else
+                        {
+                            tc.expectedContext = "marginal_conditions";
+                            tc.expectedMinThroughput = 1.0;
+                        }
 
-        // Very far range scenarios (poor SNR expected)
-        EnhancedBenchmarkTestCase tc4;
-        tc4.staDistance = 70.0;
-        tc4.staSpeed = 0.0;
-        tc4.numInterferers = 3;
-        tc4.packetSize = 128;
-        tc4.trafficRate = "500Kbps";
-        tc4.oracleStrategy = strategy;
-        tc4.scenarioName = "very_far_static_" + strategy + "_dist=70_speed=0_intf=3";
-        tc4.expectedContext = "poor_unstable";
-        tc4.expectedMinThroughput = 0.3;
-        testCases.push_back(tc4);
+                        testCases.push_back(tc);
+                    }
+                }
+            }
+        }
     }
 
-    logFile << "Generated " << testCases.size() << " comprehensive test cases" << std::endl;
+    logFile << "Generated " << testCases.size() << " test cases (oracle_balanced only)"
+            << std::endl;
     std::cout << "🚀 Enhanced Smart WiFi Manager Benchmark (REALISTIC SNR)" << std::endl;
-    std::cout << "📊 Total test cases: " << testCases.size() << std::endl;
+    std::cout << "📊 Total test cases: " << testCases.size() << " (oracle_balanced only)"
+              << std::endl;
     std::cout << "🔧 FIXED: Physics-based SNR conversion" << std::endl;
     std::cout << "⚡ 28 safe features, 98.1% CV accuracy pipeline" << std::endl;
     std::cout << "✅ SNR values: -30dB to +45dB (realistic WiFi range)" << std::endl;
@@ -911,7 +908,7 @@ main(int argc, char* argv[])
     std::cout << "\n" << std::string(80, '=') << std::endl;
     std::cout << "🏆 ENHANCED BENCHMARK COMPLETED SUCCESSFULLY (REALISTIC SNR)" << std::endl;
     std::cout << std::string(80, '=') << std::endl;
-    std::cout << "📊 Total test cases: " << totalTests << std::endl;
+    std::cout << "📊 Total test cases: " << totalTests << " (oracle_balanced only)" << std::endl;
     std::cout << "⏱️  Total execution time: " << totalDuration.count() << " minutes" << std::endl;
     std::cout << "📁 Results saved to: " << csvFilename << std::endl;
     std::cout << "📋 Logs saved to: enhanced-smartrf-realistic-logs.txt" << std::endl;
