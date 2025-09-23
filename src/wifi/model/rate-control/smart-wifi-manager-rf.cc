@@ -348,7 +348,22 @@ SmartWifiManagerRf::DoCreateStation() const
 void
 SmartWifiManagerRf::SetBenchmarkDistance(double distance)
 {
+    std::cout << "[DISTANCE UPDATE] OLD: " << m_benchmarkDistance << "m -> NEW: " << distance << "m"
+              << std::endl;
+
+    if (distance <= 0.0 || distance > 200.0)
+    {
+        std::cout << "[ERROR] Invalid distance: " << distance
+                  << "m. Keeping old value: " << m_benchmarkDistance << "m" << std::endl;
+        return;
+    }
+
+    double oldDistance = m_benchmarkDistance;
     m_benchmarkDistance = distance;
+
+    std::cout << "[DISTANCE SET] Successfully updated from " << oldDistance << "m to "
+              << m_benchmarkDistance << "m" << std::endl;
+
     NS_LOG_FUNCTION(this << distance);
 }
 
@@ -1006,17 +1021,20 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // CONVERT NS-3's crazy values to realistic SNR using actual distance
-    std::cout << "[DEBUG] Using benchmark distance: " << m_benchmarkDistance
-              << "m, interferers: " << m_currentInterferers << std::endl;
+    std::cout << "[DEBUG MANAGER RX] Input NS-3 SNR: " << rxSnr << "dB" << std::endl;
+    std::cout << "[DEBUG MANAGER RX] Manager distance: " << m_benchmarkDistance << "m" << std::endl;
+    std::cout << "[DEBUG MANAGER RX] Manager interferers: " << m_currentInterferers << std::endl;
+
+    // CRITICAL FIX: Use THIS manager's distance, not globals
     double realisticSnr =
         ConvertNS3ToRealisticSnr(rxSnr, m_benchmarkDistance, m_currentInterferers);
 
-    station->lastSnr = realisticSnr; // Use realistic SNR
-    station->lastRawSnr = rxSnr;     // Keep raw for debugging
+    station->lastSnr = realisticSnr;
+    station->lastRawSnr = rxSnr;
 
-    std::cout << "[REALISTIC SNR] RxOk: NS-3=" << rxSnr << "dB -> REALISTIC=" << realisticSnr
-              << "dB (dist=" << m_benchmarkDistance << "m)" << std::endl;
+    std::cout << "[FIXED MANAGER SNR] NS-3=" << rxSnr << "dB -> REALISTIC=" << realisticSnr
+              << "dB using manager distance=" << m_benchmarkDistance
+              << "m, intf=" << m_currentInterferers << std::endl;
 
     // Update SNR history with realistic values
     station->snrHistory.push_back(realisticSnr);
@@ -1357,6 +1375,15 @@ SmartWifiManagerRf::LogContextAndDecision(const SafetyAssessment& safety,
               << " Emergency=" << safety.requiresEmergencyAction
               << " RecommendedSafeRate=" << safety.recommendedSafeRate << " MLRate=" << mlRate
               << " RuleRate=" << ruleRate << " FinalRate=" << finalRate << std::endl;
+}
+
+void
+SmartWifiManagerRf::DebugPrintCurrentConfig() const
+{
+    std::cout << "[MANAGER CONFIG] Distance: " << m_benchmarkDistance << "m" << std::endl;
+    std::cout << "[MANAGER CONFIG] Interferers: " << m_currentInterferers << std::endl;
+    std::cout << "[MANAGER CONFIG] Strategy: " << m_oracleStrategy << std::endl;
+    std::cout << "[MANAGER CONFIG] Model: " << m_modelName << std::endl;
 }
 
 } // namespace ns3

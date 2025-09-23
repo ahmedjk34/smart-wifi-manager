@@ -104,6 +104,19 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void SetOracleStrategy(const std::string& strategy);
     void SetCurrentInterferers(uint32_t interferers);
 
+    // config to help debug issue with distance
+    void DebugPrintCurrentConfig() const;
+
+    double GetCurrentBenchmarkDistance() const
+    {
+        return m_benchmarkDistance;
+    }
+
+    uint32_t GetCurrentInterfererCount() const
+    {
+        return m_currentInterferers;
+    }
+
   private:
     // Core WifiRemoteStationManager interface
     void DoInitialize() override;
