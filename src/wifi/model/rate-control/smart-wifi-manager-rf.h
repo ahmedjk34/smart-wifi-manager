@@ -102,6 +102,7 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void SetBenchmarkDistance(double distance);
     void SetModelName(const std::string& modelName);
     void SetOracleStrategy(const std::string& strategy);
+    void SetCurrentInterferers(uint32_t interferers);
 
   private:
     // Core WifiRemoteStationManager interface

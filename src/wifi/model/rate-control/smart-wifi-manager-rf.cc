@@ -207,7 +207,7 @@ SmartWifiManagerRf::GetTypeId()
 SmartWifiManagerRf::SmartWifiManagerRf()
     : m_currentRate(0),
       m_mlInferences(0),
-      m_benchmarkDistance(1.0),
+      m_benchmarkDistance(20.0),
       m_currentInterferers(0),
       m_mlFailures(0),
       m_mlCacheHits(0),
@@ -365,6 +365,13 @@ SmartWifiManagerRf::SetOracleStrategy(const std::string& strategy)
     m_oracleStrategy = strategy;
     m_modelName = strategy; // Sync model name with strategy
     std::cout << "[INFO ENHANCED RF] Oracle strategy set to: " << m_oracleStrategy << std::endl;
+}
+
+void
+SmartWifiManagerRf::SetCurrentInterferers(uint32_t interferers)
+{
+    m_currentInterferers = interferers;
+    std::cout << "[INFO] Current interferers set to: " << m_currentInterferers << std::endl;
 }
 
 // Enhanced SNR calculation with realistic distance-based modeling
@@ -999,7 +1006,9 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // CONVERT NS-3's crazy values to realistic SNR
+    // CONVERT NS-3's crazy values to realistic SNR using actual distance
+    std::cout << "[DEBUG] Using benchmark distance: " << m_benchmarkDistance
+              << "m, interferers: " << m_currentInterferers << std::endl;
     double realisticSnr =
         ConvertNS3ToRealisticSnr(rxSnr, m_benchmarkDistance, m_currentInterferers);
 
@@ -1066,7 +1075,9 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // Convert BOTH data and ack SNR to realistic values
+    // Convert BOTH data and ack SNR to realistic values using actual distance
+    std::cout << "[DEBUG] DoReportDataOk using distance: " << m_benchmarkDistance << "m"
+              << std::endl;
     double realisticDataSnr =
         ConvertNS3ToRealisticSnr(dataSnr, m_benchmarkDistance, m_currentInterferers);
     double realisticAckSnr =
