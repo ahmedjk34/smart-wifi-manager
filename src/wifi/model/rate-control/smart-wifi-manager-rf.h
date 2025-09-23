@@ -171,7 +171,6 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void LogFeatureVector(const std::vector<double>& features, const std::string& context) const;
 
     // Configuration parameters
-    double m_benchmarkDistance;     // Distance for benchmark testing
     std::string m_modelPath;        // Path to ML model file
     std::string m_scalerPath;       // Path to scaler file
     std::string m_pythonScript;     // Legacy python script path
@@ -203,6 +202,16 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     bool m_enableAdaptiveWeighting; // Enable adaptive ML weighting
     double m_conservativeBoost;     // Conservative rate boost factor
 
+    // CRITICAL: Distance for realistic SNR conversion
+    double m_benchmarkDistance;
+    uint32_t m_currentInterferers;
+
+    // Available data rates for 802.11g
+    std::vector<WifiMode> m_supportedRates;
+
+    // Add these to private section in .h file:
+    bool m_enableDetailedLogging; // For enhanced logging
+
     // Enhanced traced values for monitoring
     TracedValue<uint64_t> m_currentRate;  // Current data rate
     TracedValue<uint32_t> m_mlInferences; // Total ML inferences
@@ -227,6 +236,7 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
 {
     // Core SNR metrics (safe features - no data leakage)
     double lastSnr;                 // Most recent SNR measurement
+    double lastRawSnr;              // Added to store raw SNR value
     double snrFast;                 // Fast-moving SNR average
     double snrSlow;                 // Slow-moving SNR average
     double snrTrendShort;           // Short-term SNR trend
@@ -275,6 +285,7 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     // Performance history for stability assessment
     std::deque<uint32_t> rateHistory;   // Recent rate history
     std::deque<double> snrHistory;      // Recent SNR history
+    std::deque<double> rawSnrHistory;   // <-- RAW SNR history
     std::deque<Time> changeTimeHistory; // Rate change timing history
 
     // ML interaction tracking
