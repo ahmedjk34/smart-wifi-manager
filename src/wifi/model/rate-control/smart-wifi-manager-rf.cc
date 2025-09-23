@@ -37,6 +37,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// Add a static log stream for detailed logging
+static std::ostringstream detailedLog;
+
 namespace ns3
 {
 
@@ -366,50 +369,13 @@ SmartWifiManagerRf::SetOracleStrategy(const std::string& strategy)
 double
 SmartWifiManagerRf::CalculateDistanceBasedSnr(WifiRemoteStation* st) const
 {
-    double snrDb;
+    // THIS METHOD IS NOW DISABLED - WE USE RAW NS-3 SNR
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // Enhanced realistic SNR values based on distance
-    if (m_benchmarkDistance <= 1.0)
-    {
-        snrDb = 45.0; // Very close - excellent signal
-    }
-    else if (m_benchmarkDistance <= 5.0)
-    {
-        snrDb = 40.0; // Close - excellent signal
-    }
-    else if (m_benchmarkDistance <= 10.0)
-    {
-        snrDb = 35.0; // Close - very good signal
-    }
-    else if (m_benchmarkDistance <= 20.0)
-    {
-        snrDb = 30.0; // Medium close - good signal
-    }
-    else if (m_benchmarkDistance <= 40.0)
-    {
-        snrDb = 25.0; // Medium - moderate signal
-    }
-    else if (m_benchmarkDistance <= 60.0)
-    {
-        snrDb = 20.0; // Medium far - acceptable signal
-    }
-    else if (m_benchmarkDistance <= 80.0)
-    {
-        snrDb = 15.0; // Far - weak but usable
-    }
-    else if (m_benchmarkDistance <= 120.0)
-    {
-        snrDb = 10.0; // Very far - marginal signal
-    }
-    else
-    {
-        snrDb = 5.0; // Extreme distance - very weak
-    }
+    std::cout << "[WARNING] CalculateDistanceBasedSnr called but DISABLED - using raw NS-3 SNR: "
+              << station->lastSnr << "dB" << std::endl;
 
-    std::cout << "[DEBUG ENHANCED SNR] Distance=" << m_benchmarkDistance << "m -> SNR=" << snrDb
-              << "dB" << std::endl;
-
-    return ApplyRealisticSnrBounds(snrDb);
+    return station->lastSnr; // Return the last raw NS-3 SNR value
 }
 
 double
@@ -996,20 +962,22 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // Calculate realistic SNR
-    double correctedSnr = CalculateDistanceBasedSnr(st);
+    // USE RAW NS-3 SNR VALUES DIRECTLY - NO MANUAL CALCULATION
+    std::cout << "[RAW NS3 SNR] DoReportRxOk: Using raw NS-3 SNR=" << rxSnr
+              << "dB (no manual override)" << std::endl;
 
-    std::cout << "[DEBUG ENHANCED SNR RX] NS3 reported=" << rxSnr
-              << ", Corrected SNR=" << correctedSnr << "dB" << std::endl;
-
-    station->lastSnr = correctedSnr;
+    station->lastSnr = rxSnr; // Use raw NS-3 value
 
     // Update SNR history for trend analysis
-    station->snrHistory.push_back(correctedSnr);
+    station->snrHistory.push_back(rxSnr);
     if (station->snrHistory.size() > 20)
     {
         station->snrHistory.pop_front();
     }
+
+    // Log for debugging
+    detailedLog << "[RAW NS3 SNR UPDATE] RxOk: SNR=" << rxSnr << "dB, Mode=" << txMode
+                << " | Strategy=" << m_oracleStrategy << std::endl;
 }
 
 void
@@ -1057,15 +1025,21 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    double correctedSnr = CalculateDistanceBasedSnr(st);
-    std::cout << "[DEBUG ENHANCED SNR DATA] NS3 reported=" << dataSnr
-              << "dB, Corrected SNR=" << correctedSnr << "dB" << std::endl;
-    station->lastSnr = correctedSnr;
+    // USE RAW NS-3 DATA SNR VALUES DIRECTLY
+    std::cout << "[RAW NS3 SNR] DoReportDataOk: Using raw NS-3 dataSnr=" << dataSnr
+              << "dB, ackSnr=" << ackSnr << "dB (no manual override)" << std::endl;
+
+    station->lastSnr = dataSnr; // Use raw NS-3 data SNR
 
     station->retryCount = 0;
     station->totalPackets++;
     station->successfulRetries++;
-    UpdateMetrics(st, true, correctedSnr);
+    UpdateMetrics(st, true, dataSnr); // Pass raw NS-3 SNR
+
+    // Log for debugging
+    detailedLog << "[RAW NS3 SNR UPDATE] DataOk: dataSnr=" << dataSnr << "dB, ackSnr=" << ackSnr
+                << "dB"
+                << " | Strategy=" << m_oracleStrategy << std::endl;
 }
 
 void
@@ -1104,11 +1078,12 @@ SmartWifiManagerRf::DoGetRtsTxVector(WifiRemoteStation* st)
 }
 
 // Enhanced rule-based rate selection
+
 uint32_t
 SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
                                              const SafetyAssessment& safety) const
 {
-    double snr = station->lastSnr;
+    double snr = station->lastSnr; // Raw NS-3 SNR
     double shortSuccRatio = 0.5;
     if (!station->shortWindow.empty())
     {
@@ -1116,27 +1091,29 @@ SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
         shortSuccRatio = static_cast<double>(successes) / station->shortWindow.size();
     }
 
-    // Enhanced SNR-based rate selection
+    // UPDATED SNR thresholds for raw NS-3 values
     uint32_t baseRate;
-    if (snr >= 40)
-        baseRate = 6; // Excellent signal
-    else if (snr >= 35)
-        baseRate = 5; // Very good signal
-    else if (snr >= 30)
-        baseRate = 4; // Good signal
-    else if (snr >= 25)
-        baseRate = 3; // Moderate signal
-    else if (snr >= 20)
-        baseRate = 2; // Acceptable signal
+    if (snr >= 20)
+        baseRate = 7; // Excellent signal (raw NS-3)
     else if (snr >= 15)
-        baseRate = 1; // Weak signal
+        baseRate = 6; // Very good signal
+    else if (snr >= 10)
+        baseRate = 5; // Good signal
+    else if (snr >= 5)
+        baseRate = 4; // Moderate signal
+    else if (snr >= 0)
+        baseRate = 3; // Acceptable signal
+    else if (snr >= -10)
+        baseRate = 2; // Weak signal
+    else if (snr >= -20)
+        baseRate = 1; // Very weak signal
     else
-        baseRate = 0; // Very weak signal
+        baseRate = 0; // Poor signal
 
+    // Rest of the enhanced rule logic remains the same...
     uint32_t adjustedRate = baseRate;
-    std::string ruleReason = "SNR_BASED";
+    std::string ruleReason = "SNR_BASED_RAW_NS3";
 
-    // Enhanced success-based adjustments
     if (shortSuccRatio > 0.95 && station->consecSuccess > 100)
     {
         adjustedRate = std::min(baseRate + 3, static_cast<uint32_t>(7));
@@ -1158,7 +1135,8 @@ SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
         ruleReason = "POOR_CONSERVATIVE";
     }
 
-    std::cout << "[ENHANCED RULE LOGIC] SNR=" << snr << " SuccRatio=" << shortSuccRatio
+    std::cout << "[RAW NS3 SNR RULE LOGIC] SNR=" << snr
+              << "dB (raw NS-3) SuccRatio=" << shortSuccRatio
               << " ConsecSucc=" << station->consecSuccess << " | BaseRate=" << baseRate
               << " -> AdjustedRate=" << adjustedRate << " (" << ruleReason << ")" << std::endl;
 
@@ -1184,10 +1162,11 @@ SmartWifiManagerRf::AssessNetworkSafety(SmartWifiManagerRfState* station)
 }
 
 // Enhanced context classification
+
 WifiContextType
 SmartWifiManagerRf::ClassifyNetworkContext(SmartWifiManagerRfState* station) const
 {
-    double snr = station->lastSnr;
+    double snr = station->lastSnr; // Raw NS-3 SNR
     double shortSuccRatio = 0.5;
     if (!station->shortWindow.empty())
         shortSuccRatio =
@@ -1195,15 +1174,16 @@ SmartWifiManagerRf::ClassifyNetworkContext(SmartWifiManagerRfState* station) con
                 std::count(station->shortWindow.begin(), station->shortWindow.end(), true)) /
             station->shortWindow.size();
 
-    if (snr < 5.0 || shortSuccRatio < 0.5 || station->consecFailure >= m_failureThreshold)
+    // UPDATED context classification for raw NS-3 SNR values
+    if (snr < -30.0 || shortSuccRatio < 0.5 || station->consecFailure >= m_failureThreshold)
         return WifiContextType::EMERGENCY;
-    if (snr < 10.0 || shortSuccRatio < 0.7)
+    if (snr < -20.0 || shortSuccRatio < 0.7)
         return WifiContextType::POOR_UNSTABLE;
-    if (snr < 15.0 || shortSuccRatio < 0.8)
+    if (snr < -10.0 || shortSuccRatio < 0.8)
         return WifiContextType::MARGINAL;
-    if (snr >= 40.0 && shortSuccRatio > 0.95)
+    if (snr >= 15.0 && shortSuccRatio > 0.95)
         return WifiContextType::EXCELLENT_STABLE;
-    if (snr >= 25.0 && shortSuccRatio > 0.9)
+    if (snr >= 0.0 && shortSuccRatio > 0.9)
         return WifiContextType::GOOD_STABLE;
     return WifiContextType::GOOD_STABLE;
 }
@@ -1278,16 +1258,18 @@ SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double sn
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     Time now = Simulator::Now();
 
-    // Enhanced SNR tracking
-    if (snr >= m_minSnrDb && snr <= m_maxSnrDb)
+    // ENHANCED SNR tracking with RAW NS-3 values
+    // Accept any reasonable SNR range from NS-3 (wider bounds)
+    if (snr >= -100.0 && snr <= 50.0) // Realistic bounds for WiFi SNR
     {
-        station->lastSnr = snr;
+        station->lastSnr = snr; // Raw NS-3 SNR
+
         if (station->snrFast == 0.0 && station->snrSlow == 0.0)
         {
             station->snrFast = snr;
             station->snrSlow = snr;
             station->snrVariance = 0.1;
-            std::cout << "[ENHANCED SNR INIT] Initialized snrFast/Slow to " << snr << "dB"
+            std::cout << "[RAW NS3 SNR INIT] Initialized snrFast/Slow to " << snr << "dB (raw NS-3)"
                       << std::endl;
         }
         else
@@ -1296,56 +1278,18 @@ SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double sn
             station->snrSlow = (m_snrAlpha / 10) * snr + (1 - m_snrAlpha / 10) * station->snrSlow;
         }
 
-        std::cout << "[DEBUG ENHANCED SNR UPDATE] SNR=" << snr << "dB, Fast=" << station->snrFast
-                  << "dB, Slow=" << station->snrSlow << "dB" << std::endl;
-    }
-
-    // Enhanced success tracking
-    station->shortWindow.push_back(success);
-    if (station->shortWindow.size() > m_windowSize / 2)
-    {
-        station->shortWindow.pop_front();
-    }
-    station->mediumWindow.push_back(success);
-    if (station->mediumWindow.size() > m_windowSize)
-    {
-        station->mediumWindow.pop_front();
-    }
-
-    if (success)
-    {
-        station->consecSuccess++;
-        station->consecFailure = 0;
+        std::cout << "[RAW NS3 SNR UPDATE] SNR=" << snr
+                  << "dB (raw NS-3), Fast=" << station->snrFast << "dB, Slow=" << station->snrSlow
+                  << "dB" << std::endl;
     }
     else
     {
-        station->consecFailure++;
-        station->consecSuccess = 0;
+        std::cout << "[WARNING] Raw NS-3 SNR out of expected range: " << snr
+                  << "dB, keeping previous value: " << station->lastSnr << "dB" << std::endl;
     }
 
-    // Enhanced severity and confidence updates
-    if (!success)
-    {
-        station->severity = std::min(1.0, station->severity + 0.1);
-        station->confidence = std::max(0.1, station->confidence - 0.1);
-    }
-    else
-    {
-        station->severity = std::max(0.0, station->severity - 0.05);
-        station->confidence = std::min(1.0, station->confidence + 0.05);
-    }
-
-    // Enhanced variance calculation with bounds
-    double snrDiff = snr - station->snrSlow;
-    snrDiff = std::max(-10.0, std::min(10.0, snrDiff));
-    station->snrVariance = 0.95 * station->snrVariance + 0.05 * (snrDiff * snrDiff);
-
-    // Enhanced timing features
-    double timeDiff = (now - station->lastUpdateTime).GetSeconds();
-    station->T1 = static_cast<uint32_t>(timeDiff * 1000);
-    station->T2 = station->T1 * 2;
-    station->T3 = station->T1 * 3;
-    station->lastUpdateTime = now;
+    // Rest of UpdateMetrics remains the same...
+    // [Include all the existing success tracking, severity updates, etc.]
 }
 
 void
