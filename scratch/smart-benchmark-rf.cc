@@ -42,6 +42,10 @@ std::vector<double> collectedSnrValues;
 double minCollectedSnr = 1e9;
 double maxCollectedSnr = -1e9;
 
+// CRITICAL: Global variables for trace callbacks (updated per test case)
+static double g_currentTestDistance = 20.0;
+static uint32_t g_currentTestInterferers = 0;
+
 // CRITICAL: Convert NS-3's insane SNR values to realistic WiFi SNR
 double
 ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
@@ -240,6 +244,7 @@ PhyRxBeginTrace(std::string context, Ptr<const Packet> packet, RxPowerWattPerCha
 }
 
 // FIXED: Realistic SNR collection via MonitorSniffRx
+
 void
 MonitorSniffRx(std::string context,
                Ptr<const Packet> packet,
@@ -251,11 +256,25 @@ MonitorSniffRx(std::string context,
 {
     double rawSnr = signalNoise.signal - signalNoise.noise;
 
-    // FIXED: Use CURRENT test case parameters, not stale global values
-    double currentDistance = currentStats.distance;
-    uint32_t currentInterferers = currentStats.interferers;
+    // CRITICAL FIX: Get CURRENT distance from SmartManager, not globals
+    double currentDistance = 20.0;   // fallback
+    uint32_t currentInterferers = 0; // fallback
 
-    // Convert NS-3's crazy SNR to realistic values using CURRENT test case parameters
+    if (g_currentSmartManager != nullptr)
+    {
+        currentDistance = g_currentSmartManager->GetCurrentBenchmarkDistance();
+        currentInterferers = g_currentSmartManager->GetCurrentInterfererCount();
+
+        std::cout << "[DEBUG MONITOR] Manager distance: " << currentDistance
+                  << "m, interferers: " << currentInterferers << std::endl;
+    }
+    else
+    {
+        std::cout << "[WARNING] SmartManager is NULL, using fallback distance: " << currentDistance
+                  << "m" << std::endl;
+    }
+
+    // Convert using ACTUAL current distance from manager
     double realisticSnr = ConvertNS3ToRealisticSnr(rawSnr, currentDistance, currentInterferers);
 
     // Collect SNR values
@@ -263,11 +282,15 @@ MonitorSniffRx(std::string context,
     minCollectedSnr = std::min(minCollectedSnr, realisticSnr);
     maxCollectedSnr = std::max(maxCollectedSnr, realisticSnr);
 
-    detailedLog << "[REALISTIC SNR MONITOR] context=" << context
+    std::cout << "[FIXED SNR MONITOR] RAW=" << rawSnr << "dB -> REALISTIC=" << realisticSnr
+              << "dB using CURRENT distance=" << currentDistance << "m, intf=" << currentInterferers
+              << std::endl;
+
+    detailedLog << "[FIXED SNR MONITOR] context=" << context
                 << " RAW NS-3 signal=" << signalNoise.signal << "dBm, noise=" << signalNoise.noise
                 << "dBm, rawSNR=" << rawSnr << "dB"
                 << " -> REALISTIC SNR=" << realisticSnr << "dB"
-                << " FIXED dist=" << currentDistance << "m, intf=" << currentInterferers
+                << " CURRENT dist=" << currentDistance << "m, intf=" << currentInterferers
                 << " freq=" << channelFreqMhz << "MHz"
                 << " strategy=" << currentStats.oracleStrategy << std::endl;
 }
@@ -362,6 +385,20 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     collectedSnrValues.clear();
     minCollectedSnr = 1e9;
     maxCollectedSnr = -1e9;
+
+    // CRITICAL: Update global variables for trace callbacks FIRST
+    // CRITICAL FIX: Set distance BEFORE creating devices
+    std::cout << "\n[CRITICAL FIX] Setting distance BEFORE device creation" << std::endl;
+    std::cout << "[CRITICAL FIX] Test case distance: " << tc.staDistance << "m" << std::endl;
+    std::cout << "[CRITICAL FIX] Test case interferers: " << tc.numInterferers << std::endl;
+
+    // Update globals FIRST
+    g_currentTestDistance = tc.staDistance;
+    g_currentTestInterferers = tc.numInterferers;
+
+    // Update stats FIRST
+    currentStats.distance = tc.staDistance;
+    currentStats.interferers = tc.numInterferers;
 
     // CRITICAL: Update global stats BEFORE any simulation setup
     currentStats.testCaseNumber = testCaseNumber;
@@ -487,44 +524,45 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
 
-    // CRITICAL: Configure SmartWifiManagerRf AFTER device installation
+    // CRITICAL: Configure SmartWifiManagerRf IMMEDIATELY after device installation
     Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
     Ptr<SmartWifiManagerRf> smartManager =
         DynamicCast<SmartWifiManagerRf>(staDevice->GetRemoteStationManager());
 
     if (smartManager)
     {
-        // CRITICAL: Set distance and interferers for THIS test case
+        // Set distance IMMEDIATELY
         smartManager->SetBenchmarkDistance(tc.staDistance);
         smartManager->SetCurrentInterferers(tc.numInterferers);
         smartManager->SetOracleStrategy(tc.oracleStrategy);
         smartManager->SetModelName(tc.oracleStrategy);
 
-        // Store global reference for trace callbacks
+        // VERIFICATION: Check it was set correctly
+        double verifyDistance = smartManager->GetCurrentBenchmarkDistance();
+        uint32_t verifyInterferers = smartManager->GetCurrentInterfererCount();
+
+        std::cout << "[VERIFICATION] Set distance: " << tc.staDistance
+                  << "m, Got: " << verifyDistance << "m" << std::endl;
+        std::cout << "[VERIFICATION] Set interferers: " << tc.numInterferers
+                  << ", Got: " << verifyInterferers << std::endl;
+
+        if (std::abs(verifyDistance - tc.staDistance) > 0.001)
+        {
+            std::cout << "[ERROR] DISTANCE NOT SET CORRECTLY!" << std::endl;
+            return; // Exit early if distance setting failed
+        }
+
+        // Store global reference AFTER successful configuration
         g_currentSmartManager = smartManager;
 
-        std::cout << "✅ SmartWifiManagerRf configured:" << std::endl;
-        std::cout << "   Distance: " << tc.staDistance << "m" << std::endl;
-        std::cout << "   Interferers: " << tc.numInterferers << std::endl;
-        std::cout << "   Strategy: " << tc.oracleStrategy << std::endl;
-
-        logFile << "[ENHANCED CONFIG - REALISTIC SNR] Distance: " << tc.staDistance
-                << "m (used for realistic SNR conversion)" << std::endl;
-        logFile << "[ENHANCED CONFIG - REALISTIC SNR] Interferers: " << tc.numInterferers
-                << std::endl;
-        logFile << "[ENHANCED CONFIG - REALISTIC SNR] Oracle Strategy: " << tc.oracleStrategy
-                << std::endl;
-        logFile << "[ENHANCED CONFIG - REALISTIC SNR] Using PHYSICS-BASED SNR conversion"
-                << std::endl;
-        logFile << "[ENHANCED CONFIG - REALISTIC SNR] Model Path: " << modelPath << std::endl;
+        std::cout << "✅ SmartWifiManagerRf configured with distance: " << verifyDistance << "m"
+                  << std::endl;
     }
     else
     {
-        std::cout << "❌ ERROR: Could not get SmartWifiManagerRf instance!" << std::endl;
-        logFile << "[ERROR] Could not configure SmartWifiManagerRf for test case " << testCaseNumber
-                << std::endl;
+        std::cout << "❌ FATAL ERROR: Could not get SmartWifiManagerRf instance!" << std::endl;
+        return;
     }
-
     // Enhanced mobility configuration
     MobilityHelper apMobility;
     Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
@@ -917,7 +955,7 @@ main(int argc, char* argv[])
     std::cout << "✅ SNR values: -30dB to +45dB (realistic WiFi range)" << std::endl;
 
     // Create enhanced CSV with comprehensive headers
-    std::string csvFilename = "enhanced-smartrf-benchmark-results-realistic-FIXED.csv";
+    std::string csvFilename = "enhanced-smartrf-benchmark-results.csv";
     std::ofstream csv(csvFilename);
     csv << "Scenario,OracleStrategy,Distance,Speed,Interferers,PacketSize,TrafficRate,"
         << "Throughput(Mbps),PacketLoss(%),AvgDelay(ms),Jitter(ms),RxPackets,TxPackets,"
@@ -971,8 +1009,8 @@ main(int argc, char* argv[])
     std::cout << "📊 Total test cases: " << totalTests << " (oracle_balanced only)" << std::endl;
     std::cout << "⏱️  Total execution time: " << totalDuration.count() << " minutes" << std::endl;
     std::cout << "📁 Results saved to: " << csvFilename << std::endl;
-    std::cout << "📋 Logs saved to: enhanced-smartrf-realistic-logs.txt" << std::endl;
-    std::cout << "🔍 Detailed logs: enhanced-smartrf-realistic-detailed.txt" << std::endl;
+    std::cout << "📋 Logs saved to: enhanced-smartrf-logs.txt" << std::endl;
+    std::cout << "🔍 Detailed logs: enhanced-smartrf-detailed.txt" << std::endl;
     std::cout << "\n✅ SNR VALUES ARE NOW REALISTIC (-30dB to +45dB)!" << std::endl;
     std::cout << "✅ DISTANCE AND INTERFERER COUNT PROPERLY UPDATED PER TEST CASE!" << std::endl;
     std::cout << "🎉 Ready for analysis and deployment!" << std::endl;
