@@ -1301,114 +1301,264 @@ class EnhancedProtocolComparisonAnalyzer:
         return results
     
     def generate_human_readable_summary(self) -> str:
-        """Generate human-readable comparison summary."""
-        if not self.comparison_results:
-            return "No comparison results available."
-        
+        """Generate comprehensive human-readable comparison summary with detailed scenario analysis."""
+
+        if self.combined_df is None or len(self.combined_df) == 0:
+            return "No comparison data available."
+
         summary = []
-        summary.append(f"\n{'='*80}")
-        summary.append(f"ENHANCED PROTOCOL COMPARISON SUMMARY")
-        summary.append(f"{self.protocol1_name} vs {self.protocol2_name}")
-        summary.append(f"{'='*80}")
-        summary.append(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        summary.append("")
-        
-        # Overall performance comparison
-        if 'overall' in self.comparison_results:
-            summary.append("OVERALL PERFORMANCE COMPARISON")
-            summary.append("-" * 50)
-            
-            overall = self.comparison_results['overall']
-            
-            # Throughput comparison
-            if 'throughput' in overall:
-                th_stats = overall['throughput']
-                p1_mean = th_stats.loc[self.protocol1_name, 'mean']
-                p2_mean = th_stats.loc[self.protocol2_name, 'mean']
-                
-                if p1_mean > p2_mean:
-                    winner = self.protocol1_name
-                    improvement = ((p1_mean - p2_mean) / p2_mean) * 100
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        p1, p2 = self.protocol1_name, self.protocol2_name
+
+        # Scenario count
+        scenario_col = 'scenario' if 'scenario' in self.combined_df.columns else None
+        unique_scenarios = self.combined_df[scenario_col].unique() if scenario_col else []
+        total_scenarios = len(unique_scenarios)
+        n1 = len(self.df1) if self.df1 is not None else 0
+        n2 = len(self.df2) if self.df2 is not None else 0
+
+        summary.append(f"\n{'='*99}")
+        summary.append(f"COMPREHENSIVE PROTOCOL COMPARISON ANALYSIS")
+        summary.append(f"{p1} vs {p2}")
+        summary.append(f"{'='*99}")
+        summary.append(f"Analysis Date: {now}")
+        summary.append(f"Total Scenarios Analyzed: {total_scenarios}")
+        summary.append(f"Total Data Points: {len(self.combined_df)} ({n1} vs {n2})\n")
+
+        # --- Executive Summary ---
+        summary.append("EXECUTIVE SUMMARY")
+        summary.append("-" * 60)
+        # Safe stat helpers
+        def safe_mean(arr): return float(np.nan_to_num(np.mean(arr), nan=0.0))
+        def safe_min(arr): return float(np.nan_to_num(np.min(arr), nan=0.0))
+        def safe_max(arr): return float(np.nan_to_num(np.max(arr), nan=0.0))
+        def safe_std(arr): return float(np.nan_to_num(np.std(arr), nan=0.0))
+
+        p1_data = self.combined_df[self.combined_df['Protocol'] == p1]
+        p2_data = self.combined_df[self.combined_df['Protocol'] == p2]
+
+        # Metrics
+        p1_th = safe_mean(p1_data['throughput']) if 'throughput' in p1_data else 0
+        p2_th = safe_mean(p2_data['throughput']) if 'throughput' in p2_data else 0
+        p1_loss = safe_mean(p1_data['packet_loss']) if 'packet_loss' in p1_data else 0
+        p2_loss = safe_mean(p2_data['packet_loss']) if 'packet_loss' in p2_data else 0
+        p1_delay = safe_mean(p1_data['avg_delay']) if 'avg_delay' in p1_data else 0
+        p2_delay = safe_mean(p2_data['avg_delay']) if 'avg_delay' in p2_data else 0
+
+        # Category winners
+        throughput_winner = p1 if p1_th > p2_th else p2
+        reliability_winner = p1 if p1_loss < p2_loss else p2
+        responsiveness_winner = p1 if p1_delay < p2_delay else p2
+        category_wins_p1 = sum([throughput_winner == p1, reliability_winner == p1, responsiveness_winner == p1])
+        category_wins_p2 = 3 - category_wins_p1
+
+        # Improvements
+        min_th = min(p1_th, p2_th)
+        throughput_improvement = abs((p1_th - p2_th) / max(min_th, 0.001)) * 100
+        max_loss = max(p1_loss, p2_loss)
+        reliability_improvement = abs((p1_loss - p2_loss) / max(max_loss, 0.001)) * 100 if max_loss > 0 else 0
+        max_delay = max(p1_delay, p2_delay)
+        responsiveness_improvement = abs((p1_delay - p2_delay) / max(max_delay, 0.001)) * 100 if max_delay > 0 else 0
+
+        # Composite scores
+        p1_score = (p1_th * 0.5) + ((100 - p1_loss) * 0.3) + ((1000 - min(p1_delay, 1000)) * 0.2)
+        p2_score = (p2_th * 0.5) + ((100 - p2_loss) * 0.3) + ((1000 - min(p2_delay, 1000)) * 0.2)
+        overall_winner = p1 if p1_score > p2_score else p2
+
+        summary.append(f"OVERALL WINNER: {overall_winner}")
+        summary.append(f"Category Wins: {p1} ({category_wins_p1}) vs {p2} ({category_wins_p2})")
+        summary.append(f"Composite Score: {p1} ({p1_score:.2f}) vs {p2} ({p2_score:.2f})\n")
+
+        # --- Detailed Performance Analysis ---
+        summary.append("DETAILED PERFORMANCE ANALYSIS")
+        summary.append("-" * 60)
+        # Throughput
+        summary.append("THROUGHPUT PERFORMANCE:")
+        summary.append(f"  {p1}:")
+        summary.append(f"    - Average: {p1_th:.3f} Mbps")
+        summary.append(f"    - Range: {safe_min(p1_data['throughput']):.3f} - {safe_max(p1_data['throughput']):.3f} Mbps")
+        summary.append(f"    - Std Dev: {safe_std(p1_data['throughput']):.3f} Mbps")
+        summary.append(f"  {p2}:")
+        summary.append(f"    - Average: {p2_th:.3f} Mbps")
+        summary.append(f"    - Range: {safe_min(p2_data['throughput']):.3f} - {safe_max(p2_data['throughput']):.3f} Mbps")
+        summary.append(f"    - Std Dev: {safe_std(p2_data['throughput']):.3f} Mbps")
+        summary.append(f"  Winner: {throughput_winner} by {throughput_improvement:.1f}%\n")
+
+        # Reliability
+        summary.append("RELIABILITY PERFORMANCE (Packet Loss):")
+        summary.append(f"  {p1}:")
+        summary.append(f"    - Average Loss: {p1_loss:.3f}%")
+        summary.append(f"    - Loss Range: {safe_min(p1_data['packet_loss']):.3f}% - {safe_max(p1_data['packet_loss']):.3f}%")
+        summary.append(f"    - Success Rate: {100-p1_loss:.1f}%")
+        summary.append(f"  {p2}:")
+        summary.append(f"    - Average Loss: {p2_loss:.3f}%")
+        summary.append(f"    - Loss Range: {safe_min(p2_data['packet_loss']):.3f}% - {safe_max(p2_data['packet_loss']):.3f}%")
+        summary.append(f"    - Success Rate: {100-p2_loss:.1f}%")
+        summary.append(f"  Winner: {reliability_winner} by {reliability_improvement:.1f}%\n")
+
+        # Responsiveness
+        summary.append("RESPONSIVENESS PERFORMANCE (Delay):")
+        summary.append(f"  {p1}:")
+        summary.append(f"    - Average Delay: {p1_delay:.3f}ms")
+        summary.append(f"    - Delay Range: {safe_min(p1_data['avg_delay']):.3f} - {safe_max(p1_data['avg_delay']):.3f}ms")
+        summary.append(f"  {p2}:")
+        summary.append(f"    - Average Delay: {p2_delay:.3f}ms")
+        summary.append(f"    - Delay Range: {safe_min(p2_data['avg_delay']):.3f} - {safe_max(p2_data['avg_delay']):.3f}ms")
+        summary.append(f"  Winner: {responsiveness_winner} by {responsiveness_improvement:.1f}%\n")
+
+        # --- Scenario-by-Scenario Analysis ---
+        summary.append("COMPREHENSIVE SCENARIO-BY-SCENARIO ANALYSIS")
+        summary.append("-" * 80)
+        # Helper for per-parameter breakdown
+        def param_breakdown(param, label, unit, eff=False):
+            if param not in self.combined_df.columns:
+                return []
+            out = []
+            levels = sorted(self.combined_df[param].dropna().unique())
+            wins = {p1: 0, p2: 0}
+            for lvl in levels:
+                lvl_data = self.combined_df[self.combined_df[param] == lvl]
+                d1 = lvl_data[lvl_data['Protocol'] == p1]
+                d2 = lvl_data[lvl_data['Protocol'] == p2]
+                if len(d1) == 0 or len(d2) == 0:
+                    continue
+                # Compute metrics
+                mean1, mean2 = safe_mean(d1['throughput']), safe_mean(d2['throughput'])
+                loss1, loss2 = safe_mean(d1['packet_loss']), safe_mean(d2['packet_loss'])
+                delay1, delay2 = safe_mean(d1['avg_delay']), safe_mean(d2['avg_delay'])
+                # Effective throughput for winner
+                eff1 = mean1 * (100 - loss1) / 100
+                eff2 = mean2 * (100 - loss2) / 100
+                if eff:
+                    try:
+                        effrate1 = (mean1 / max(float(lvl), 0.001)) * 100 if mean1 > 0 else 0
+                        effrate2 = (mean2 / max(float(lvl), 0.001)) * 100 if mean2 > 0 else 0
+                    except Exception:
+                        effrate1 = effrate2 = 0
+                winner = p1 if eff1 > eff2 else p2
+                wins[winner] += 1
+                out.append(f"\nAt {label} {lvl}{unit}:")
+                out.append(f"  {p1}: {mean1:.2f} Mbps, {loss1:.2f}% loss, {delay1:.2f}ms delay")
+                out.append(f"  {p2}: {mean2:.2f} Mbps, {loss2:.2f}% loss, {delay2:.2f}ms delay")
+                if eff:
+                    out.append(f"  Efficiency Winner: {p1 if effrate1 > effrate2 else p2}")
                 else:
-                    winner = self.protocol2_name
-                    improvement = ((p2_mean - p1_mean) / p1_mean) * 100
-                
-                summary.append(f"🏆 THROUGHPUT WINNER: {winner}")
-                summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f} Mbps (avg)")
-                summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f} Mbps (avg)")
-                summary.append(f"   • Improvement: {improvement:.1f}% better")
-                summary.append("")
-            
-            # Packet Loss comparison
-           # Packet Loss comparison (continued from where it was cut off)
-            if 'packet_loss' in overall:
-                pl_stats = overall['packet_loss']
-                p1_mean = pl_stats.loc[self.protocol1_name, 'mean']
-                p2_mean = pl_stats.loc[self.protocol2_name, 'mean']
-                
-                if p1_mean < p2_mean:
-                    winner = self.protocol1_name
-                    improvement = ((p2_mean - p1_mean) / p2_mean) * 100 if p2_mean > 0 else 0
+                    out.append(f"  Winner: {winner} (effective throughput: {max(eff1, eff2):.2f} Mbps)")
+                # Degradation and impact (if possible)
+                if param == 'distance' and lvl != min(levels):
+                    min_lvl = min(levels)
+                    base1 = safe_mean(self.combined_df[(self.combined_df[param]==min_lvl) & (self.combined_df['Protocol']==p1)]['throughput'])
+                    base2 = safe_mean(self.combined_df[(self.combined_df[param]==min_lvl) & (self.combined_df['Protocol']==p2)]['throughput'])
+                    if base1 > 0:
+                        deg1 = ((base1 - mean1) / max(base1, 0.001)) * 100
+                    else:
+                        deg1 = 0
+                    if base2 > 0:
+                        deg2 = ((base2 - mean2) / max(base2, 0.001)) * 100
+                    else:
+                        deg2 = 0
+                    out.append(f"  Performance Degradation: {p1} ({deg1:-.1f}%), {p2} ({deg2:-.1f}%)")
+                if param == 'speed' and lvl > 0:
+                    stationary1 = safe_mean(self.combined_df[(self.combined_df[param]==0) & (self.combined_df['Protocol']==p1)]['throughput'])
+                    stationary2 = safe_mean(self.combined_df[(self.combined_df[param]==0) & (self.combined_df['Protocol']==p2)]['throughput'])
+                    mob_impact1 = ((stationary1 - mean1) / max(stationary1, 0.001)) * 100 if stationary1 > 0 else 0
+                    mob_impact2 = ((stationary2 - mean2) / max(stationary2, 0.001)) * 100 if stationary2 > 0 else 0
+                    out.append(f"  Mobility Impact: {p1} ({mob_impact1:-.1f}%), {p2} ({mob_impact2:-.1f}%)")
+                if param == 'interferers' and lvl > 0:
+                    no_intf1 = safe_mean(self.combined_df[(self.combined_df[param]==0) & (self.combined_df['Protocol']==p1)]['throughput'])
+                    no_intf2 = safe_mean(self.combined_df[(self.combined_df[param]==0) & (self.combined_df['Protocol']==p2)]['throughput'])
+                    intf_impact1 = ((no_intf1 - mean1) / max(no_intf1, 0.001)) * 100 if no_intf1 > 0 else 0
+                    intf_impact2 = ((no_intf2 - mean2) / max(no_intf2, 0.001)) * 100 if no_intf2 > 0 else 0
+                    out.append(f"  Interference Impact: {p1} ({intf_impact1:-.1f}%), {p2} ({intf_impact2:-.1f}%)")
+            out.append(f"\n{label} Performance Summary:")
+            out.append(f"  {p1} wins at {wins[p1]} {label.lower()}s")
+            out.append(f"  {p2} wins at {wins[p2]} {label.lower()}s")
+            return out
+
+        # Distance
+        summary.extend(param_breakdown('distance', 'Distance', 'm'))
+        # Traffic Rate
+        summary.extend(param_breakdown('traffic_rate', 'Traffic Rate', 'Mbps', eff=True))
+        # Speed
+        summary.extend(param_breakdown('speed', 'Speed', ' m/s'))
+        # Interferers
+        summary.extend(param_breakdown('interferers', 'Interference Resilience', ''))
+        # Packet Size
+        if 'packet_size' in self.combined_df.columns:
+            pkt_out = []
+            pkt_sizes = sorted(self.combined_df['packet_size'].dropna().unique())
+            for ps in pkt_sizes:
+                d1 = self.combined_df[(self.combined_df['packet_size']==ps)&(self.combined_df['Protocol']==p1)]
+                d2 = self.combined_df[(self.combined_df['packet_size']==ps)&(self.combined_df['Protocol']==p2)]
+                if len(d1)==0 or len(d2)==0: continue
+                th1, th2 = safe_mean(d1['throughput']), safe_mean(d2['throughput'])
+                l1, l2 = safe_mean(d1['packet_loss']), safe_mean(d2['packet_loss'])
+                winner = p1 if th1 > th2 else p2
+                pkt_out.append(f"\nWith Packet Size {ps} bytes:")
+                pkt_out.append(f"  {p1}: {th1:.2f} Mbps, {l1:.2f}% loss")
+                pkt_out.append(f"  {p2}: {th2:.2f} Mbps, {l2:.2f}% loss")
+                pkt_out.append(f"  Winner: {winner}")
+            if pkt_out:
+                summary.append("\nPACKET SIZE PERFORMANCE BREAKDOWN:")
+                summary.extend(pkt_out)
+
+        # --- Recommendations ---
+        summary.append("\nPERFORMANCE RECOMMENDATIONS")
+        summary.append("-" * 60)
+        # Optimal use cases
+        summary.append("OPTIMAL USE CASES:\n")
+        p1_best, p2_best = [], []
+        if scenario_col:
+            for scenario in unique_scenarios:
+                sdata = self.combined_df[self.combined_df[scenario_col] == scenario]
+                d1 = sdata[sdata['Protocol'] == p1]
+                d2 = sdata[sdata['Protocol'] == p2]
+                if len(d1)==0 or len(d2)==0: continue
+                perf1 = safe_mean(d1['throughput']) * (100 - safe_mean(d1['packet_loss'])) / 100
+                perf2 = safe_mean(d2['throughput']) * (100 - safe_mean(d2['packet_loss'])) / 100
+                if perf1 > perf2:
+                    p1_best.append(scenario)
                 else:
-                    winner = self.protocol2_name
-                    improvement = ((p1_mean - p2_mean) / p1_mean) * 100 if p1_mean > 0 else 0
-                
-                summary.append(f"📡 RELIABILITY WINNER: {winner} (Lower packet loss)")
-                summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f}% loss (avg)")
-                summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f}% loss (avg)")
-                summary.append(f"   • Improvement: {improvement:.1f}% better")
-                summary.append("")
-            
-            # Delay comparison
-            if 'avg_delay' in overall:
-                dl_stats = overall['avg_delay']
-                p1_mean = dl_stats.loc[self.protocol1_name, 'mean']
-                p2_mean = dl_stats.loc[self.protocol2_name, 'mean']
-                
-                if p1_mean < p2_mean:
-                    winner = self.protocol1_name
-                    improvement = ((p2_mean - p1_mean) / p2_mean) * 100 if p2_mean > 0 else 0
-                else:
-                    winner = self.protocol2_name
-                    improvement = ((p1_mean - p2_mean) / p1_mean) * 100 if p1_mean > 0 else 0
-                
-                summary.append(f"⚡ RESPONSIVENESS WINNER: {winner} (Lower delay)")
-                summary.append(f"   • {self.protocol1_name}: {p1_mean:.3f}ms delay (avg)")
-                summary.append(f"   • {self.protocol2_name}: {p2_mean:.3f}ms delay (avg)")
-                summary.append(f"   • Improvement: {improvement:.1f}% better")
-                summary.append("")
-        
-        # Performance insights by conditions
-        summary.append("PERFORMANCE INSIGHTS BY CONDITIONS")
-        summary.append("-" * 50)
-        
-        # Traffic rate insights
-        if 'by_traffic_rate' in self.comparison_results:
-            summary.append("Traffic Rate Analysis:")
-            # Add specific insights about how protocols perform under different loads
-            summary.append(f"   • High load scenarios favor different protocols")
-            summary.append(f"   • Check throughput_vs_traffic_rate_lines.png for detailed analysis")
-            summary.append("")
-        
-        # Distance insights
-        if 'by_distance' in self.comparison_results:
-            summary.append("Distance Analysis:")
-            summary.append(f"   • Performance degradation patterns differ between protocols")
-            summary.append(f"   • See distance_performance_comparison.png for trends")
-            summary.append("")
-        
-        # Generated plots summary
-        summary.append("GENERATED ANALYSIS PLOTS")
-        summary.append("-" * 50)
+                    p2_best.append(scenario)
+        summary.append(f"{p1} excels in:")
+        p1_pct = (len(p1_best)/max(total_scenarios,1)*100) if total_scenarios > 0 else 0
+        summary.append(f"  - {len(p1_best)} out of {total_scenarios} scenarios ({p1_pct:.1f}%)")
+        if len(p1_best)>0:
+            for s in p1_best[:5]:
+                summary.append(f"    * {s}")
+            if len(p1_best)>5:
+                summary.append(f"    * ... and {len(p1_best)-5} more scenarios")
+        summary.append(f"\n{p2} excels in:")
+        p2_pct = (len(p2_best)/max(total_scenarios,1)*100) if total_scenarios > 0 else 0
+        summary.append(f"  - {len(p2_best)} out of {total_scenarios} scenarios ({p2_pct:.1f}%)")
+        if len(p2_best)>0:
+            for s in p2_best[:5]:
+                summary.append(f"    * {s}")
+            if len(p2_best)>5:
+                summary.append(f"    * ... and {len(p2_best)-5} more scenarios")
+
+        summary.append(f"\nFINAL RECOMMENDATIONS:")
+        if overall_winner == p1:
+            summary.append(f"  - {p1} is the overall better choice for general use")
+            summary.append(f"  - Consider {p2} for specific scenarios where it excels")
+        else:
+            summary.append(f"  - {p2} is the overall better choice for general use")
+            summary.append(f"  - Consider {p1} for specific scenarios where it excels")
+
+        # --- Generated files ---
+        summary.append(f"\nGENERATED ANALYSIS FILES")
+        summary.append("-" * 40)
+        summary.append("Visual Analysis Plots:")
         for plot in self.plots_generated:
-            summary.append(f"   • {plot}")
-        summary.append("")
-        
-        summary.append(f"All plots saved to: {self.results_dir}")
-        summary.append(f"Log file: {self.results_dir / 'enhanced_comparison_analysis.log'}")
-        
+            summary.append(f"  • {plot}")
+        summary.append(f"\nDetailed Reports:")
+        summary.append(f"  • Excel Report: {p1}_vs_{p2}_detailed_report.xlsx")
+        summary.append(f"  • This Summary: comparison_summary.txt")
+        summary.append(f"  • Analysis Log: enhanced_comparison_analysis.log")
+        summary.append(f"\nAll files saved to: {self.results_dir}")
+        summary.append("="*99)
         return "\n".join(summary)
-    
+
     def create_excel_report(self) -> None:
         """Create comprehensive Excel report with multiple sheets."""
         try:
@@ -1577,7 +1727,7 @@ Examples:
         'smartv1': 'smartv1-benchmark.csv',
         'smartv2': 'smartv2-benchmark.csv', 
         'smartv3': 'smartv3-benchmark.csv',
-        'smartrf': 'smartrf-benchmark-oracle.csv',
+        'smartrf': 'enhanced-smartrf-benchmark-results.csv',
         'smartrfv3': 'smartrf-benchmark-v3.csv'
     }
     

@@ -1,0 +1,154 @@
+
+===================================================================================================
+COMPREHENSIVE PROTOCOL COMPARISON ANALYSIS
+AARF vs SMARTRF
+===================================================================================================
+Analysis Date: 2025-09-23 18:12:43
+Total Scenarios Analyzed: 0
+Total Data Points: 297 (72 vs 225)
+
+EXECUTIVE SUMMARY
+------------------------------------------------------------
+OVERALL WINNER: AARF
+Category Wins: AARF (1) vs SMARTRF (2)
+Composite Score: AARF (209.72) vs SMARTRF (64.28)
+
+DETAILED PERFORMANCE ANALYSIS
+------------------------------------------------------------
+THROUGHPUT PERFORMANCE:
+  AARF:
+    - Average: 2.481 Mbps
+    - Range: 0.000 - 26.413 Mbps
+    - Std Dev: 5.652 Mbps
+  SMARTRF:
+    - Average: 3.710 Mbps
+    - Range: 0.000 - 14.772 Mbps
+    - Std Dev: 4.403 Mbps
+  Winner: SMARTRF by 49.6%
+
+RELIABILITY PERFORMANCE (Packet Loss):
+  AARF:
+    - Average Loss: 71.575%
+    - Loss Range: 0.000% - 100.000%
+    - Success Rate: 28.4%
+  SMARTRF:
+    - Average Loss: 60.492%
+    - Loss Range: 0.000% - 100.000%
+    - Success Rate: 39.5%
+  Winner: SMARTRF by 15.5%
+
+RESPONSIVENESS PERFORMANCE (Delay):
+  AARF:
+    - Average Delay: 0.215ms
+    - Delay Range: 0.000 - 3.638ms
+  SMARTRF:
+    - Average Delay: 747.133ms
+    - Delay Range: 0.000 - 4916.000ms
+  Winner: AARF by 100.0%
+
+COMPREHENSIVE SCENARIO-BY-SCENARIO ANALYSIS
+--------------------------------------------------------------------------------
+
+At Distance 20m:
+  AARF: 4.13 Mbps, 55.65% loss, 0.22ms delay
+  SMARTRF: 4.15 Mbps, 56.77% loss, 816.48ms delay
+  Winner: AARF (effective throughput: 1.83 Mbps)
+
+At Distance 40m:
+  AARF: 3.31 Mbps, 59.07% loss, 0.42ms delay
+  SMARTRF: 3.14 Mbps, 67.06% loss, 589.54ms delay
+  Winner: AARF (effective throughput: 1.36 Mbps)
+  Performance Degradation: AARF (19.9%), SMARTRF (24.4%)
+
+At Distance 60m:
+  AARF: 0.00 Mbps, 100.00% loss, 0.00ms delay
+  SMARTRF: 5.29 Mbps, 26.32% loss, 1806.11ms delay
+  Winner: SMARTRF (effective throughput: 3.90 Mbps)
+  Performance Degradation: AARF (100.0%), SMARTRF (-27.5%)
+
+Distance Performance Summary:
+  AARF wins at 2 distances
+  SMARTRF wins at 1 distances
+
+At Traffic Rate 11MbpsMbps:
+  AARF: 1.92 Mbps, 67.15% loss, 0.05ms delay
+  SMARTRF: 2.81 Mbps, 50.60% loss, 32.20ms delay
+  Efficiency Winner: SMARTRF
+
+At Traffic Rate 54MbpsMbps:
+  AARF: 5.34 Mbps, 81.05% loss, 0.60ms delay
+  SMARTRF: 5.87 Mbps, 78.94% loss, 1998.61ms delay
+  Efficiency Winner: SMARTRF
+
+Traffic Rate Performance Summary:
+  AARF wins at 0 traffic rates
+  SMARTRF wins at 2 traffic rates
+
+At Speed 0 m/s:
+  AARF: 4.96 Mbps, 43.28% loss, 0.42ms delay
+  SMARTRF: 7.67 Mbps, 19.47% loss, 1321.49ms delay
+  Winner: SMARTRF (effective throughput: 6.17 Mbps)
+
+At Speed 10 m/s:
+  AARF: 0.00 Mbps, 99.87% loss, 0.01ms delay
+  SMARTRF: 0.48 Mbps, 95.00% loss, 176.83ms delay
+  Winner: SMARTRF (effective throughput: 0.02 Mbps)
+  Mobility Impact: AARF (99.9%), SMARTRF (93.7%)
+
+Speed Performance Summary:
+  AARF wins at 0 speeds
+  SMARTRF wins at 2 speeds
+
+At Interference Resilience 0:
+  AARF: 2.65 Mbps, 70.81% loss, 0.16ms delay
+  SMARTRF: 3.83 Mbps, 57.96% loss, 825.27ms delay
+  Winner: SMARTRF (effective throughput: 1.61 Mbps)
+
+Interference Resilience Performance Summary:
+  AARF wins at 0 interference resiliences
+  SMARTRF wins at 1 interference resiliences
+
+PACKET SIZE PERFORMANCE BREAKDOWN:
+
+With Packet Size 1500 bytes:
+  AARF: 3.17 Mbps, 68.80% loss
+  SMARTRF: 3.98 Mbps, 58.96% loss
+  Winner: SMARTRF
+
+PERFORMANCE RECOMMENDATIONS
+------------------------------------------------------------
+OPTIMAL USE CASES:
+
+AARF excels in:
+  - 0 out of 0 scenarios (0.0%)
+
+SMARTRF excels in:
+  - 0 out of 0 scenarios (0.0%)
+
+FINAL RECOMMENDATIONS:
+  - AARF is the overall better choice for general use
+  - Consider SMARTRF for specific scenarios where it excels
+
+GENERATED ANALYSIS FILES
+----------------------------------------
+Visual Analysis Plots:
+  • throughput_vs_traffic_rate_lines.png
+  • throughput_vs_distance_lines.png
+  • performance_vs_speed_lines.png
+  • performance_vs_interferers_lines.png
+  • multi_metric_scenario_comparison.png
+  • traffic_rate_impact_analysis.png
+  • distance_performance_comparison.png
+  • packet_loss_vs_load.png
+  • delay_vs_load.png
+  • performance_radar_chart.png
+  • scenario_bar_comparison.png
+  • efficiency_analysis.png
+
+Detailed Reports:
+  • Excel Report: AARF_vs_SMARTRF_detailed_report.xlsx
+  • This Summary: comparison_summary.txt
+  • Analysis Log: enhanced_comparison_analysis.log
+
+All files saved to: /home/ahmedjk34/Dev/smart-wifi-manager/python_files/enhanced_comparison/AARF_vs_SMARTRF
+===================================================================================================
