@@ -467,7 +467,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         DynamicCast<SmartWifiManagerRf>(staDevice->GetRemoteStationManager());
     if (smartManager)
     {
-        smartManager->SetBenchmarkDistance(tc.staDistance); // Critical for conversion
+        smartManager->SetBenchmarkDistance(tc.staDistance);     // Critical for conversion
+        smartManager->SetCurrentInterferers(tc.numInterferers); // Set interferer count
         smartManager->SetOracleStrategy(tc.oracleStrategy);
         smartManager->SetModelName(tc.oracleStrategy);
 
