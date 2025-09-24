@@ -529,34 +529,36 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     Ptr<SmartWifiManagerRf> smartManager =
         DynamicCast<SmartWifiManagerRf>(staDevice->GetRemoteStationManager());
 
+    // REPLACE this section in RunEnhancedTestCase after manager configuration:
     if (smartManager)
     {
-        // Set distance IMMEDIATELY
+        // FIXED: Set distance and interferers IMMEDIATELY
         smartManager->SetBenchmarkDistance(tc.staDistance);
         smartManager->SetCurrentInterferers(tc.numInterferers);
         smartManager->SetOracleStrategy(tc.oracleStrategy);
         smartManager->SetModelName(tc.oracleStrategy);
 
+        // FIXED: Explicit synchronization call
+        smartManager->UpdateFromBenchmarkGlobals(tc.staDistance, tc.numInterferers);
+
         // VERIFICATION: Check it was set correctly
         double verifyDistance = smartManager->GetCurrentBenchmarkDistance();
         uint32_t verifyInterferers = smartManager->GetCurrentInterfererCount();
 
-        std::cout << "[VERIFICATION] Set distance: " << tc.staDistance
-                  << "m, Got: " << verifyDistance << "m" << std::endl;
-        std::cout << "[VERIFICATION] Set interferers: " << tc.numInterferers
-                  << ", Got: " << verifyInterferers << std::endl;
+        std::cout << "[FIXED VERIFICATION] Distance: " << tc.staDistance << "m -> "
+                  << verifyDistance << "m" << std::endl;
+        std::cout << "[FIXED VERIFICATION] Interferers: " << tc.numInterferers << " -> "
+                  << verifyInterferers << std::endl;
 
-        if (std::abs(verifyDistance - tc.staDistance) > 0.001)
+        if (std::abs(verifyDistance - tc.staDistance) > 0.001 ||
+            verifyInterferers != tc.numInterferers)
         {
-            std::cout << "[ERROR] DISTANCE NOT SET CORRECTLY!" << std::endl;
-            return; // Exit early if distance setting failed
+            std::cout << "[FATAL ERROR] Configuration sync failed!" << std::endl;
+            return;
         }
 
-        // Store global reference AFTER successful configuration
         g_currentSmartManager = smartManager;
-
-        std::cout << "✅ SmartWifiManagerRf configured with distance: " << verifyDistance << "m"
-                  << std::endl;
+        std::cout << "✅ SmartWifiManagerRf FULLY SYNCHRONIZED" << std::endl;
     }
     else
     {
