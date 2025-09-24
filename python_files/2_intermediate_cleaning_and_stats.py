@@ -78,6 +78,9 @@ VALIDATION_RANGES = {
     'packetSuccess': (0, 1),  # Binary
 }
 
+ENABLE_CLASS_BALANCING = False  # Set to True to enable class balancing
+
+
 # ================== SETUP ==================
 def setup_logging():
     """Setup comprehensive logging"""
@@ -575,9 +578,15 @@ def balance_classes(
     logger, 
     major_classes: List[int] = [0, 7],
     major_min: int = 200_000,
-    minor_min: int = 100_000
+    minor_min: int = 100_000,
+    enable_balancing: bool = False  # NEW FLAG
 ) -> pd.DataFrame:
     """Balance classes with realistic ratios for major/minor classes."""
+    
+    if not enable_balancing:
+        logger.info(f"⚖️ Class balancing for {target_col} is DISABLED - skipping")
+        return df
+    
     logger.info(f"⚖️ Advanced class balancing for {target_col} ...")
 
     if target_col not in df.columns:
@@ -609,6 +618,7 @@ def balance_classes(
     logger.info(f"✅ Balancing complete. Final dataset: {len(balanced_df)} rows")
     logger.info(f"New class distribution:\n{balanced_df[target_col].value_counts().sort_index()}")
     return balanced_df
+
 # ================== MAIN PIPELINE ==================
 def main():
     """Main pipeline execution"""
@@ -646,8 +656,8 @@ def main():
         
         # Step 6: Optional class balancing (for rateIdx)
         if 'rateIdx' in df_clean.columns:
-            df_clean = balance_classes(df_clean, 'rateIdx', logger)
-        
+            df_clean = balance_classes(df_clean, 'rateIdx', logger, enable_balancing=ENABLE_CLASS_BALANCING)
+                
         # Generate final statistics
         final_stats = generate_comprehensive_statistics(df_clean, "final", logger)
         save_statistics(final_stats, "final", stats_dir, logger)
