@@ -56,19 +56,19 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
     // Distance-based realistic SNR calculation
     if (distance <= 10.0)
     {
-        realisticSnr = 35.0 - (distance * 1.5); // Close: 35dB to 20dB
+        realisticSnr = 45.0 - (distance * 1.0); // Close: 45dB to 35dB
     }
     else if (distance <= 30.0)
     {
-        realisticSnr = 20.0 - ((distance - 10.0) * 1.0); // Medium: 20dB to 0dB
+        realisticSnr = 35.0 - ((distance - 10.0) * 0.75); // Medium: 35dB to 20dB
     }
-    else if (distance <= 50.0)
+    else if (distance <= 60.0)
     {
-        realisticSnr = 0.0 - ((distance - 30.0) * 0.75); // Far: 0dB to -15dB
+        realisticSnr = 20.0 - ((distance - 30.0) * 0.5); // Far: 20dB to 5dB
     }
     else
     {
-        realisticSnr = -15.0 - ((distance - 50.0) * 0.5); // Very far: -15dB to -25dB
+        realisticSnr = 5.0 - ((distance - 60.0) * 0.25); // Very far: 5dB to -5dB
     }
 
     // Add interference degradation
@@ -187,7 +187,7 @@ SmartWifiManagerRf::GetTypeId()
                           MakeBooleanChecker())
             .AddAttribute("ConfidenceThreshold",
                           "Minimum ML confidence required to trust prediction",
-                          DoubleValue(0.4),
+                          DoubleValue(0.25),
                           MakeDoubleAccessor(&SmartWifiManagerRf::m_confidenceThreshold),
                           MakeDoubleChecker<double>())
             .AddAttribute("RiskThreshold",
