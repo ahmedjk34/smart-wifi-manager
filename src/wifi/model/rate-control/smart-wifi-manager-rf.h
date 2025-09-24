@@ -1,5 +1,5 @@
 /*
- * Enhanced Smart WiFi Manager with 28 Safe Features
+ * Enhanced Smart WiFi Manager with 28 Safe Features - FIXED SNR ENGINE
  * Compatible with ahmedjk34's Enhanced ML Pipeline (98.1% CV accuracy)
  *
  * Features:
@@ -9,9 +9,10 @@
  * - Production-ready inference server integration
  * - Enhanced context classification and safety assessment
  * - Real-time rate adaptation with ML guidance
+ * - FIXED: Consistent realistic SNR calculation engine
  *
  * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-09-22
+ * Date: 2025-09-24
  * License: Copyright (c) 2005,2006 INRIA
  */
 #ifndef SMART_WIFI_MANAGER_RF_H
@@ -35,7 +36,7 @@ namespace ns3
 
 /**
  * Enhanced WiFi context classification for intelligent rate adaptation
- * Based on SNR, success rate, and network conditions
+ * Based on REALISTIC SNR, success rate, and network conditions
  */
 enum class WifiContextType
 {
@@ -49,7 +50,7 @@ enum class WifiContextType
 };
 
 /**
- * \brief Enhanced Smart Rate control algorithm using Random Forest ML models
+ * \brief Enhanced Smart Rate control algorithm using Random Forest ML models - FIXED SNR ENGINE
  * \ingroup wifi
  *
  * This class implements an intelligent WiFi rate adaptation algorithm that combines:
@@ -57,12 +58,14 @@ enum class WifiContextType
  * - Rule-based safety mechanisms for reliability
  * - Context-aware risk assessment
  * - 28 safe features with no data leakage
+ * - FIXED: Consistent realistic SNR calculation (-30dB to +45dB)
  *
  * Key innovations:
  * - Supports multiple oracle strategies (balanced, conservative, aggressive)
  * - Real-time inference server integration with caching
  * - Enhanced SNR modeling for realistic simulation
  * - Production-grade error handling and fallback mechanisms
+ * - FIXED: Unified SNR processing pipeline
  */
 class SmartWifiManagerRf : public WifiRemoteStationManager
 {
@@ -104,7 +107,10 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     void SetOracleStrategy(const std::string& strategy);
     void SetCurrentInterferers(uint32_t interferers);
 
-    // config to help debug issue with distance
+    // FIXED: Synchronization method for benchmark coordination
+    void UpdateFromBenchmarkGlobals(double distance, uint32_t interferers);
+
+    // Config debugging
     void DebugPrintCurrentConfig() const;
 
     double GetCurrentBenchmarkDistance() const
@@ -156,9 +162,10 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     double GetSnrStabilityIndex(WifiRemoteStation* station) const;
     double GetSnrPredictionConfidence(WifiRemoteStation* station) const;
 
-    // Enhanced SNR modeling
+    // FIXED: Enhanced SNR modeling with consistent pipeline
     double CalculateDistanceBasedSnr(WifiRemoteStation* st) const;
     double ApplyRealisticSnrBounds(double snr) const;
+    double ConvertToRealisticSnr(double ns3Snr) const;
 
     // Enhanced context and safety assessment
     SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
@@ -201,7 +208,7 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     bool m_enableFallback;          // Enable fallback mechanism
     uint16_t m_inferenceServerPort; // ML inference server port
 
-    // Enhanced SNR modeling parameters
+    // FIXED: Enhanced SNR modeling parameters
     bool m_useRealisticSnr; // Use realistic SNR calculation
     double m_maxSnrDb;      // Maximum realistic SNR (dB)
     double m_minSnrDb;      // Minimum realistic SNR (dB)
@@ -216,14 +223,14 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     bool m_enableAdaptiveWeighting; // Enable adaptive ML weighting
     double m_conservativeBoost;     // Conservative rate boost factor
 
-    // CRITICAL: Distance for realistic SNR conversion
+    // FIXED: Distance for realistic SNR conversion - CRITICAL
     double m_benchmarkDistance;
     uint32_t m_currentInterferers;
 
     // Available data rates for 802.11g
     std::vector<WifiMode> m_supportedRates;
 
-    // Add these to private section in .h file:
+    // Enhanced logging
     bool m_enableDetailedLogging; // For enhanced logging
 
     // Enhanced traced values for monitoring
@@ -241,18 +248,19 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
 };
 
 /**
- * \brief Enhanced SmartWifiManagerRf station state with 28 features support
+ * \brief FIXED SmartWifiManagerRf station state with consistent SNR handling
  *
  * This structure maintains all necessary state for intelligent rate adaptation
  * including the 28 safe features required by the enhanced ML pipeline.
+ * FIXED: Consistent SNR storage and processing.
  */
 struct SmartWifiManagerRfState : public WifiRemoteStation
 {
-    // Core SNR metrics (safe features - no data leakage)
-    double lastSnr;                 // Most recent SNR measurement
-    double lastRawSnr;              // Added to store raw SNR value
-    double snrFast;                 // Fast-moving SNR average
-    double snrSlow;                 // Slow-moving SNR average
+    // FIXED: Core SNR metrics with clear separation
+    double lastSnr;                 // Most recent REALISTIC SNR measurement (-30 to +45 dB)
+    double lastRawSnr;              // Raw NS-3 SNR value (for debugging)
+    double snrFast;                 // Fast-moving REALISTIC SNR average
+    double snrSlow;                 // Slow-moving REALISTIC SNR average
     double snrTrendShort;           // Short-term SNR trend
     double snrStabilityIndex;       // SNR stability metric
     double snrPredictionConfidence; // Confidence in SNR predictions
@@ -296,10 +304,10 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     uint32_t totalRetries;      // Total retry attempts
     uint32_t successfulRetries; // Successful retries
 
-    // Performance history for stability assessment
+    // FIXED: Performance history with clear SNR separation
     std::deque<uint32_t> rateHistory;   // Recent rate history
-    std::deque<double> snrHistory;      // Recent SNR history
-    std::deque<double> rawSnrHistory;   // <-- RAW SNR history
+    std::deque<double> snrHistory;      // Recent REALISTIC SNR history
+    std::deque<double> rawSnrHistory;   // Recent RAW NS-3 SNR history (for debugging)
     std::deque<Time> changeTimeHistory; // Rate change timing history
 
     // ML interaction tracking

@@ -85,6 +85,7 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
 }
 
 // Enhanced TypeId with updated defaults for 28-feature pipeline
+// REPLACE the GetTypeId() method completely:
 TypeId
 SmartWifiManagerRf::GetTypeId()
 {
@@ -119,6 +120,26 @@ SmartWifiManagerRf::GetTypeId()
                           UintegerValue(8765),
                           MakeUintegerAccessor(&SmartWifiManagerRf::m_inferenceServerPort),
                           MakeUintegerChecker<uint16_t>())
+            .AddAttribute("ModelType",
+                          "Model type (oracle recommended)",
+                          StringValue("oracle"),
+                          MakeStringAccessor(&SmartWifiManagerRf::m_modelType),
+                          MakeStringChecker())
+            .AddAttribute("EnableProbabilities",
+                          "Enable probability output from ML model",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableProbabilities),
+                          MakeBooleanChecker())
+            .AddAttribute("EnableValidation",
+                          "Enable enhanced feature range validation",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableValidation),
+                          MakeBooleanChecker())
+            .AddAttribute("MaxInferenceTime",
+                          "Maximum allowed inference time in ms",
+                          UintegerValue(200),
+                          MakeUintegerAccessor(&SmartWifiManagerRf::m_maxInferenceTime),
+                          MakeUintegerChecker<uint32_t>())
             .AddAttribute("UseRealisticSnr",
                           "Use enhanced realistic SNR calculation with proper bounds",
                           BooleanValue(true),
@@ -206,10 +227,23 @@ SmartWifiManagerRf::GetTypeId()
             .AddTraceSource("MLInferences",
                             "Number of ML inferences made",
                             MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlInferences),
-                            "ns3::TracedValueCallback::Uint32");
+                            "ns3::TracedValueCallback::Uint32")
+            .AddTraceSource("MLFailures",
+                            "Number of ML failures",
+                            MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlFailures),
+                            "ns3::TracedValueCallback::Uint32")
+            .AddTraceSource("MLCacheHits",
+                            "Number of ML cache hits",
+                            MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlCacheHits),
+                            "ns3::TracedValueCallback::Uint32")
+            .AddTraceSource("AvgMLLatency",
+                            "Average ML inference latency",
+                            MakeTraceSourceAccessor(&SmartWifiManagerRf::m_avgMlLatency),
+                            "ns3::TracedValueCallback::Double");
     return tid;
 }
 
+// ADD these lines to the constructor initialization list:
 SmartWifiManagerRf::SmartWifiManagerRf()
     : m_currentRate(0),
       m_mlInferences(0),
@@ -225,7 +259,12 @@ SmartWifiManagerRf::SmartWifiManagerRf()
       m_enableAdaptiveWeighting(true),
       m_conservativeBoost(1.2),
       m_snrAlpha(0.1),
-      m_enableDetailedLogging(true)
+      m_enableDetailedLogging(true),
+      // ADD these new initializations:
+      m_modelType("oracle"),
+      m_enableProbabilities(true),
+      m_enableValidation(true),
+      m_inferenceServerPort(8765)
 {
     NS_LOG_FUNCTION(this);
 }
