@@ -1,13 +1,33 @@
 /*
  * Enhanced Smart WiFi Manager Implementation - FIXED SNR ENGINE
- * Compatible with ahmedjk34's Enhanced ML Pipeline (98.1% CV accuracy)
+ * Compatible with ahmedjk34's Enhanced ML Pipeline (49.9% realistic accuracy)  // FIXED
  *
  * FIXED: Complete SNR calculation engine with consistent realistic conversion
  * FIXED: Unified SNR processing pipeline
  * FIXED: Proper distance-based SNR modeling
+ * FIXED: 21 safe features (no data leakage)  // FIXED: Added
  *
  * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-09-24
+ * Date: 2025-09-28  // FIXED: Updated date
+ */
+/**
+ * \brief Enhanced Smart Rate control algorithm using Random Forest ML models - FIXED SNR ENGINE
+ * \ingroup wifi
+ *
+ * This class implements an intelligent WiFi rate adaptation algorithm that combines:
+ * - Machine Learning guidance from trained Random Forest models (49.9% realistic accuracy)  //
+ * FIXED
+ * - Rule-based safety mechanisms for reliability
+ * - Context-aware risk assessment
+ * - 21 safe features with no data leakage  // FIXED: Changed from 28 to 21
+ * - FIXED: Consistent realistic SNR calculation (-30dB to +45dB)
+ *
+ * Key innovations:
+ * - Supports multiple oracle strategies (balanced, conservative, aggressive)
+ * - Real-time inference server integration with caching
+ * - Enhanced SNR modeling for realistic simulation
+ * - Production-grade error handling and fallback mechanisms
+ * - FIXED: Unified SNR processing pipeline
  */
 
 #include "smart-wifi-manager-rf.h"
@@ -563,7 +583,8 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     // FIXED: Validate 21 features
     if (features.size() != 21)
     {
-        result.error = "Invalid feature count: expected 28, got " + std::to_string(features.size());
+        result.error =
+            "Invalid feature count: expected 21, got " + std::to_string(features.size()); // FIXED
         std::cout << "[ERROR FIXED ML] " << result.error << std::endl;
         return result;
     }
@@ -786,14 +807,14 @@ void
 SmartWifiManagerRf::LogFeatureVector(const std::vector<double>& features,
                                      const std::string& context) const
 {
-    if (features.size() != 21)
+    if (features.size() != 21) // FIXED: Changed from 28 to 21
     {
-        std::cout << "[ERROR FIXED LOG] " << context << ": Expected 28 features, got "
+        std::cout << "[ERROR FIXED LOG] " << context << ": Expected 21 features, got " // FIXED
                   << features.size() << std::endl;
         return;
     }
 
-    std::cout << "[FIXED DEBUG " << context << "] 28 Features with REALISTIC SNR: ";
+    std::cout << "[FIXED DEBUG " << context << "] 21 Features with REALISTIC SNR: "; // FIXED
     for (size_t i = 0; i < features.size(); ++i)
     {
         std::cout << "[" << i << "]=" << std::setprecision(4) << features[i] << " ";

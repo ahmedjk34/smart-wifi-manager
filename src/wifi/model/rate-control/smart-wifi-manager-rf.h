@@ -1,9 +1,9 @@
 /*
- * Enhanced Smart WiFi Manager with 28 Safe Features - FIXED SNR ENGINE
- * Compatible with ahmedjk34's Enhanced ML Pipeline (98.1% CV accuracy)
+ * Enhanced Smart WiFi Manager with 21 Safe Features - FIXED SNR ENGINE
+ * Compatible with ahmedjk34's Enhanced ML Pipeline (49.9% realistic accuracy)
  *
  * Features:
- * - 28 safe features (no data leakage)
+ * - 21 safe features (no data leakage)  // FIXED: Changed from 28 to 21
  * - Multiple oracle strategy support (oracle_balanced, oracle_conservative, oracle_aggressive,
  * rateIdx)
  * - Production-ready inference server integration
@@ -12,9 +12,10 @@
  * - FIXED: Consistent realistic SNR calculation engine
  *
  * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-09-24
+ * Date: 2025-09-28  // FIXED: Updated date
  * License: Copyright (c) 2005,2006 INRIA
  */
+
 #ifndef SMART_WIFI_MANAGER_RF_H
 #define SMART_WIFI_MANAGER_RF_H
 
