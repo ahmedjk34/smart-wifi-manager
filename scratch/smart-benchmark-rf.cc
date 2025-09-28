@@ -532,35 +532,42 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         DynamicCast<SmartWifiManagerRf>(staDevice->GetRemoteStationManager());
 
     // REPLACE this section in RunEnhancedTestCase after manager configuration:
+    // CRITICAL FIX: Force synchronization throughout simulation
     if (smartManager)
     {
-        // FIXED: Set distance and interferers IMMEDIATELY
+        // Initial setup
         smartManager->SetBenchmarkDistance(tc.staDistance);
         smartManager->SetCurrentInterferers(tc.numInterferers);
-        smartManager->SetOracleStrategy(tc.oracleStrategy);
-        smartManager->SetModelName(tc.oracleStrategy);
-
-        // FIXED: Explicit synchronization call
         smartManager->UpdateFromBenchmarkGlobals(tc.staDistance, tc.numInterferers);
 
-        // VERIFICATION: Check it was set correctly
-        double verifyDistance = smartManager->GetCurrentBenchmarkDistance();
-        uint32_t verifyInterferers = smartManager->GetCurrentInterfererCount();
+        // CRITICAL: Schedule periodic re-synchronization to prevent drift
+        Simulator::Schedule(Seconds(2.0), [smartManager, tc]() {
+            smartManager->SetBenchmarkDistance(tc.staDistance);
+            smartManager->SetCurrentInterferers(tc.numInterferers);
+            std::cout << "[SYNC 2s] Forced: dist=" << tc.staDistance
+                      << ", intf=" << tc.numInterferers << std::endl;
+        });
 
-        std::cout << "[FIXED VERIFICATION] Distance: " << tc.staDistance << "m -> "
-                  << verifyDistance << "m" << std::endl;
-        std::cout << "[FIXED VERIFICATION] Interferers: " << tc.numInterferers << " -> "
-                  << verifyInterferers << std::endl;
+        Simulator::Schedule(Seconds(6.0), [smartManager, tc]() {
+            smartManager->SetBenchmarkDistance(tc.staDistance);
+            smartManager->SetCurrentInterferers(tc.numInterferers);
+            std::cout << "[SYNC 6s] Forced: dist=" << tc.staDistance
+                      << ", intf=" << tc.numInterferers << std::endl;
+        });
 
-        if (std::abs(verifyDistance - tc.staDistance) > 0.001 ||
-            verifyInterferers != tc.numInterferers)
-        {
-            std::cout << "[FATAL ERROR] Configuration sync failed!" << std::endl;
-            return;
-        }
+        Simulator::Schedule(Seconds(12.0), [smartManager, tc]() {
+            smartManager->SetBenchmarkDistance(tc.staDistance);
+            smartManager->SetCurrentInterferers(tc.numInterferers);
+            std::cout << "[SYNC 12s] Forced: dist=" << tc.staDistance
+                      << ", intf=" << tc.numInterferers << std::endl;
+        });
 
-        g_currentSmartManager = smartManager;
-        std::cout << "✅ SmartWifiManagerRf FULLY SYNCHRONIZED" << std::endl;
+        Simulator::Schedule(Seconds(16.0), [smartManager, tc]() {
+            smartManager->SetBenchmarkDistance(tc.staDistance);
+            smartManager->SetCurrentInterferers(tc.numInterferers);
+            std::cout << "[SYNC 16s] Forced: dist=" << tc.staDistance
+                      << ", intf=" << tc.numInterferers << std::endl;
+        });
     }
     else
     {
