@@ -831,24 +831,39 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // FIXED: Store raw NS-3 SNR first
+    // CRITICAL FIX: Store raw NS-3 SNR first
     station->lastRawSnr = rxSnr;
 
-    // FIXED: Convert to realistic SNR using current manager settings
-    double realisticSnr = ConvertToRealisticSnr(rxSnr);
+    // CRITICAL FIX: Always use current manager parameters (not cached/stale values)
+    double realisticSnr =
+        ConvertNS3ToRealisticSnr(rxSnr, m_benchmarkDistance, m_currentInterferers);
     station->lastSnr = realisticSnr;
 
-    std::cout << "[FIXED RX SNR] Raw NS-3=" << rxSnr << "dB -> Realistic=" << realisticSnr
-              << "dB (dist=" << m_benchmarkDistance << "m, intf=" << m_currentInterferers << ")"
-              << std::endl;
+    // FIXED: Log with consistent parameters
+    std::cout << "[CRITICAL FIX RX SNR] Raw NS-3=" << rxSnr << "dB -> Realistic=" << realisticSnr
+              << "dB (MANAGER dist=" << m_benchmarkDistance << "m, intf=" << m_currentInterferers
+              << ")" << std::endl;
 
-    // FIXED: Update both histories consistently
+    // Update SNR histories with realistic values
     station->snrHistory.push_back(realisticSnr);
     station->rawSnrHistory.push_back(rxSnr);
     if (station->snrHistory.size() > 20)
     {
         station->snrHistory.pop_front();
         station->rawSnrHistory.pop_front();
+    }
+
+    // Update exponential moving averages immediately
+    if (station->snrFast == 0.0)
+    {
+        station->snrFast = realisticSnr;
+        station->snrSlow = realisticSnr;
+    }
+    else
+    {
+        station->snrFast = m_snrAlpha * realisticSnr + (1 - m_snrAlpha) * station->snrFast;
+        station->snrSlow =
+            (m_snrAlpha / 10) * realisticSnr + (1 - m_snrAlpha / 10) * station->snrSlow;
     }
 
     UpdateMetrics(st, true, realisticSnr);
@@ -865,20 +880,23 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // FIXED: Store raw values first
+    // CRITICAL FIX: Store raw values first
     station->lastRawSnr = dataSnr;
 
-    // FIXED: Convert using current manager settings
-    double realisticDataSnr = ConvertToRealisticSnr(dataSnr);
+    // CRITICAL FIX: Convert using CURRENT manager settings (not stale cached values)
+    double realisticDataSnr =
+        ConvertNS3ToRealisticSnr(dataSnr, m_benchmarkDistance, m_currentInterferers);
     station->lastSnr = realisticDataSnr;
 
-    // FIXED: Reset retry count and update counters
+    // Reset retry count and update counters
     station->retryCount = 0;
     station->totalPackets++;
     station->successfulRetries++;
 
-    std::cout << "[FIXED DATA OK] Raw NS-3=" << dataSnr << "dB -> Realistic=" << realisticDataSnr
-              << "dB (dist=" << m_benchmarkDistance << "m)" << std::endl;
+    std::cout << "[CRITICAL FIX DATA OK] Raw NS-3=" << dataSnr
+              << "dB -> Realistic=" << realisticDataSnr
+              << "dB (MANAGER dist=" << m_benchmarkDistance << "m, intf=" << m_currentInterferers
+              << ")" << std::endl;
 
     UpdateMetrics(st, true, realisticDataSnr);
 }
