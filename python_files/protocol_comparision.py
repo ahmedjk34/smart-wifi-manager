@@ -1727,7 +1727,7 @@ Examples:
         'smartv1': 'smartv1-benchmark.csv',
         'smartv2': 'smartv2-benchmark.csv', 
         'smartv3': 'smartv3-benchmark.csv',
-        'smartrf': 'enhanced-smartrf-benchmark-results.csv',
+        'smartrf': 'smartrf-benchmark-results.csv',
         'smartrfv3': 'smartrf-benchmark-v3.csv'
     }
     
