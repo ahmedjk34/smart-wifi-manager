@@ -1,78 +1,114 @@
 # ================== SERVER COMMANDS ==================
 
-# 1. Create configuration file
+## 1. Create configuration file
 
+```bash
 python3 python_files/6a_ml_inference_server.py --create-config
+```
 
-# 2. Start enhanced server (basic)
+## 2. Start enhanced server (basic)
 
+```bash
 python3 python_files/6a_ml_inference_server.py --config server_config.json
+```
 
-# 3. Start server with custom port and debug logging
+## 3. Start server with custom port and debug logging
 
+```bash
 python3 python_files/6a_ml_inference_server.py --config server_config.json --port 9000 --log-level DEBUG
+```
 
-# 4. Background server with logging
+## 4. Background server with logging
 
+```bash
 python3 python_files/6a_ml_inference_server.py --config server_config.json > server.log 2>&1 &
+```
 
 # ================== CLIENT COMMANDS ==================
 
-# 5. Get server info
+## 5. Get server info
 
+```bash
 python3 python_files/6b_ml_client.py --info
+```
 
-# 6. List available models
+## 6. List available models
 
+```bash
 python3 python_files/6b_ml_client.py --models
+```
 
-# 7. Test server connectivity
+## 7. Test server connectivity
 
+```bash
 python3 python_files/6b_ml_client.py --ping
+```
 
-# 8. Get server statistics
+## 8. Get server statistics
 
+```bash
 python3 python_files/6b_ml_client.py --stats --format json
+```
 
-# 9. Single prediction with oracle_balanced model (28 safe features)
+## 9. Single prediction with oracle_balanced model (21 safe features)
 
-python3 python_files/6b_ml_client.py --features 25.0 24.0 23.0 1.2 2.5 0.8 0.75 0.70 5 2 0.1 0.85 3 1500 0.95 0.3 0.8 100 200 300 1 1 1000000 50 3 20 0.5 2.5 --model oracle_balanced
+```bash
+python3 python_files/6b_ml_client.py --features 30.0 29.0 28.0 0.5 1.8 0.9 5.0 0.95 0.90 10 1 0.05 0.95 1 50 0.98 0.1 0.9 20 0.2 1.2 --model oracle_balanced
+```
 
-# 10. Prediction with compact output format
+## 10. Prediction with compact output format
 
-python3 python_files/6b_ml_client.py --features 25.0 24.0 23.0 1.2 2.5 0.8 0.75 0.70 5 2 0.1 0.85 3 1500 0.95 0.3 0.8 100 200 300 1 1 1000000 50 3 20 0.5 2.5 --format compact
+```bash
+python3 python_files/6b_ml_client.py --features 30.0 29.0 28.0 0.5 1.8 0.9 5.0 0.95 0.90 10 1 0.05 0.95 1 50 0.98 0.1 0.9 20 0.2 1.2 --format compact
+```
 
-# 11. Load features from file
+## 11. Load features from file
 
-echo "25.0 24.0 23.0 1.2 2.5 0.8 0.75 0.70 5 2 0.1 0.85 3 1500 0.95 0.3 0.8 100 200 300 1 1 1000000 50 3 20 0.5 2.5" > features.txt
+```bash
+echo "30.0 29.0 28.0 0.5 1.8 0.9 5.0 0.95 0.90 10 1 0.05 0.95 1 50 0.98 0.1 0.9 20 0.2 1.2" > features.txt
 python3 python_files/6b_ml_client.py --features-file features.txt --format detailed
+```
 
-# 12. Benchmark performance (100 predictions)
+## 12. Benchmark performance (100 predictions)
 
-python3 python_files/6b_ml_client.py --features 25.0 24.0 23.0 1.2 2.5 0.8 0.75 0.70 5 2 0.1 0.85 3 1500 0.95 0.3 0.8 100 200 300 1 1 1000000 50 3 20 0.5 2.5 --benchmark 100
+```bash
+python3 python_files/6b_ml_client.py --features 30.0 29.0 28.0 0.5 1.8 0.9 5.0 0.95 0.90 10 1 0.05 0.95 1 50 0.98 0.1 0.9 20 0.2 1.2 --benchmark 100
+```
 
-# 13. Rate-only output (for integration)
+## 13. Rate-only output (for integration)
 
-python3 python_files/6b_ml_client.py --features 25.0 24.0 23.0 1.2 2.5 0.8 0.75 0.70 5 2 0.1 0.85 3 1500 0.95 0.3 0.8 100 200 300 1 1 1000000 50 3 20 0.5 2.5 --format rate
+```bash
+python3 python_files/6b_ml_client.py --features 30.0 29.0 28.0 0.5 1.8 0.9 5.0 0.95 0.90 10 1 0.05 0.95 1 50 0.98 0.1 0.9 20 0.2 1.2 --format rate
+```
 
-# 14. Verbose debugging
+## 14. Verbose debugging
 
-python3 python_files/6b_ml_client.py --features 25.0 24.0 23.0 1.2 2.5 0.8 0.75 0.70 5 2 0.1 0.85 3 1500 0.95 0.3 0.8 100 200 300 1 1 1000000 50 3 20 0.5 2.5 --verbose
+```bash
+python3 python_files/6b_ml_client.py --features 30.0 29.0 28.0 0.5 1.8 0.9 5.0 0.95 0.90 10 1 0.05 0.95 1 50 0.98 0.1 0.9 20 0.2 1.2 --verbose
+```
 
-# 15. Shutdown server
+## 15. Shutdown server
 
+```bash
 python3 python_files/6b_ml_client.py --shutdown
+```
 
-# ================== EXAMPLE FEATURE VECTORS ==================
+# ================== EXAMPLE FEATURE VECTORS (21 FEATURES) ==================
 
-# Good WiFi conditions (example 1)
+## Good WiFi conditions
 
-python3 python_files/6b_ml_client.py --features 30.0 29.0 28.0 0.5 1.8 0.9 0.95 0.90 10 1 0.05 0.95 1 500 0.98 0.1 0.9 50 100 150 0 1 5000000 20 1 80 0.2 1.2
+```bash
+python3 python_files/6b_ml_client.py --features 35.0 34.0 33.0 0.6 2.2 0.95 2.0 0.99 0.98 18 0 0.01 0.97 2 100 0.99 0.05 0.98 40 0.01 0.7 --model oracle_balanced
+```
 
-# Poor WiFi conditions (example 2)
+## Poor WiFi conditions
 
-python3 python_files/6b_ml_client.py --features 10.0 12.0 11.0 -0.8 3.5 0.3 0.40 0.35 2 8 0.4 0.45 8 3000 0.6 0.8 0.4 500 800 1200 2 0 500000 200 15 20 0.8 5.5
+```bash
+python3 python_files/6b_ml_client.py --features 8.0 9.0 10.0 -0.9 5.5 0.3 7.0 0.42 0.39 1 7 0.7 0.41 9 400 0.7 0.6 0.5 200 0.8 3.0 --model oracle_balanced
+```
 
-# Marginal WiFi conditions (example 3)
+## Marginal WiFi conditions
 
-python3 python_files/6b_ml_client.py --features 18.0 19.0 17.0 0.2 2.2 0.65 0.70 0.68 6 4 0.2 0.72 4 2000 0.8 0.5 0.7 200 400 600 1 1 2000000 100 5 40 0.4 3.0
+```bash
+python3 python_files/6b_ml_client.py --features 17.0 18.0 16.0 0.3 2.1 0.7 4.0 0.75 0.73 4 3 0.21 0.78 5 150 0.85 0.3 0.8 60 0.3 1.8 --model oracle_balanced
+```
