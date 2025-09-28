@@ -570,36 +570,10 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         interfererApNodes.Create(tc.numInterferers);
         interfererStaNodes.Create(tc.numInterferers);
 
-        // FIXED: Enhanced propagation model with realistic parameters
-        YansWifiChannelHelper channel;
-        channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-
-        // Use LogDistance propagation model for realistic path loss
-        channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
-                                   "Exponent",
-                                   DoubleValue(2.0), // Path loss exponent
-                                   "ReferenceLoss",
-                                   DoubleValue(40), // Reference loss at 1m
-                                   "ReferenceDistance",
-                                   DoubleValue(1.0)); // Reference distance
-
-        // Add random propagation loss for realism
-        channel.AddPropagationLoss("ns3::RandomPropagationLossModel",
-                                   "Variable",
-                                   StringValue("ns3::UniformRandomVariable[Min=0|Max=3]"));
-
+        // FIXED:
+        YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
         YansWifiPhyHelper phy;
         phy.SetChannel(channel.Create());
-
-        // FIXED: Proper PHY parameters for realistic baseline
-        phy.Set("TxPowerStart", DoubleValue(23.0)); // 20 dBm transmit power [23 for debugging]
-        phy.Set("TxPowerEnd", DoubleValue(23.0));   // [23 for debugging]
-        phy.Set("RxSensitivity",
-                DoubleValue(-94.0)); // Realistic sensitivity [-98 dBm for debugging]
-        phy.Set("CcaEdThreshold", DoubleValue(-85.0)); // CCA threshold
-        phy.Set("TxGain", DoubleValue(0.0));           // Antenna gain
-        phy.Set("RxGain", DoubleValue(0.0));
-        phy.Set("RxNoiseFigure", DoubleValue(7.0)); // Realistic noise figure
 
         WifiHelper wifi;
         wifi.SetStandard(WIFI_STANDARD_80211g);
