@@ -80,12 +80,13 @@ class EnhancedMLClient:
     
     def predict(self, features: List[float], model: Optional[str] = None) -> Dict[str, Any]:
         """Make prediction with optional model selection."""
-        if len(features) != 28:  # FIXED: 28 features
+        if len(features) != 21:  # FIXED: Changed from 28 to 21
             return {
-                "error": f"Expected 28 features, got {len(features)}",
+                "error": f"Expected 21 features, got {len(features)}",  # FIXED: 21
                 "success": False,
                 "rateIdx": 3
             }
+
         
         # Build message
         message = " ".join(map(str, features))
@@ -120,9 +121,10 @@ class EnhancedMLClient:
     
     def benchmark(self, features: List[float], iterations: int = 100, model: Optional[str] = None) -> Dict[str, Any]:
         """Benchmark prediction performance."""
-        if len(features) != 28:  # FIXED: 28 features
-            return {"error": f"Expected 28 features, got {len(features)}", "success": False}
-        
+        if len(features) != 21:  # FIXED: Changed from 28 to 21
+                return {"error": f"Expected 21 features, got {len(features)}", "success": False}
+
+                
         latencies = []
         successes = 0
         errors = []
@@ -209,6 +211,7 @@ def print_formatted_result(result: Dict[str, Any], format_type: str):
         if not result.get('success', False):
             print(f"  ❌ Error: {result.get('error', 'Unknown')}")
 
+# Around line 200 - Fix argument parser
 def main():
     """Enhanced command line interface."""
     parser = argparse.ArgumentParser(description="Enhanced ML Client for WiFi Rate Adaptation")
@@ -216,11 +219,11 @@ def main():
     parser.add_argument("--port", type=int, default=8765, help="Server port")
     parser.add_argument("--timeout", type=float, default=5.0, help="Connection timeout")
     
-    # Feature input options - FIXED: 28 features
+    # Feature input options - FIXED: 21 features
     feature_group = parser.add_mutually_exclusive_group()
-    feature_group.add_argument("--features", nargs=28, type=float, help="28 WiFi safe features")
+    feature_group.add_argument("--features", nargs=21, type=float, help="21 WiFi safe features")  # FIXED: 21
     feature_group.add_argument("--features-file", help="File containing features")
-    
+
     # Model selection
     parser.add_argument("--model", help="Model name to use")
     
@@ -296,9 +299,10 @@ def main():
             sys.exit(1)
         
         # Validate feature count - FIXED: 28 features
-        if len(features) != 28:
-            print(f"❌ Expected 28 features, got {len(features)}")
+        if len(features) != 21:  # FIXED: Changed from 28 to 21
+            print(f"❌ Expected 21 features, got {len(features)}")
             sys.exit(1)
+
         
         # Handle prediction commands
         if args.benchmark:

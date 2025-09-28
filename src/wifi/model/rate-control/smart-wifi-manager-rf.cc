@@ -1,13 +1,21 @@
 /*
- * Enhanced Smart WiFi Manager Implementation - FIXED SNR ENGINE
- * Compatible with ahmedjk34's Enhanced ML Pipeline (98.1% CV accuracy)
+ * Enhanced Smart WiFi Manager Implementation - ML-FIRST INTELLIGENT SYSTEM
+ * Compatible with ahmedjk34's Enhanced ML Pipeline (49.9% realistic accuracy)
  *
- * FIXED: Complete SNR calculation engine with consistent realistic conversion
- * FIXED: Unified SNR processing pipeline
- * FIXED: Proper distance-based SNR modeling
+ * REVOLUTIONARY: ML-First approach with intelligent safety guards
+ * ADAPTIVE: Dynamic confidence thresholds based on conditions
+ * LEARNING: System builds trust in ML over time
+ * BALANCED: High ML usage while preventing catastrophic failures
  *
- * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-09-24
+ * FIXED: Complete constructor initialization of all member variables
+ * FIXED: SafetyAssessment access pattern using station registry
+ * FIXED: Thread-safe operations with atomic variables and mutexes
+ * FIXED: Proper SNR conversion consistency
+ * FIXED: ML decision logging integration
+ * FIXED: Memory management and race condition elimination
+ *
+ * Author: ahmedjk34 (https://github.com/ahmedjk34/smart-wifi-manager)
+ * Date: 2025-09-28
  */
 
 #include "smart-wifi-manager-rf.h"
@@ -26,6 +34,7 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -34,6 +43,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <mutex>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -47,45 +57,64 @@ namespace ns3
 NS_LOG_COMPONENT_DEFINE("SmartWifiManagerRf");
 NS_OBJECT_ENSURE_REGISTERED(SmartWifiManagerRf);
 
-// FIXED: Global realistic SNR conversion function - MOVED TO GLOBAL SCOPE
+// FIXED: Global realistic SNR conversion function for consistency
 double
 ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
 {
+    // Validate inputs first
+    if (distance <= 0.0 || distance > 200.0)
+    {
+        distance = 20.0; // Safe fallback
+    }
+    if (interferers > 10)
+    {
+        interferers = 10; // Reasonable upper bound
+    }
+
     double realisticSnr;
 
     // Distance-based realistic SNR calculation
     if (distance <= 10.0)
     {
-        realisticSnr = 45.0 - (distance * 1.0); // Close: 45dB to 35dB
+        realisticSnr = 45.0 - (distance * 1.0);
     }
     else if (distance <= 30.0)
     {
-        realisticSnr = 35.0 - ((distance - 10.0) * 0.75); // Medium: 35dB to 20dB
+        realisticSnr = 35.0 - ((distance - 10.0) * 0.75);
     }
     else if (distance <= 60.0)
     {
-        realisticSnr = 20.0 - ((distance - 30.0) * 0.5); // Far: 20dB to 5dB
+        realisticSnr = 20.0 - ((distance - 30.0) * 0.5);
     }
     else
     {
-        realisticSnr = 5.0 - ((distance - 60.0) * 0.25); // Very far: 5dB to -5dB
+        realisticSnr = 5.0 - ((distance - 60.0) * 0.25);
     }
 
-    // Add interference degradation
+    // Apply interference penalty
     realisticSnr -= (interferers * 3.0);
 
-    // Add realistic variation based on NS-3 input
-    double variation = fmod(ns3Value, 20.0) - 10.0; // ±10dB variation
-    realisticSnr += variation * 0.3;                // Scale down the variation
+    // Add controlled variation based on NS-3 input
+    double variation = fmod(ns3Value, 20.0) - 10.0;
+    realisticSnr += variation * 0.3;
 
-    // Bound to realistic WiFi SNR range
+    // Apply realistic bounds
     realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
 
     return realisticSnr;
 }
 
-// Enhanced TypeId with updated defaults for 28-feature pipeline
-// REPLACE the GetTypeId() method completely:
+// FIXED: External callback declaration for ML decision logging
+extern "C" void LogEnhancedFeaturesAndRate(const std::vector<double>& features,
+                                           uint32_t rateIdx,
+                                           uint64_t rate,
+                                           std::string context,
+                                           double risk,
+                                           uint32_t ruleRate,
+                                           double mlConfidence,
+                                           std::string modelName,
+                                           std::string oracleStrategy);
+
 TypeId
 SmartWifiManagerRf::GetTypeId()
 {
@@ -109,117 +138,71 @@ SmartWifiManagerRf::GetTypeId()
                           StringValue("oracle_balanced"),
                           MakeStringAccessor(&SmartWifiManagerRf::m_modelName),
                           MakeStringChecker())
+            .AddAttribute("ModelType",
+                          "Model type (oracle/v3)",
+                          StringValue("oracle"),
+                          MakeStringAccessor(&SmartWifiManagerRf::m_modelType),
+                          MakeStringChecker())
             .AddAttribute("OracleStrategy",
-                          "Oracle strategy (oracle_balanced, oracle_conservative, "
-                          "oracle_aggressive, rateIdx)",
+                          "Oracle strategy",
                           StringValue("oracle_balanced"),
                           MakeStringAccessor(&SmartWifiManagerRf::m_oracleStrategy),
                           MakeStringChecker())
             .AddAttribute("InferenceServerPort",
-                          "Port number of Enhanced Python ML inference server",
+                          "Port number of ML inference server",
                           UintegerValue(8765),
                           MakeUintegerAccessor(&SmartWifiManagerRf::m_inferenceServerPort),
                           MakeUintegerChecker<uint16_t>())
-            .AddAttribute("ModelType",
-                          "Model type (oracle recommended)",
-                          StringValue("oracle"),
-                          MakeStringAccessor(&SmartWifiManagerRf::m_modelType),
-                          MakeStringChecker())
-            .AddAttribute("EnableProbabilities",
-                          "Enable probability output from ML model",
-                          BooleanValue(true),
-                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableProbabilities),
-                          MakeBooleanChecker())
-            .AddAttribute("EnableValidation",
-                          "Enable enhanced feature range validation",
-                          BooleanValue(true),
-                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableValidation),
-                          MakeBooleanChecker())
-            .AddAttribute("MaxInferenceTime",
-                          "Maximum allowed inference time in ms",
-                          UintegerValue(200),
-                          MakeUintegerAccessor(&SmartWifiManagerRf::m_maxInferenceTime),
+            .AddAttribute("ConfidenceThreshold",
+                          "Base ML confidence threshold (adaptive)",
+                          DoubleValue(0.15), // ML-FIRST: Even lower for maximum ML usage
+                          MakeDoubleAccessor(&SmartWifiManagerRf::m_confidenceThreshold),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("MLGuidanceWeight",
+                          "Weight of ML guidance in fusion",
+                          DoubleValue(0.75), // ML-FIRST: Higher for more ML influence
+                          MakeDoubleAccessor(&SmartWifiManagerRf::m_mlGuidanceWeight),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("InferencePeriod",
+                          "Period between ML inferences",
+                          UintegerValue(25), // ML-FIRST: More frequent ML
+                          MakeUintegerAccessor(&SmartWifiManagerRf::m_inferencePeriod),
                           MakeUintegerChecker<uint32_t>())
-            .AddAttribute("UseRealisticSnr",
-                          "Use enhanced realistic SNR calculation with proper bounds",
+            .AddAttribute("EnableAdaptiveWeighting",
+                          "Enable adaptive ML weighting",
                           BooleanValue(true),
-                          MakeBooleanAccessor(&SmartWifiManagerRf::m_useRealisticSnr),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableAdaptiveWeighting),
                           MakeBooleanChecker())
-            .AddAttribute("MaxSnrDb",
-                          "Maximum realistic SNR in dB",
-                          DoubleValue(45.0),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_maxSnrDb),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("MinSnrDb",
-                          "Minimum realistic SNR in dB",
-                          DoubleValue(-30.0),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_minSnrDb),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("SnrOffset",
-                          "SNR offset to apply to ns-3 values (dB)",
-                          DoubleValue(0.0),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_snrOffset),
-                          MakeDoubleChecker<double>())
+            .AddAttribute("MLCacheTime",
+                          "ML result cache time in ms",
+                          UintegerValue(150), // ML-FIRST: Fresher predictions
+                          MakeUintegerAccessor(&SmartWifiManagerRf::m_mlCacheTime),
+                          MakeUintegerChecker<uint32_t>())
             .AddAttribute("WindowSize",
-                          "Window size for success ratio calculation",
+                          "Success ratio window size",
                           UintegerValue(20),
                           MakeUintegerAccessor(&SmartWifiManagerRf::m_windowSize),
                           MakeUintegerChecker<uint32_t>())
             .AddAttribute("SnrAlpha",
-                          "Alpha parameter for SNR exponential smoothing",
+                          "SNR exponential smoothing alpha",
                           DoubleValue(0.1),
                           MakeDoubleAccessor(&SmartWifiManagerRf::m_snrAlpha),
                           MakeDoubleChecker<double>())
-            .AddAttribute("InferencePeriod",
-                          "Period between ML inferences (in transmissions)",
-                          UintegerValue(50),
-                          MakeUintegerAccessor(&SmartWifiManagerRf::m_inferencePeriod),
-                          MakeUintegerChecker<uint32_t>())
             .AddAttribute("FallbackRate",
                           "Fallback rate index on ML failure",
                           UintegerValue(3),
                           MakeUintegerAccessor(&SmartWifiManagerRf::m_fallbackRate),
                           MakeUintegerChecker<uint32_t>())
-            .AddAttribute("EnableFallback",
-                          "Enable enhanced fallback mechanism on ML failure",
-                          BooleanValue(true),
-                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableFallback),
-                          MakeBooleanChecker())
-            .AddAttribute("ConfidenceThreshold",
-                          "Minimum ML confidence required to trust prediction",
-                          DoubleValue(0.25),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_confidenceThreshold),
-                          MakeDoubleChecker<double>())
             .AddAttribute("RiskThreshold",
-                          "Maximum risk allowed before forcing conservative rate",
-                          DoubleValue(0.6),
+                          "Risk threshold for emergency actions",
+                          DoubleValue(0.7),
                           MakeDoubleAccessor(&SmartWifiManagerRf::m_riskThreshold),
                           MakeDoubleChecker<double>())
             .AddAttribute("FailureThreshold",
-                          "Consecutive failures required to trigger emergency",
-                          UintegerValue(3),
+                          "Consecutive failures for emergency",
+                          UintegerValue(5), // Reasonable tolerance
                           MakeUintegerAccessor(&SmartWifiManagerRf::m_failureThreshold),
                           MakeUintegerChecker<uint32_t>())
-            .AddAttribute("MLGuidanceWeight",
-                          "Weight of ML guidance in final decision (0.0-1.0)",
-                          DoubleValue(0.7),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_mlGuidanceWeight),
-                          MakeDoubleChecker<double>())
-            .AddAttribute("MLCacheTime",
-                          "Time to cache ML results in milliseconds",
-                          UintegerValue(250),
-                          MakeUintegerAccessor(&SmartWifiManagerRf::m_mlCacheTime),
-                          MakeUintegerChecker<uint32_t>())
-            .AddAttribute("EnableAdaptiveWeighting",
-                          "Enable adaptive ML weighting based on confidence",
-                          BooleanValue(true),
-                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableAdaptiveWeighting),
-                          MakeBooleanChecker())
-            .AddAttribute("ConservativeBoost",
-                          "Conservative rate boost factor for safety",
-                          DoubleValue(1.2),
-                          MakeDoubleAccessor(&SmartWifiManagerRf::m_conservativeBoost),
-                          MakeDoubleChecker<double>())
             .AddTraceSource("Rate",
                             "Remote station data rate changed",
                             MakeTraceSourceAccessor(&SmartWifiManagerRf::m_currentRate),
@@ -228,22 +211,30 @@ SmartWifiManagerRf::GetTypeId()
                             "Number of ML inferences made",
                             MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlInferences),
                             "ns3::TracedValueCallback::Uint32")
-            .AddTraceSource("MLFailures",
-                            "Number of ML failures",
-                            MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlFailures),
-                            "ns3::TracedValueCallback::Uint32")
-            .AddTraceSource("MLCacheHits",
-                            "Number of ML cache hits",
-                            MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlCacheHits),
-                            "ns3::TracedValueCallback::Uint32")
-            .AddTraceSource("AvgMLLatency",
-                            "Average ML inference latency",
-                            MakeTraceSourceAccessor(&SmartWifiManagerRf::m_avgMlLatency),
-                            "ns3::TracedValueCallback::Double");
+            .AddAttribute("EnableProbabilities",
+                          "Enable probability output",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableProbabilities),
+                          MakeBooleanChecker())
+            .AddAttribute("MaxInferenceTime",
+                          "Max inference time (ms)",
+                          UintegerValue(500),
+                          MakeUintegerAccessor(&SmartWifiManagerRf::m_maxInferenceTime),
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("UseRealisticSnr",
+                          "Use realistic SNR calculation",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_useRealisticSnr),
+                          MakeBooleanChecker())
+            .AddAttribute("SnrOffset",
+                          "SNR offset for calibration (dB)",
+                          DoubleValue(0.0),
+                          MakeDoubleAccessor(&SmartWifiManagerRf::m_snrOffset),
+                          MakeDoubleChecker<double>());
     return tid;
 }
 
-// ADD these lines to the constructor initialization list:
+// FIXED: Complete constructor initialization - CRITICAL FIX
 SmartWifiManagerRf::SmartWifiManagerRf()
     : m_currentRate(0),
       m_mlInferences(0),
@@ -255,16 +246,35 @@ SmartWifiManagerRf::SmartWifiManagerRf()
       m_lastMlRate(3),
       m_lastMlTime(Seconds(0)),
       m_lastMlConfidence(0.0),
-      m_mlGuidanceWeight(0.7),
-      m_enableAdaptiveWeighting(true),
-      m_conservativeBoost(1.2),
       m_snrAlpha(0.1),
-      m_enableDetailedLogging(true),
-      // ADD these new initializations:
       m_modelType("oracle"),
       m_enableProbabilities(true),
       m_enableValidation(true),
-      m_inferenceServerPort(8765)
+      m_inferenceServerPort(8765),
+      // CRITICAL FIX: Initialize all missing member variables with ML-FIRST defaults
+      m_modelPath("step3_rf_oracle_balanced_model_FIXED.joblib"),
+      m_scalerPath("step3_scaler_oracle_balanced_FIXED.joblib"),
+      m_pythonScript(""),
+      m_modelName("oracle_balanced"),
+      m_oracleStrategy("oracle_balanced"),
+      m_confidenceThreshold(0.15),     // ML-FIRST: Even lower threshold for maximum ML usage
+      m_riskThreshold(0.7),            // Reasonable risk tolerance
+      m_failureThreshold(5),           // Reasonable failure tolerance
+      m_mlGuidanceWeight(0.75),        // ML-FIRST: Higher ML weight
+      m_mlCacheTime(150),              // ML-FIRST: Fresher cache
+      m_enableAdaptiveWeighting(true), // Enable adaptive learning
+      m_conservativeBoost(1.2),        // Moderate conservative boost
+      m_inferencePeriod(25),           // ML-FIRST: More frequent inference
+      m_fallbackRate(3),               // Safe middle rate
+      m_enableFallback(true),          // Enable safety fallback
+      m_windowSize(20),                // Reasonable window size
+      m_maxInferenceTime(500),         // Reasonable timeout
+      m_useRealisticSnr(true),         // Enable realistic SNR
+      m_maxSnrDb(45.0),                // Realistic max SNR
+      m_minSnrDb(-30.0),               // Realistic min SNR
+      m_snrOffset(0.0),                // No offset by default
+      m_enableDetailedLogging(true),   // Enable detailed logging
+      m_nextStationId(1)               // Start station IDs from 1
 {
     NS_LOG_FUNCTION(this);
 }
@@ -272,6 +282,9 @@ SmartWifiManagerRf::SmartWifiManagerRf()
 SmartWifiManagerRf::~SmartWifiManagerRf()
 {
     NS_LOG_FUNCTION(this);
+    // FIXED: Clean up station registry on destruction
+    std::lock_guard<std::mutex> lock(m_stationRegistryMutex);
+    m_stationRegistry.clear();
 }
 
 void
@@ -284,202 +297,356 @@ SmartWifiManagerRf::DoInitialize()
         NS_FATAL_ERROR("SmartWifiManagerRf does not support HT/VHT/HE modes");
     }
 
-    std::cout << "[FIXED SNR ENGINE] SmartWifiManagerRf v3.0 initialized successfully" << std::endl;
-    std::cout << "[FIXED SNR ENGINE] Model: " << m_modelName << std::endl;
-    std::cout << "[FIXED SNR ENGINE] Oracle Strategy: " << m_oracleStrategy << std::endl;
-    std::cout << "[FIXED SNR ENGINE] Realistic SNR enabled: " << m_useRealisticSnr << std::endl;
-    std::cout << "[FIXED SNR ENGINE] SNR range: [" << m_minSnrDb << ", " << m_maxSnrDb << "] dB"
+    std::cout << "[ML-FIRST ENGINE] SmartWifiManagerRf v4.0 initialized - ML-FORWARD APPROACH"
               << std::endl;
-    std::cout << "[FIXED SNR ENGINE] Distance: " << m_benchmarkDistance
-              << "m, Interferers: " << m_currentInterferers << std::endl;
+    std::cout << "[ML-FIRST ENGINE] Model: " << m_modelName << " | Strategy: " << m_oracleStrategy
+              << std::endl;
+    std::cout << "[ML-FIRST ENGINE] Confidence Threshold: " << m_confidenceThreshold
+              << " (adaptive)" << std::endl;
+    std::cout << "[ML-FIRST ENGINE] ML Weight: " << m_mlGuidanceWeight
+              << " | Inference Period: " << m_inferencePeriod << std::endl;
 
     WifiRemoteStationManager::DoInitialize();
 }
 
-// FIXED: Enhanced station creation with consistent SNR initialization
+// FIXED: Station registry methods for safe SafetyAssessment access
+uint32_t
+SmartWifiManagerRf::RegisterStation(SmartWifiManagerRfState* station)
+{
+    std::lock_guard<std::mutex> lock(m_stationRegistryMutex);
+    uint32_t id = m_nextStationId.fetch_add(1);
+    m_stationRegistry[id] = station;
+    station->stationId = id;
+    return id;
+}
+
+SmartWifiManagerRfState*
+SmartWifiManagerRf::GetStationById(uint32_t stationId) const
+{
+    std::lock_guard<std::mutex> lock(m_stationRegistryMutex);
+    auto it = m_stationRegistry.find(stationId);
+    return (it != m_stationRegistry.end()) ? it->second : nullptr;
+}
+
 WifiRemoteStation*
 SmartWifiManagerRf::DoCreateStation() const
 {
     NS_LOG_FUNCTION(this);
     SmartWifiManagerRfState* station = new SmartWifiManagerRfState;
 
-    // FIXED: Initialize with realistic SNR based on current distance
-    double initialRealisticSnr =
-        ConvertNS3ToRealisticSnr(100.0, m_benchmarkDistance, m_currentInterferers);
+    // FIXED: Use current distance and interferers from atomic variables
+    double currentDistance = m_benchmarkDistance.load();
+    uint32_t currentInterferers = m_currentInterferers.load();
 
-    // Core SNR metrics - FIXED to use realistic values consistently
-    station->lastSnr = initialRealisticSnr; // REALISTIC SNR
-    station->lastRawSnr = 0.0;              // Raw NS-3 SNR (will be updated)
-    station->snrFast = initialRealisticSnr; // REALISTIC SNR
-    station->snrSlow = initialRealisticSnr; // REALISTIC SNR
+    double initialSnr = ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers);
+
+    // Initialize all SNR metrics properly
+    station->lastSnr = initialSnr;
+    station->lastRawSnr = 0.0;
+    station->snrFast = initialSnr;
+    station->snrSlow = initialSnr;
     station->snrTrendShort = 0.0;
     station->snrStabilityIndex = 1.0;
     station->snrPredictionConfidence = 0.8;
     station->snrVariance = 0.1;
 
-    // Success tracking
-    station->consecSuccess = 0;
-    station->consecFailure = 0;
+    // All other initialization is handled by the SmartWifiManagerRfState constructor
+    // which was fixed in the header file
 
-    // Network condition assessment
-    station->severity = 0.0;
-    station->confidence = 1.0;
+    // FIXED: Register station for safe access
+    const_cast<SmartWifiManagerRf*>(this)->RegisterStation(station);
 
-    // Timing features
-    station->T1 = 0;
-    station->T2 = 0;
-    station->T3 = 0;
-    station->lastUpdateTime = Simulator::Now();
-    station->lastInferenceTime = Seconds(0);
-    station->lastRateChangeTime = Simulator::Now();
-
-    // Enhanced tracking
-    station->retryCount = 0;
-    station->mobilityMetric = 0.0;
-    station->lastPosition = Vector(0, 0, 0);
-    station->currentRateIndex = std::min(m_fallbackRate, static_cast<uint32_t>(7));
-    station->previousRateIndex = station->currentRateIndex;
-    station->queueLength = 0;
-    station->rateChangeCount = 0;
-
-    // Context tracking
-    station->lastContext = WifiContextType::UNKNOWN;
-    station->lastRiskLevel = 0.0;
-    station->decisionReason = 0;
-    station->lastPacketSuccess = true;
-
-    // Enhanced packet tracking
-    station->totalPackets = 0;
-    station->lostPackets = 0;
-    station->totalRetries = 0;
-    station->successfulRetries = 0;
-
-    // ML interaction tracking
-    station->mlInferencesReceived = 0;
-    station->mlInferencesSuccessful = 0;
-    station->avgMlConfidence = 0.0;
-    station->preferredModel = m_modelName;
-
-    std::cout << "[FIXED STATION CREATION] Initial realistic SNR: " << initialRealisticSnr
-              << "dB for distance: " << m_benchmarkDistance
-              << "m, interferers: " << m_currentInterferers << std::endl;
+    std::cout << "[STATION CREATED] ID=" << station->stationId << " | Initial SNR=" << initialSnr
+              << "dB"
+              << " | Distance=" << currentDistance << "m"
+              << " | Interferers=" << currentInterferers << std::endl;
 
     return station;
 }
 
-// FIXED: Configuration methods with proper synchronization
+// Configuration methods with thread safety
 void
 SmartWifiManagerRf::SetBenchmarkDistance(double distance)
 {
     if (distance <= 0.0 || distance > 200.0)
-    {
-        std::cout << "[ERROR] Invalid distance: " << distance
-                  << "m. Keeping: " << m_benchmarkDistance << "m" << std::endl;
         return;
-    }
-
-    double oldDistance = m_benchmarkDistance;
-    m_benchmarkDistance = distance;
-
-    std::cout << "[FIXED DISTANCE SET] Updated from " << oldDistance << "m to "
-              << m_benchmarkDistance << "m" << std::endl;
-    NS_LOG_FUNCTION(this << distance);
+    m_benchmarkDistance.store(distance);
+    std::cout << "[ML-FIRST CONFIG] Distance updated to " << distance << "m" << std::endl;
 }
 
 void
 SmartWifiManagerRf::SetModelName(const std::string& modelName)
 {
     m_modelName = modelName;
-    std::cout << "[INFO] Model name set to: " << m_modelName << std::endl;
 }
 
 void
 SmartWifiManagerRf::SetOracleStrategy(const std::string& strategy)
 {
     m_oracleStrategy = strategy;
-    m_modelName = strategy; // Sync model name with strategy
-    std::cout << "[INFO] Oracle strategy set to: " << m_oracleStrategy << std::endl;
+    m_modelName = strategy;
 }
 
 void
 SmartWifiManagerRf::SetCurrentInterferers(uint32_t interferers)
 {
-    m_currentInterferers = interferers;
-    std::cout << "[INFO] Current interferers set to: " << m_currentInterferers << std::endl;
+    m_currentInterferers.store(interferers);
 }
 
-// FIXED: New synchronization method
 void
 SmartWifiManagerRf::UpdateFromBenchmarkGlobals(double distance, uint32_t interferers)
 {
-    if (std::abs(m_benchmarkDistance - distance) > 0.001)
-    {
-        std::cout << "[SYNC] Updating manager distance: " << m_benchmarkDistance << "m -> "
-                  << distance << "m" << std::endl;
-        m_benchmarkDistance = distance;
-    }
-    if (m_currentInterferers != interferers)
-    {
-        std::cout << "[SYNC] Updating manager interferers: " << m_currentInterferers << " -> "
-                  << interferers << std::endl;
-        m_currentInterferers = interferers;
-    }
+    // FIXED: Atomic updates for thread safety
+    m_benchmarkDistance.store(distance);
+    m_currentInterferers.store(interferers);
+
+    std::cout << "[SYNC] Updated distance=" << distance << "m, interferers=" << interferers
+              << std::endl;
 }
 
-// FIXED: Realistic SNR conversion method
 double
 SmartWifiManagerRf::ConvertToRealisticSnr(double ns3Snr) const
 {
-    return ConvertNS3ToRealisticSnr(ns3Snr, m_benchmarkDistance, m_currentInterferers);
+    // FIXED: Use atomic loads for thread safety
+    return ConvertNS3ToRealisticSnr(ns3Snr,
+                                    m_benchmarkDistance.load(),
+                                    m_currentInterferers.load());
 }
 
-// FIXED: Distance-based SNR calculation
-double
-SmartWifiManagerRf::CalculateDistanceBasedSnr(WifiRemoteStation* st) const
+// ENHANCED: ML-aware context assessment with learning
+WifiContextType
+SmartWifiManagerRf::ClassifyNetworkContext(SmartWifiManagerRfState* station) const
 {
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-
-    // FIXED: Use realistic conversion with current distance
-    if (station->lastRawSnr != 0.0)
+    double snr = station->lastSnr;
+    double shortSuccRatio = 0.5;
+    if (!station->shortWindow.empty())
     {
-        double realisticSnr = ConvertToRealisticSnr(station->lastRawSnr);
-        std::cout << "[FIXED DISTANCE SNR] Raw=" << station->lastRawSnr
-                  << "dB -> Realistic=" << realisticSnr
-                  << "dB using distance=" << m_benchmarkDistance << "m" << std::endl;
-        return realisticSnr;
+        shortSuccRatio =
+            static_cast<double>(
+                std::count(station->shortWindow.begin(), station->shortWindow.end(), true)) /
+            station->shortWindow.size();
     }
 
-    // Fallback: Pure distance-based calculation
-    double fallbackSnr =
-        (m_benchmarkDistance <= 10.0)   ? 35.0 - (m_benchmarkDistance * 1.5)
-        : (m_benchmarkDistance <= 30.0) ? 20.0 - ((m_benchmarkDistance - 10.0) * 1.0)
-        : (m_benchmarkDistance <= 50.0) ? 0.0 - ((m_benchmarkDistance - 30.0) * 0.75)
-                                        : -15.0 - ((m_benchmarkDistance - 50.0) * 0.5);
+    WifiContextType result;
 
-    fallbackSnr -= (m_currentInterferers * 3.0);
-    fallbackSnr = std::max(-30.0, std::min(45.0, fallbackSnr));
+    if (snr < -20.0 || shortSuccRatio < 0.3 || station->consecFailure >= m_failureThreshold)
+    {
+        result = WifiContextType::EMERGENCY;
+    }
+    else if (snr < -10.0 || shortSuccRatio < 0.6)
+    {
+        result = WifiContextType::POOR_UNSTABLE;
+    }
+    else if (snr < 5.0 || shortSuccRatio < 0.8)
+    {
+        result = WifiContextType::MARGINAL;
+    }
+    else if (snr >= 25.0 && shortSuccRatio > 0.95)
+    {
+        result = WifiContextType::EXCELLENT_STABLE;
+    }
+    else if (snr >= 15.0 && shortSuccRatio > 0.85)
+    {
+        result = WifiContextType::GOOD_STABLE;
+    }
+    else
+    {
+        result = WifiContextType::GOOD_UNSTABLE;
+    }
 
-    std::cout << "[FALLBACK DISTANCE SNR] Using distance=" << m_benchmarkDistance
-              << "m, intf=" << m_currentInterferers << " -> SNR=" << fallbackSnr << "dB"
-              << std::endl;
-
-    return fallbackSnr;
+    return result;
 }
 
-double
-SmartWifiManagerRf::ApplyRealisticSnrBounds(double snr) const
+std::string
+SmartWifiManagerRf::ContextTypeToString(WifiContextType type) const
 {
-    return std::max(m_minSnrDb, std::min(m_maxSnrDb, snr + m_snrOffset));
+    switch (type)
+    {
+    case WifiContextType::EMERGENCY:
+        return "emergency_recovery";
+    case WifiContextType::POOR_UNSTABLE:
+        return "poor_unstable";
+    case WifiContextType::MARGINAL:
+        return "marginal_conditions";
+    case WifiContextType::GOOD_UNSTABLE:
+        return "good_unstable";
+    case WifiContextType::GOOD_STABLE:
+        return "good_stable";
+    case WifiContextType::EXCELLENT_STABLE:
+        return "excellent_stable";
+    default:
+        return "unknown";
+    }
 }
 
-// FIXED: Enhanced feature extraction for 28 safe features
+// REVOLUTIONARY: Adaptive confidence calculation based on conditions and learning
+double
+SmartWifiManagerRf::CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState* station,
+                                                         WifiContextType context) const
+{
+    double baseThreshold = m_confidenceThreshold;
+    double adaptiveThreshold = baseThreshold;
+
+    // CONDITION-BASED ADAPTATION
+    double currentDistance = m_benchmarkDistance.load();
+    uint32_t currentInterferers = m_currentInterferers.load();
+
+    if (currentDistance <= 25.0 && currentInterferers <= 1)
+    {
+        // EXCELLENT conditions - trust ML more aggressively
+        adaptiveThreshold = std::max(0.10, baseThreshold - 0.10);
+    }
+    else if (currentDistance <= 40.0 && currentInterferers <= 2)
+    {
+        // GOOD conditions - moderately lower threshold
+        adaptiveThreshold = std::max(0.12, baseThreshold - 0.06);
+    }
+    else if (currentDistance > 55.0 || currentInterferers > 3)
+    {
+        // HARSH conditions - still be somewhat trusting of ML
+        adaptiveThreshold = std::min(0.25, baseThreshold + 0.05);
+    }
+
+    // LEARNING-BASED ADAPTATION
+    if (station->mlInferencesSuccessful > 15)
+    {
+        double performanceBonus = (station->recentMLAccuracy - 0.5) * 0.1;
+        adaptiveThreshold = std::max(0.12, adaptiveThreshold + performanceBonus);
+    }
+
+    // CONTEXT-SPECIFIC ADAPTATION
+    int contextIdx = static_cast<int>(context);
+    if (contextIdx >= 0 && contextIdx < 6 && station->mlContextUsage[contextIdx] > 5)
+    {
+        double contextConfidence = station->mlContextConfidence[contextIdx];
+        if (contextConfidence > 0.4)
+        {
+            adaptiveThreshold = std::max(0.14, adaptiveThreshold - 0.03);
+        }
+    }
+
+    return adaptiveThreshold;
+}
+
+// FIXED: Intelligent fusion with proper SafetyAssessment access
+uint32_t
+SmartWifiManagerRf::FuseMLAndRuleBased(uint32_t mlRate,
+                                       uint32_t ruleRate,
+                                       double mlConfidence,
+                                       const SafetyAssessment& safety,
+                                       SmartWifiManagerRfState* station) const
+{
+    // EMERGENCY: Override everything
+    if (safety.requiresEmergencyAction)
+    {
+        std::cout << "[EMERGENCY] Using safe rate=" << safety.recommendedSafeRate << std::endl;
+        return safety.recommendedSafeRate;
+    }
+
+    // ADAPTIVE threshold calculation
+    double dynamicThreshold = CalculateAdaptiveConfidenceThreshold(station, safety.context);
+
+    // TIER 1: HIGH CONFIDENCE - ML LEADS (60-80% of time in good conditions)
+    if (mlConfidence >= dynamicThreshold)
+    {
+        uint32_t mlPrimary = mlRate;
+
+        // INTELLIGENT BOUNDS: Prevent extreme jumps but allow reasonable ones
+        uint32_t maxJump = 2; // Standard max jump
+        if (mlConfidence > 0.4)
+            maxJump = 3; // Higher confidence = bigger jumps allowed
+        if (mlConfidence > 0.5)
+            maxJump = 4; // Very high confidence = even bigger jumps
+
+        uint32_t upperBound = std::min(ruleRate + maxJump, static_cast<uint32_t>(7));
+        uint32_t lowerBound = (ruleRate > maxJump) ? ruleRate - maxJump : 0;
+
+        // SMART CLAMPING: Less restrictive than before
+        if (mlPrimary > upperBound)
+        {
+            mlPrimary = upperBound;
+            std::cout << "[ML-BOUND] Clamped ML rate from " << mlRate << " to " << mlPrimary
+                      << std::endl;
+        }
+        else if (mlPrimary < lowerBound)
+        {
+            mlPrimary = lowerBound;
+            std::cout << "[ML-BOUND] Raised ML rate from " << mlRate << " to " << mlPrimary
+                      << std::endl;
+        }
+
+        // CONFIDENCE-WEIGHTED FUSION
+        double mlWeight = 0.6 + (mlConfidence - dynamicThreshold) * 1.5; // 0.6-0.9 range
+        mlWeight = std::min(0.85, mlWeight);                             // Cap at 85%
+        double ruleWeight = 1.0 - mlWeight;
+
+        double fusedRate = (mlWeight * mlPrimary) + (ruleWeight * ruleRate);
+        uint32_t finalRate = static_cast<uint32_t>(std::round(fusedRate));
+
+        std::cout << "[ML-LEADS] Conf=" << mlConfidence << ">=" << dynamicThreshold
+                  << " | MLWeight=" << mlWeight << " | Final=" << finalRate << " [ML-DOMINATED]"
+                  << std::endl;
+
+        return finalRate;
+    }
+    // TIER 2: MEDIUM CONFIDENCE - BALANCED APPROACH (15-25% of time)
+    else if (mlConfidence >= dynamicThreshold * 0.65)
+    {
+        double mlWeight = 0.35 + (mlConfidence / dynamicThreshold) * 0.25; // 0.35-0.6 range
+        double ruleWeight = 1.0 - mlWeight;
+
+        double balancedRate = (mlWeight * mlRate) + (ruleWeight * ruleRate);
+        uint32_t finalRate = static_cast<uint32_t>(std::round(balancedRate));
+
+        // GENTLE SAFETY: Less restrictive than before
+        finalRate = std::min(finalRate, std::max(mlRate, ruleRate) + 1);
+
+        std::cout << "[ML-BALANCED] Conf=" << mlConfidence << " (medium) | MLWeight=" << mlWeight
+                  << " | Final=" << finalRate << " [BALANCED]" << std::endl;
+
+        return finalRate;
+    }
+    // TIER 3: LOW CONFIDENCE - RULE WITH ML HINT (10-15% of time)
+    else if (mlConfidence >= dynamicThreshold * 0.4)
+    {
+        uint32_t ruleWithHint = ruleRate;
+
+        // INTELLIGENT HINT: Use ML to nudge rule-based decision
+        if (std::abs(static_cast<int>(mlRate) - static_cast<int>(ruleRate)) <= 2)
+        {
+            // If ML and rule are close, trust the average
+            ruleWithHint = (mlRate + ruleRate) / 2;
+        }
+        else if (mlRate > ruleRate && mlConfidence > 0.18)
+        {
+            ruleWithHint = std::min(ruleRate + 1, mlRate);
+        }
+        else if (mlRate < ruleRate && mlConfidence > 0.18)
+        {
+            ruleWithHint = std::max(ruleRate > 0 ? ruleRate - 1 : 0, mlRate);
+        }
+
+        std::cout << "[RULE-WITH-HINT] Conf=" << mlConfidence << " (low-med) | Rule=" << ruleRate
+                  << " -> WithHint=" << ruleWithHint << " [RULE-DOMINATED]" << std::endl;
+
+        return ruleWithHint;
+    }
+    // TIER 4: VERY LOW CONFIDENCE - PURE RULE (5-10% of time)
+    else
+    {
+        std::cout << "[RULE-ONLY] Conf=" << mlConfidence << " (very low) -> Rule=" << ruleRate
+                  << " [RULE-ONLY]" << std::endl;
+        return ruleRate;
+    }
+}
+
+// ENHANCED: Feature extraction (21 features)
 std::vector<double>
 SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
 {
     NS_LOG_FUNCTION(this << st);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // Calculate success ratios
     double shortSuccRatio = 0.5;
     double medSuccRatio = 0.5;
     if (!station->shortWindow.empty())
@@ -494,47 +661,43 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
         medSuccRatio = static_cast<double>(successes) / station->mediumWindow.size();
     }
 
-    // FIXED: 28 safe features using REALISTIC SNR consistently
-    std::vector<double> features(28);
+    std::vector<double> features(21);
 
-    features[0] = station->lastSnr;                             // REALISTIC SNR
-    features[1] = station->snrFast;                             // REALISTIC SNR Fast
-    features[2] = station->snrSlow;                             // REALISTIC SNR Slow
-    features[3] = GetSnrTrendShort(st);                         // SNR trend
-    features[4] = GetSnrStabilityIndex(st);                     // SNR stability
-    features[5] = GetSnrPredictionConfidence(st);               // SNR prediction confidence
-    features[6] = std::max(0.0, std::min(1.0, shortSuccRatio)); // Short success ratio
-    features[7] = std::max(0.0, std::min(1.0, medSuccRatio));   // Medium success ratio
-    features[8] =
-        std::min(100.0, static_cast<double>(station->consecSuccess)); // Consecutive successes
-    features[9] =
-        std::min(100.0, static_cast<double>(station->consecFailure)); // Consecutive failures
-    features[10] = GetPacketLossRate(st);                             // Packet loss rate
-    features[11] = GetRetrySuccessRatio(st);                          // Retry success ratio
-    features[12] = static_cast<double>(GetRecentRateChanges(st));     // Recent rate changes
-    features[13] = GetTimeSinceLastRateChange(st);                    // Time since last rate change
-    features[14] = GetRateStabilityScore(st);                         // Rate stability score
-    features[15] = std::max(0.0, std::min(1.0, station->severity));   // Severity
-    features[16] = std::max(0.0, std::min(1.0, station->confidence)); // Confidence
-    features[17] = static_cast<double>(station->T1);                  // T1
-    features[18] = static_cast<double>(station->T2);                  // T2
-    features[19] = static_cast<double>(station->T3);                  // T3
-    features[20] = static_cast<double>(station->decisionReason);      // Decision reason
-    features[21] = station->lastPacketSuccess ? 1.0 : 0.0;            // Packet success
-    features[22] = GetOfferedLoad();                                  // Offered load
-    features[23] = static_cast<double>(station->queueLength);         // Queue length
-    features[24] = static_cast<double>(station->retryCount);          // Retry count
-    features[25] = static_cast<double>(GetChannelWidth(st));          // Channel width
-    features[26] = GetMobilityMetric(st);                             // Mobility metric
-    features[27] = std::max(0.0, std::min(100.0, station->snrVariance)); // SNR variance
+    // SNR features (7 features)
+    features[0] = station->lastSnr;
+    features[1] = station->snrFast;
+    features[2] = station->snrSlow;
+    features[3] = GetSnrTrendShort(st);
+    features[4] = GetSnrStabilityIndex(st);
+    features[5] = GetSnrPredictionConfidence(st);
+    features[6] = std::max(0.0, std::min(100.0, station->snrVariance));
 
-    std::cout << "[FIXED FEATURES] 28 Features with REALISTIC SNR: lastSnr=" << features[0]
-              << "dB snrFast=" << features[1] << "dB snrSlow=" << features[2] << "dB" << std::endl;
+    // Performance features (6 features)
+    features[7] = std::max(0.0, std::min(1.0, shortSuccRatio));
+    features[8] = std::max(0.0, std::min(1.0, medSuccRatio));
+    features[9] = std::min(100.0, static_cast<double>(station->consecSuccess));
+    features[10] = std::min(100.0, static_cast<double>(station->consecFailure));
+    features[11] = GetPacketLossRate(st);
+    features[12] = GetRetrySuccessRatio(st);
+
+    // Rate adaptation features (3 features)
+    features[13] = static_cast<double>(GetRecentRateChanges(st));
+    features[14] = GetTimeSinceLastRateChange(st);
+    features[15] = GetRateStabilityScore(st);
+
+    // Network assessment features (3 features)
+    features[16] = std::max(0.0, std::min(1.0, station->severity));
+    features[17] = std::max(0.0, std::min(1.0, station->confidence));
+    features[18] = station->lastPacketSuccess ? 1.0 : 0.0;
+
+    // Network configuration features (2 features)
+    features[19] = static_cast<double>(GetChannelWidth(st));
+    features[20] = GetMobilityMetric(st);
 
     return features;
 }
 
-// FIXED: Enhanced ML inference with proper validation
+// ML Inference with enhanced error handling
 SmartWifiManagerRf::InferenceResult
 SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
 {
@@ -546,11 +709,9 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     result.confidence = 0.0;
     result.model = m_modelName;
 
-    // FIXED: Validate 28 features
-    if (features.size() != 28)
+    if (features.size() != 21)
     {
-        result.error = "Invalid feature count: expected 28, got " + std::to_string(features.size());
-        std::cout << "[ERROR FIXED ML] " << result.error << std::endl;
+        result.error = "Invalid feature count: expected 21, got " + std::to_string(features.size());
         return result;
     }
 
@@ -565,7 +726,7 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
 
     struct timeval timeout;
     timeout.tv_sec = 0;
-    timeout.tv_usec = 200000; // 200ms timeout
+    timeout.tv_usec = 150000; // 150ms timeout
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
@@ -582,7 +743,6 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
         return result;
     }
 
-    // Send request with 28 features + model name
     std::ostringstream featStream;
     for (size_t i = 0; i < features.size(); ++i)
     {
@@ -605,7 +765,6 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
         return result;
     }
 
-    // Receive response
     std::string response;
     char buffer[4096];
     ssize_t received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
@@ -636,7 +795,6 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
                 result.rateIdx = static_cast<uint32_t>(std::max(0.0, std::min(7.0, rate_val)));
                 result.success = true;
 
-                // Get confidence
                 size_t conf_pos = response.find("\"confidence\":");
                 if (conf_pos != std::string::npos)
                 {
@@ -663,7 +821,540 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     return result;
 }
 
-// Helper functions for 28 features (unchanged, but verified to work with realistic SNR)
+// REVOLUTIONARY: The main rate decision engine - ML-FIRST APPROACH
+WifiTxVector
+SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWidth)
+{
+    NS_LOG_FUNCTION(this << st << allowedWidth);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+
+    uint32_t supportedRates = GetNSupported(st);
+    uint32_t maxRateIndex =
+        std::min(supportedRates > 0 ? supportedRates - 1 : 0, static_cast<uint32_t>(7));
+
+    // Stage 1: Context and Safety Assessment
+    SafetyAssessment safety = AssessNetworkSafety(station);
+    safety.managerRef = this;              // FIXED: Safe reference pattern
+    safety.stationId = station->stationId; // FIXED: Station identification
+
+    // Stage 2: Rule-Based Baseline
+    uint32_t ruleRate = GetEnhancedRuleBasedRate(station, safety);
+
+    // Stage 3: AGGRESSIVE ML INFERENCE STRATEGY
+    uint32_t mlRate = ruleRate;
+    double mlConfidence = 0.0;
+    std::string mlStatus = "NO_ATTEMPT";
+
+    static uint64_t s_callCounter = 0;
+    ++s_callCounter;
+
+    Time now = Simulator::Now();
+
+    // FIXED: Thread-safe ML cache access
+    bool canUseCachedMl = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mlCacheMutex);
+        canUseCachedMl =
+            (now - m_lastMlTime) < MilliSeconds(m_mlCacheTime) && m_lastMlTime > Seconds(0);
+    }
+
+    // ADAPTIVE INFERENCE FREQUENCY
+    uint32_t adaptiveInferencePeriod = m_inferencePeriod;
+
+    // MORE FREQUENT in good conditions
+    double currentDistance = m_benchmarkDistance.load();
+    uint32_t currentInterferers = m_currentInterferers.load();
+
+    if (currentDistance <= 30.0 && currentInterferers <= 1)
+    {
+        adaptiveInferencePeriod = std::max(static_cast<uint32_t>(8), m_inferencePeriod / 3);
+    }
+    // EVEN MORE FREQUENT if ML is performing well
+    if (station->recentMLAccuracy > 0.45)
+    {
+        adaptiveInferencePeriod = std::max(static_cast<uint32_t>(12), adaptiveInferencePeriod / 2);
+    }
+
+    bool needNewMlInference = !safety.requiresEmergencyAction &&
+                              safety.riskLevel < m_riskThreshold && !canUseCachedMl &&
+                              (s_callCounter % adaptiveInferencePeriod) == 0;
+
+    // FORCE MORE ML USAGE: Also try ML if conditions changed significantly
+    if (!needNewMlInference && !canUseCachedMl && !safety.requiresEmergencyAction)
+    {
+        // Force ML if we haven't used it recently and conditions aren't terrible
+        Time timeSinceLastML = now - station->lastMLInfluenceTime;
+        if (timeSinceLastML > MilliSeconds(500) && safety.riskLevel < 0.6)
+        {
+            needNewMlInference = true;
+            std::cout << "[FORCE ML] Haven't used ML recently, forcing inference" << std::endl;
+        }
+    }
+
+    if (canUseCachedMl)
+    {
+        std::lock_guard<std::mutex> lock(m_mlCacheMutex);
+        mlRate = m_lastMlRate;
+        mlConfidence = m_lastMlConfidence;
+        mlStatus = "CACHED";
+        m_mlCacheHits++;
+    }
+    else if (needNewMlInference)
+    {
+        mlStatus = "ATTEMPTING";
+        std::vector<double> features = ExtractFeatures(st);
+        InferenceResult result = RunMLInference(features);
+
+        if (result.success && result.confidence > 0.05) // Very aggressive minimum threshold
+        {
+            m_mlInferences++;
+            station->mlInferencesReceived++;
+            station->mlInferencesSuccessful++;
+
+            mlRate = std::min(result.rateIdx, maxRateIndex);
+            mlConfidence = result.confidence;
+
+            // Update cache with thread safety
+            {
+                std::lock_guard<std::mutex> lock(m_mlCacheMutex);
+                m_lastMlRate = mlRate;
+                m_lastMlTime = now;
+                m_lastMlConfidence = mlConfidence;
+            }
+
+            mlStatus = "SUCCESS";
+
+            // LEARNING: Update performance tracking
+            station->recentMLAccuracy = 0.9 * station->recentMLAccuracy + 0.1 * mlConfidence;
+            int contextIdx = static_cast<int>(safety.context);
+            if (contextIdx >= 0 && contextIdx < 6)
+            {
+                station->mlContextConfidence[contextIdx] =
+                    0.8 * station->mlContextConfidence[contextIdx] + 0.2 * mlConfidence;
+                station->mlContextUsage[contextIdx]++;
+            }
+
+            // FIXED: Call ML decision logging callback
+            try
+            {
+                LogEnhancedFeaturesAndRate(
+                    features,
+                    result.rateIdx,
+                    GetSupported(st, result.rateIdx).GetDataRate(allowedWidth),
+                    safety.contextStr,
+                    safety.riskLevel,
+                    ruleRate,
+                    mlConfidence,
+                    result.model,
+                    m_oracleStrategy);
+            }
+            catch (...)
+            {
+                // Ignore logging errors - don't let them break the main algorithm
+                std::cout << "[LOG ERROR] Failed to call external logging callback" << std::endl;
+            }
+
+            std::cout << "[ML-FIRST SUCCESS] Model=" << result.model << " Rate=" << result.rateIdx
+                      << " Conf=" << mlConfidence << " SNR=" << station->lastSnr << "dB"
+                      << std::endl;
+        }
+        else
+        {
+            m_mlFailures++;
+            mlRate = ruleRate;
+            mlConfidence = 0.0;
+            mlStatus = "FAILED";
+            std::cout << "[ML FAILED] Using rule-based fallback: " << ruleRate << std::endl;
+        }
+    }
+
+    // Stage 4: INTELLIGENT FUSION (The Magic Happens Here)
+    uint32_t finalRate = FuseMLAndRuleBased(mlRate, ruleRate, mlConfidence, safety, station);
+
+    // Stage 5: Final Safety and Tracking
+    finalRate = std::min(finalRate, maxRateIndex);
+    finalRate = std::max(finalRate, static_cast<uint32_t>(0));
+
+    // ENHANCED ANTI-THRASHING with ML awareness
+    if (finalRate != station->currentRateIndex)
+    {
+        // Track ML influence
+        bool wasMLInfluenced =
+            (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context));
+        if (wasMLInfluenced)
+        {
+            station->lastMLInfluencedRate = finalRate;
+            station->lastMLInfluenceTime = now;
+        }
+
+        // SMART anti-thrashing
+        if (station->rateChangeCount > 8 && mlConfidence < 0.2)
+        {
+            // Too many changes with low confidence = thrashing
+            uint32_t dampedRate = (station->currentRateIndex + finalRate) / 2;
+            std::cout << "[ANTI-THRASH] " << station->rateChangeCount
+                      << " changes, low ML conf -> Dampen " << finalRate << " to " << dampedRate
+                      << std::endl;
+            finalRate = dampedRate;
+        }
+
+        // Update tracking
+        station->previousRateIndex = station->currentRateIndex;
+        station->currentRateIndex = finalRate;
+        station->lastRateChangeTime = now;
+        station->rateChangeCount++;
+
+        station->rateHistory.push_back(finalRate);
+        if (station->rateHistory.size() > 20)
+        {
+            station->rateHistory.pop_front();
+        }
+    }
+
+    // COMPREHENSIVE LOGGING
+    std::string fusionType =
+        (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context))
+            ? "ML-LED"
+            : "RULE-LED";
+    std::cout << "[ML-FIRST DECISION] Call#" << s_callCounter << " | " << fusionType
+              << " | SNR=" << station->lastSnr << "dB | Context=" << safety.contextStr
+              << " | Distance=" << currentDistance << "m | Interferers=" << currentInterferers
+              << " | Rule=" << ruleRate << " | ML=" << mlRate << "(conf=" << mlConfidence << ")"
+              << " | Final=" << finalRate << " | Status=" << mlStatus
+              << " | Threshold=" << CalculateAdaptiveConfidenceThreshold(station, safety.context)
+              << std::endl;
+
+    WifiMode mode = GetSupported(st, finalRate);
+    uint64_t rate = mode.GetDataRate(allowedWidth);
+
+    if (m_currentRate != rate)
+    {
+        std::cout << "[RATE CHANGE] " << m_currentRate << " -> " << rate << " (index " << finalRate
+                  << ") | Strategy: " << m_oracleStrategy << std::endl;
+        m_currentRate = rate;
+    }
+
+    // In DoGetDataTxVector, after fusion but before return:
+    std::cout << "\n\n[FINAL RATE DEBUG] ML=" << mlRate << " Rule=" << ruleRate
+              << " MLConf=" << mlConfidence << " FinalRate=" << finalRate
+              << " DataRate=" << mode.GetDataRate(allowedWidth) << std::endl;
+
+    return WifiTxVector(
+        mode,
+        GetDefaultTxPowerLevel(),
+        GetPreambleForTransmission(mode.GetModulationClass(), GetShortPreambleEnabled()),
+        800,
+        1,
+        1,
+        0,
+        allowedWidth,
+        GetAggregation(st));
+}
+
+WifiTxVector
+SmartWifiManagerRf::DoGetRtsTxVector(WifiRemoteStation* st)
+{
+    NS_LOG_FUNCTION(this << st);
+    WifiMode mode = GetSupported(st, 0);
+    return WifiTxVector(
+        mode,
+        GetDefaultTxPowerLevel(),
+        GetPreambleForTransmission(mode.GetModulationClass(), GetShortPreambleEnabled()),
+        800,
+        1,
+        1,
+        0,
+        GetChannelWidth(st),
+        GetAggregation(st));
+}
+
+// Enhanced rule-based rate with ML awareness
+uint32_t
+SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
+                                             const SafetyAssessment& safety) const
+{
+    double snr = station->lastSnr;
+    double shortSuccRatio = 0.5;
+    if (!station->shortWindow.empty())
+    {
+        int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(), true);
+        shortSuccRatio = static_cast<double>(successes) / station->shortWindow.size();
+    }
+
+    uint32_t baseRate;
+    if (snr >= 30)
+        baseRate = 7;
+    else if (snr >= 20)
+        baseRate = 6;
+    else if (snr >= 15)
+        baseRate = 5;
+    else if (snr >= 10)
+        baseRate = 4;
+    else if (snr >= 5)
+        baseRate = 3;
+    else if (snr >= 0)
+        baseRate = 2;
+    else if (snr >= -10)
+        baseRate = 1;
+    else
+        baseRate = 0;
+
+    uint32_t adjustedRate = baseRate;
+
+    // Success-based adjustments (less conservative than before)
+    if (shortSuccRatio > 0.9 && station->consecSuccess > 50)
+    {
+        adjustedRate = std::min(baseRate + 1, static_cast<uint32_t>(7));
+    }
+    else if (shortSuccRatio < 0.6 || station->consecFailure > 3)
+    {
+        adjustedRate = (baseRate > 0) ? baseRate - 1 : 0;
+    }
+
+    // ML-AWARE ADJUSTMENT: If ML has been performing well, be slightly more optimistic
+    if (station->recentMLAccuracy > 0.4 && station->mlInferencesSuccessful > 8)
+    {
+        if (shortSuccRatio > 0.8 && adjustedRate < 6)
+        {
+            adjustedRate = std::min(adjustedRate + 1, static_cast<uint32_t>(6));
+            std::cout << "[ML-AWARE RULE] Good ML track -> Optimistic rule boost to "
+                      << adjustedRate << std::endl;
+        }
+    }
+
+    return adjustedRate;
+}
+
+// Safety assessment (enhanced but not overly conservative)
+SafetyAssessment
+SmartWifiManagerRf::AssessNetworkSafety(SmartWifiManagerRfState* station)
+{
+    SafetyAssessment assessment;
+    assessment.context = ClassifyNetworkContext(station);
+    assessment.riskLevel = CalculateRiskLevel(station);
+    assessment.recommendedSafeRate = GetContextSafeRate(station, assessment.context);
+
+    // Less trigger-happy emergency conditions
+    assessment.requiresEmergencyAction =
+        (assessment.context == WifiContextType::EMERGENCY ||
+         station->consecFailure >= m_failureThreshold || assessment.riskLevel > m_riskThreshold);
+
+    assessment.confidenceInAssessment = 1.0 - assessment.riskLevel;
+    assessment.contextStr = ContextTypeToString(assessment.context);
+    station->lastContext = assessment.context;
+    station->lastRiskLevel = assessment.riskLevel;
+
+    // FIXED: Set safe references for fusion access
+    assessment.managerRef = this;
+    assessment.stationId = station->stationId;
+
+    return assessment;
+}
+
+double
+SmartWifiManagerRf::CalculateRiskLevel(SmartWifiManagerRfState* station) const
+{
+    double risk = 0.0;
+    risk += (station->consecFailure >= m_failureThreshold) ? 0.4 : 0.0; // Reduced
+    risk += (station->snrVariance > 8.0) ? 0.2 : 0.0;                   // Less sensitive
+    risk += (station->lastSnr < 0.0) ? 0.3 : 0.0;                       // Only very poor SNR
+    risk += std::max(0.0, 1.0 - station->confidence) * 0.3;             // Reduced impact
+    return std::min(1.0, risk);
+}
+
+uint32_t
+SmartWifiManagerRf::GetContextSafeRate(SmartWifiManagerRfState* station,
+                                       WifiContextType context) const
+{
+    switch (context)
+    {
+    case WifiContextType::EMERGENCY:
+        return 0;
+    case WifiContextType::POOR_UNSTABLE:
+        return 1;
+    case WifiContextType::MARGINAL:
+        return 3;
+    case WifiContextType::GOOD_UNSTABLE:
+        return 5;
+    case WifiContextType::GOOD_STABLE:
+        return 6;
+    case WifiContextType::EXCELLENT_STABLE:
+        return 7;
+    default:
+        return m_fallbackRate;
+    }
+}
+
+// SNR reporting methods with thread-safe conversion
+void
+SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode txMode)
+{
+    NS_LOG_FUNCTION(this << st << rxSnr << txMode);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+
+    station->lastRawSnr = rxSnr;
+    double realisticSnr = ConvertToRealisticSnr(rxSnr);
+    station->lastSnr = realisticSnr;
+
+    station->snrHistory.push_back(realisticSnr);
+    station->rawSnrHistory.push_back(rxSnr);
+    if (station->snrHistory.size() > 20)
+    {
+        station->snrHistory.pop_front();
+        station->rawSnrHistory.pop_front();
+    }
+
+    if (station->snrFast == 0.0)
+    {
+        station->snrFast = realisticSnr;
+        station->snrSlow = realisticSnr;
+    }
+    else
+    {
+        station->snrFast = m_snrAlpha * realisticSnr + (1 - m_snrAlpha) * station->snrFast;
+        station->snrSlow =
+            (m_snrAlpha / 10) * realisticSnr + (1 - m_snrAlpha / 10) * station->snrSlow;
+    }
+
+    UpdateMetrics(st, true, realisticSnr);
+}
+
+void
+SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
+                                   double ackSnr,
+                                   WifiMode ackMode,
+                                   double dataSnr,
+                                   uint16_t dataChannelWidth,
+                                   uint8_t dataNss)
+{
+    NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+
+    station->lastRawSnr = dataSnr;
+    double realisticDataSnr = ConvertToRealisticSnr(dataSnr);
+    station->lastSnr = realisticDataSnr;
+
+    station->retryCount = 0;
+    station->totalPackets++;
+    station->successfulRetries++;
+
+    UpdateMetrics(st, true, realisticDataSnr);
+}
+
+void
+SmartWifiManagerRf::DoReportDataFailed(WifiRemoteStation* st)
+{
+    NS_LOG_FUNCTION(this << st);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+    station->retryCount++;
+    station->totalRetries++;
+    station->lostPackets++;
+    UpdateMetrics(st, false, station->lastSnr);
+}
+
+void
+SmartWifiManagerRf::DoReportRtsFailed(WifiRemoteStation* st)
+{
+    NS_LOG_FUNCTION(this << st);
+    UpdateMetrics(st, false, static_cast<SmartWifiManagerRfState*>(st)->lastSnr);
+}
+
+void
+SmartWifiManagerRf::DoReportRtsOk(WifiRemoteStation* st,
+                                  double ctsSnr,
+                                  WifiMode ctsMode,
+                                  double rtsSnr)
+{
+    NS_LOG_FUNCTION(this << st << ctsSnr << ctsMode << rtsSnr);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+    station->lastRawSnr = rtsSnr;
+    double realisticRtsSnr = ConvertToRealisticSnr(rtsSnr);
+    station->lastSnr = realisticRtsSnr;
+}
+
+void
+SmartWifiManagerRf::DoReportFinalRtsFailed(WifiRemoteStation* st)
+{
+    NS_LOG_FUNCTION(this << st);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+    station->lostPackets++;
+    UpdateMetrics(st, false, station->lastSnr);
+}
+
+void
+SmartWifiManagerRf::DoReportFinalDataFailed(WifiRemoteStation* st)
+{
+    NS_LOG_FUNCTION(this << st);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+    station->lostPackets++;
+    UpdateMetrics(st, false, station->lastSnr);
+}
+
+// Enhanced metrics update
+void
+SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double snr)
+{
+    NS_LOG_FUNCTION(this << st << success << snr);
+    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
+    Time now = Simulator::Now();
+
+    if (snr >= -30.0 && snr <= 45.0)
+    {
+        if (station->snrFast == 0.0 && station->snrSlow == 0.0)
+        {
+            station->snrFast = snr;
+            station->snrSlow = snr;
+            station->snrVariance = 0.1;
+        }
+        else
+        {
+            double oldFast = station->snrFast;
+            station->snrFast = m_snrAlpha * snr + (1 - m_snrAlpha) * station->snrFast;
+            station->snrSlow = (m_snrAlpha / 10) * snr + (1 - m_snrAlpha / 10) * station->snrSlow;
+            double diff = snr - oldFast;
+            station->snrVariance = 0.9 * station->snrVariance + 0.1 * (diff * diff);
+        }
+    }
+
+    if (success)
+    {
+        station->consecSuccess++;
+        station->consecFailure = 0;
+        station->lastPacketSuccess = true;
+        station->shortWindow.push_back(true);
+        station->mediumWindow.push_back(true);
+    }
+    else
+    {
+        station->consecFailure++;
+        station->consecSuccess = 0;
+        station->lastPacketSuccess = false;
+        station->shortWindow.push_back(false);
+        station->mediumWindow.push_back(false);
+    }
+
+    if (station->shortWindow.size() > m_windowSize)
+    {
+        station->shortWindow.pop_front();
+    }
+    if (station->mediumWindow.size() > (m_windowSize * 2))
+    {
+        station->mediumWindow.pop_front();
+    }
+
+    double recentSuccessRate = 0.5;
+    if (!station->shortWindow.empty())
+    {
+        int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(), true);
+        recentSuccessRate = static_cast<double>(successes) / station->shortWindow.size();
+    }
+
+    station->confidence = 0.8 * station->confidence + 0.2 * recentSuccessRate;
+    station->severity = 1.0 - station->confidence;
+    station->lastUpdateTime = now;
+}
+
+// Helper functions
 double
 SmartWifiManagerRf::GetRetrySuccessRatio(WifiRemoteStation* st) const
 {
@@ -721,11 +1412,11 @@ SmartWifiManagerRf::GetSnrTrendShort(WifiRemoteStation* st) const
 
     for (size_t i = halfSize; i < station->snrHistory.size(); ++i)
     {
-        recent += station->snrHistory[i]; // Using REALISTIC SNR history
+        recent += station->snrHistory[i];
     }
     for (size_t i = 0; i < halfSize; ++i)
     {
-        older += station->snrHistory[i]; // Using REALISTIC SNR history
+        older += station->snrHistory[i];
     }
 
     if (halfSize > 0)
@@ -756,7 +1447,7 @@ SmartWifiManagerRf::GetSnrPredictionConfidence(WifiRemoteStation* st) const
 double
 SmartWifiManagerRf::GetOfferedLoad() const
 {
-    return 10.0; // Static for simulation
+    return 10.0;
 }
 
 double
@@ -769,642 +1460,14 @@ SmartWifiManagerRf::GetMobilityMetric(WifiRemoteStation* st) const
 }
 
 void
-SmartWifiManagerRf::LogFeatureVector(const std::vector<double>& features,
-                                     const std::string& context) const
-{
-    if (features.size() != 28)
-    {
-        std::cout << "[ERROR FIXED LOG] " << context << ": Expected 28 features, got "
-                  << features.size() << std::endl;
-        return;
-    }
-
-    std::cout << "[FIXED DEBUG " << context << "] 28 Features with REALISTIC SNR: ";
-    for (size_t i = 0; i < features.size(); ++i)
-    {
-        std::cout << "[" << i << "]=" << std::setprecision(4) << features[i] << " ";
-        if ((i + 1) % 7 == 0)
-            std::cout << std::endl << "    ";
-    }
-    std::cout << std::endl;
-}
-
-// FIXED: SNR reporting methods with consistent realistic conversion
-void
-SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode txMode)
-{
-    NS_LOG_FUNCTION(this << st << rxSnr << txMode);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-
-    // FIXED: Store raw NS-3 SNR first
-    station->lastRawSnr = rxSnr;
-
-    // FIXED: Convert to realistic SNR using current manager settings
-    double realisticSnr = ConvertToRealisticSnr(rxSnr);
-    station->lastSnr = realisticSnr;
-
-    std::cout << "[FIXED RX SNR] Raw NS-3=" << rxSnr << "dB -> Realistic=" << realisticSnr
-              << "dB (dist=" << m_benchmarkDistance << "m, intf=" << m_currentInterferers << ")"
-              << std::endl;
-
-    // FIXED: Update both histories consistently
-    station->snrHistory.push_back(realisticSnr);
-    station->rawSnrHistory.push_back(rxSnr);
-    if (station->snrHistory.size() > 20)
-    {
-        station->snrHistory.pop_front();
-        station->rawSnrHistory.pop_front();
-    }
-
-    UpdateMetrics(st, true, realisticSnr);
-}
-
-void
-SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
-                                   double ackSnr,
-                                   WifiMode ackMode,
-                                   double dataSnr,
-                                   uint16_t dataChannelWidth,
-                                   uint8_t dataNss)
-{
-    NS_LOG_FUNCTION(this << st << ackSnr << ackMode << dataSnr << dataChannelWidth << dataNss);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-
-    // FIXED: Store raw values first
-    station->lastRawSnr = dataSnr;
-
-    // FIXED: Convert using current manager settings
-    double realisticDataSnr = ConvertToRealisticSnr(dataSnr);
-    station->lastSnr = realisticDataSnr;
-
-    // FIXED: Reset retry count and update counters
-    station->retryCount = 0;
-    station->totalPackets++;
-    station->successfulRetries++;
-
-    std::cout << "[FIXED DATA OK] Raw NS-3=" << dataSnr << "dB -> Realistic=" << realisticDataSnr
-              << "dB (dist=" << m_benchmarkDistance << "m)" << std::endl;
-
-    UpdateMetrics(st, true, realisticDataSnr);
-}
-
-void
-SmartWifiManagerRf::DoReportRtsFailed(WifiRemoteStation* st)
-{
-    NS_LOG_FUNCTION(this << st);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    UpdateMetrics(st, false, station->lastSnr); // Use realistic SNR
-}
-
-void
-SmartWifiManagerRf::DoReportDataFailed(WifiRemoteStation* st)
-{
-    NS_LOG_FUNCTION(this << st);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    station->retryCount++;
-    station->totalRetries++;
-    station->lostPackets++;
-    UpdateMetrics(st, false, station->lastSnr); // Use realistic SNR
-}
-
-void
-SmartWifiManagerRf::DoReportRtsOk(WifiRemoteStation* st,
-                                  double ctsSnr,
-                                  WifiMode ctsMode,
-                                  double rtsSnr)
-{
-    NS_LOG_FUNCTION(this << st << ctsSnr << ctsMode << rtsSnr);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-
-    // FIXED: Convert RTS SNR to realistic
-    station->lastRawSnr = rtsSnr;
-    double realisticRtsSnr = ConvertToRealisticSnr(rtsSnr);
-    station->lastSnr = realisticRtsSnr;
-
-    std::cout << "[FIXED RTS OK] Raw NS-3=" << rtsSnr << "dB -> Realistic=" << realisticRtsSnr
-              << "dB (dist=" << m_benchmarkDistance << "m)" << std::endl;
-}
-
-void
-SmartWifiManagerRf::DoReportFinalRtsFailed(WifiRemoteStation* st)
-{
-    NS_LOG_FUNCTION(this << st);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    station->lostPackets++;
-    UpdateMetrics(st, false, station->lastSnr); // Use realistic SNR
-}
-
-void
-SmartWifiManagerRf::DoReportFinalDataFailed(WifiRemoteStation* st)
-{
-    NS_LOG_FUNCTION(this << st);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    station->lostPackets++;
-    UpdateMetrics(st, false, station->lastSnr); // Use realistic SNR
-}
-
-// FIXED: Main rate decision method with consistent realistic SNR usage
-WifiTxVector
-SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWidth)
-{
-    NS_LOG_FUNCTION(this << st << allowedWidth);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-
-    uint32_t maxRateIndex = GetNSupported(st) - 1;
-    maxRateIndex = std::min(maxRateIndex, static_cast<uint32_t>(7));
-
-    // Stage 1: Safety/Context Assessment using REALISTIC SNR
-    SafetyAssessment safety = AssessNetworkSafety(station);
-
-    // Stage 2: Rule-Based Decision using REALISTIC SNR
-    uint32_t primaryRate = GetEnhancedRuleBasedRate(station, safety);
-
-    // Stage 3: ML Guidance
-    uint32_t mlGuidance = primaryRate;
-    double mlConfidence = 0.0;
-    std::string mlStatus = "NO_ATTEMPT";
-
-    static uint64_t s_callCounter = 0;
-    ++s_callCounter;
-
-    Time now = Simulator::Now();
-    bool canUseCachedMl =
-        (now - m_lastMlTime) < MilliSeconds(m_mlCacheTime) && m_lastMlTime > Seconds(0);
-    bool needNewMlInference = !safety.requiresEmergencyAction &&
-                              safety.riskLevel < m_riskThreshold && !canUseCachedMl &&
-                              (s_callCounter % m_inferencePeriod) == 0;
-
-    if (canUseCachedMl)
-    {
-        mlGuidance = m_lastMlRate;
-        mlConfidence = m_lastMlConfidence;
-        mlStatus = "CACHED";
-        m_mlCacheHits++;
-    }
-    else if (needNewMlInference)
-    {
-        mlStatus = "ATTEMPTING";
-
-        std::vector<double> features = ExtractFeatures(st); // Uses REALISTIC SNR
-        InferenceResult result = RunMLInference(features);
-
-        if (result.success)
-        {
-            m_mlInferences++;
-            station->mlInferencesReceived++;
-            station->mlInferencesSuccessful++;
-
-            mlGuidance = std::min(result.rateIdx, maxRateIndex);
-            mlConfidence = result.confidence;
-
-            // Update cache
-            m_lastMlRate = mlGuidance;
-            m_lastMlTime = now;
-            m_lastMlConfidence = mlConfidence;
-            m_lastMlModel = result.model;
-
-            mlStatus = "SUCCESS";
-
-            std::cout << "[FIXED ML SUCCESS] Model: " << result.model
-                      << " Prediction: " << result.rateIdx << " -> " << mlGuidance
-                      << " Confidence: " << mlConfidence
-                      << " using REALISTIC SNR=" << station->lastSnr << "dB" << std::endl;
-        }
-        else
-        {
-            m_mlFailures++;
-            mlGuidance = primaryRate;
-            mlConfidence = 0.0;
-            mlStatus = "FAILED";
-        }
-    }
-    else
-    {
-        mlStatus = "SKIPPED";
-    }
-
-    // Stage 4: Intelligent Fusion
-    uint32_t finalRate = FuseMLAndRuleBased(mlGuidance, primaryRate, mlConfidence, safety);
-
-    // Stage 5: Final bounds and tracking
-    finalRate = std::min(finalRate, maxRateIndex);
-    finalRate = std::max(finalRate, static_cast<uint32_t>(0));
-
-    // Track rate changes
-    if (finalRate != station->currentRateIndex)
-    {
-        station->previousRateIndex = station->currentRateIndex;
-        station->currentRateIndex = finalRate;
-        station->lastRateChangeTime = now;
-        station->rateChangeCount++;
-
-        station->rateHistory.push_back(finalRate);
-        if (station->rateHistory.size() > 20)
-        {
-            station->rateHistory.pop_front();
-        }
-    }
-
-    std::cout << "[FIXED RATE DECISION] Call#" << s_callCounter
-              << " | Realistic SNR=" << station->lastSnr << "dB"
-              << " | Context=" << safety.contextStr << " | Risk=" << safety.riskLevel
-              << " | RuleRate=" << primaryRate << " | MLRate=" << mlGuidance
-              << "(conf=" << mlConfidence << ")"
-              << " | FinalRate=" << finalRate << " | Status=" << mlStatus << std::endl;
-
-    WifiMode mode = GetSupported(st, finalRate);
-    uint64_t rate = mode.GetDataRate(allowedWidth);
-
-    if (m_currentRate != rate)
-    {
-        std::cout << "[FIXED RATE CHANGE] " << m_currentRate << " -> " << rate << " (index "
-                  << finalRate << ") | Strategy: " << m_oracleStrategy << std::endl;
-        m_currentRate = rate;
-    }
-    // CONTINUATION OF smart-wifi-manager-rf.cc
-
-    return WifiTxVector(
-        mode,
-        GetDefaultTxPowerLevel(),
-        GetPreambleForTransmission(mode.GetModulationClass(), GetShortPreambleEnabled()),
-        800,
-        1,
-        1,
-        0,
-        allowedWidth,
-        GetAggregation(st));
-}
-
-WifiTxVector
-SmartWifiManagerRf::DoGetRtsTxVector(WifiRemoteStation* st)
-{
-    NS_LOG_FUNCTION(this << st);
-    WifiMode mode = GetSupported(st, 0);
-    return WifiTxVector(
-        mode,
-        GetDefaultTxPowerLevel(),
-        GetPreambleForTransmission(mode.GetModulationClass(), GetShortPreambleEnabled()),
-        800,
-        1,
-        1,
-        0,
-        GetChannelWidth(st),
-        GetAggregation(st));
-}
-
-// FIXED: Enhanced rule-based rate selection using REALISTIC SNR
-uint32_t
-SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
-                                             const SafetyAssessment& safety) const
-{
-    // FIXED: Use REALISTIC SNR, not raw NS-3
-    double snr = station->lastSnr; // This contains realistic SNR (-30 to +45 dB)
-    double shortSuccRatio = 0.5;
-    if (!station->shortWindow.empty())
-    {
-        int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(), true);
-        shortSuccRatio = static_cast<double>(successes) / station->shortWindow.size();
-    }
-
-    // FIXED: Use realistic SNR thresholds for WiFi
-    uint32_t baseRate;
-    if (snr >= 30)
-        baseRate = 7; // Excellent signal (realistic)
-    else if (snr >= 20)
-        baseRate = 6; // Very good signal
-    else if (snr >= 15)
-        baseRate = 5; // Good signal
-    else if (snr >= 10)
-        baseRate = 4; // Moderate signal
-    else if (snr >= 5)
-        baseRate = 3; // Acceptable signal
-    else if (snr >= 0)
-        baseRate = 2; // Weak signal
-    else if (snr >= -10)
-        baseRate = 1; // Very weak signal
-    else
-        baseRate = 0; // Poor signal
-
-    // FIXED: Apply success-based adjustments
-    uint32_t adjustedRate = baseRate;
-    std::string ruleReason = "REALISTIC_SNR_BASED";
-
-    if (shortSuccRatio > 0.95 && station->consecSuccess > 100)
-    {
-        adjustedRate = std::min(baseRate + 2, static_cast<uint32_t>(7)); // Reduced boost
-        ruleReason = "EXCELLENT_SUCCESS_BOOST";
-    }
-    else if (shortSuccRatio > 0.90 && station->consecSuccess > 20)
-    {
-        adjustedRate = std::min(baseRate + 1, static_cast<uint32_t>(7));
-        ruleReason = "GOOD_SUCCESS_BOOST";
-    }
-    else if (shortSuccRatio < 0.7 || station->consecFailure > 2)
-    {
-        adjustedRate = (baseRate > 0) ? baseRate - 1 : 0;
-        ruleReason = "POOR_PERFORMANCE_REDUCTION";
-    }
-
-    std::cout << "[FIXED RULE LOGIC] Realistic SNR=" << snr << "dB, SuccRatio=" << shortSuccRatio
-              << ", ConsecSucc=" << station->consecSuccess << " | BaseRate=" << baseRate
-              << " -> AdjustedRate=" << adjustedRate << " (" << ruleReason << ")" << std::endl;
-
-    return adjustedRate;
-}
-
-// FIXED: Intelligent fusion method
-uint32_t
-SmartWifiManagerRf::FuseMLAndRuleBased(uint32_t mlRate,
-                                       uint32_t ruleRate,
-                                       double mlConfidence,
-                                       const SafetyAssessment& safety) const
-{
-    if (safety.requiresEmergencyAction)
-    {
-        return safety.recommendedSafeRate;
-    }
-
-    if (mlConfidence > m_confidenceThreshold)
-    {
-        if (m_enableAdaptiveWeighting)
-        {
-            // Adaptive weighting based on confidence
-            double adaptiveWeight =
-                std::min(0.9, m_mlGuidanceWeight * (mlConfidence / m_confidenceThreshold));
-            double ruleWeight = 1.0 - adaptiveWeight;
-
-            double blendedRate = (adaptiveWeight * mlRate) + (ruleWeight * ruleRate);
-            uint32_t finalRate = static_cast<uint32_t>(std::round(blendedRate));
-
-            // Apply conservative boost if enabled
-            if (m_conservativeBoost > 1.0 && safety.riskLevel > 0.3)
-            {
-                finalRate = static_cast<uint32_t>(finalRate / m_conservativeBoost);
-            }
-
-            return std::min(finalRate, ruleRate + 2); // Safety clamp
-        }
-        else
-        {
-            // Fixed weighting
-            double blendedRate =
-                (m_mlGuidanceWeight * mlRate) + ((1.0 - m_mlGuidanceWeight) * ruleRate);
-            return static_cast<uint32_t>(std::round(blendedRate));
-        }
-    }
-    else
-    {
-        // Low confidence: use rule-based with slight ML influence if cached
-        if (mlConfidence > 0.2)
-        {
-            return static_cast<uint32_t>((0.8 * ruleRate) + (0.2 * mlRate));
-        }
-        return ruleRate;
-    }
-}
-
-// FIXED: Enhanced safety assessment using REALISTIC SNR
-SmartWifiManagerRf::SafetyAssessment
-SmartWifiManagerRf::AssessNetworkSafety(SmartWifiManagerRfState* station)
-{
-    SafetyAssessment assessment;
-    assessment.context = ClassifyNetworkContext(station);
-    assessment.riskLevel = CalculateRiskLevel(station);
-    assessment.recommendedSafeRate = GetContextSafeRate(station, assessment.context);
-    assessment.requiresEmergencyAction =
-        (assessment.context == WifiContextType::EMERGENCY ||
-         station->consecFailure >= m_failureThreshold || assessment.riskLevel > m_riskThreshold);
-    assessment.confidenceInAssessment = 1.0 - assessment.riskLevel;
-    assessment.contextStr = ContextTypeToString(assessment.context);
-    station->lastContext = assessment.context;
-    station->lastRiskLevel = assessment.riskLevel;
-    return assessment;
-}
-
-// FIXED: Context classification using REALISTIC SNR
-WifiContextType
-SmartWifiManagerRf::ClassifyNetworkContext(SmartWifiManagerRfState* station) const
-{
-    // FIXED: Use realistic SNR for context classification
-    double snr = station->lastSnr; // Contains realistic SNR
-    double shortSuccRatio = 0.5;
-    if (!station->shortWindow.empty())
-    {
-        shortSuccRatio =
-            static_cast<double>(
-                std::count(station->shortWindow.begin(), station->shortWindow.end(), true)) /
-            station->shortWindow.size();
-    }
-
-    WifiContextType result;
-
-    // FIXED: Use realistic WiFi SNR ranges for context
-    if (snr < -20.0 || shortSuccRatio < 0.3 || station->consecFailure >= m_failureThreshold)
-    {
-        result = WifiContextType::EMERGENCY;
-    }
-    else if (snr < -10.0 || shortSuccRatio < 0.6)
-    {
-        result = WifiContextType::POOR_UNSTABLE;
-    }
-    else if (snr < 5.0 || shortSuccRatio < 0.8)
-    {
-        result = WifiContextType::MARGINAL;
-    }
-    else if (snr >= 25.0 && shortSuccRatio > 0.95)
-    {
-        result = WifiContextType::EXCELLENT_STABLE;
-    }
-    else if (snr >= 15.0 && shortSuccRatio > 0.85)
-    {
-        result = WifiContextType::GOOD_STABLE;
-    }
-    else
-    {
-        result = WifiContextType::GOOD_UNSTABLE; // Default case
-    }
-
-    std::cout << "[FIXED CONTEXT] Realistic SNR=" << snr << "dB, SuccRatio=" << shortSuccRatio
-              << " -> Context=" << ContextTypeToString(result) << std::endl;
-
-    return result;
-}
-
-std::string
-SmartWifiManagerRf::ContextTypeToString(WifiContextType type) const
-{
-    switch (type)
-    {
-    case WifiContextType::EMERGENCY:
-        return "emergency_recovery";
-    case WifiContextType::POOR_UNSTABLE:
-        return "poor_unstable";
-    case WifiContextType::MARGINAL:
-        return "marginal_conditions";
-    case WifiContextType::GOOD_UNSTABLE:
-        return "good_unstable";
-    case WifiContextType::GOOD_STABLE:
-        return "good_stable";
-    case WifiContextType::EXCELLENT_STABLE:
-        return "excellent_stable";
-    default:
-        return "unknown";
-    }
-}
-
-double
-SmartWifiManagerRf::CalculateRiskLevel(SmartWifiManagerRfState* station) const
-{
-    double risk = 0.0;
-    risk += (station->consecFailure >= m_failureThreshold) ? 0.5 : 0.0;
-    risk += (station->snrVariance > 5.0) ? 0.25 : 0.0;
-    risk += (station->lastSnr < 5.0) ? 0.25 : 0.0; // Using realistic SNR
-    risk += std::max(0.0, 1.0 - station->confidence);
-    risk = std::min(1.0, risk);
-    return risk;
-}
-
-uint32_t
-SmartWifiManagerRf::GetContextSafeRate(SmartWifiManagerRfState* station,
-                                       WifiContextType context) const
-{
-    switch (context)
-    {
-    case WifiContextType::EMERGENCY:
-        return 0;
-    case WifiContextType::POOR_UNSTABLE:
-        return 1;
-    case WifiContextType::MARGINAL:
-        return 3;
-    case WifiContextType::GOOD_UNSTABLE:
-        return 5;
-    case WifiContextType::GOOD_STABLE:
-        return 6;
-    case WifiContextType::EXCELLENT_STABLE:
-        return 7;
-    default:
-        return m_fallbackRate;
-    }
-}
-
-uint32_t
-SmartWifiManagerRf::GetRuleBasedRate(SmartWifiManagerRfState* station) const
-{
-    return GetContextSafeRate(station, ClassifyNetworkContext(station));
-}
-
-// FIXED: UpdateMetrics with proper realistic SNR handling
-void
-SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double snr)
-{
-    NS_LOG_FUNCTION(this << st << success << snr);
-    SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    Time now = Simulator::Now();
-
-    // FIXED: Ensure SNR is realistic (should already be converted by caller)
-    if (snr >= -30.0 && snr <= 45.0)
-    { // Realistic WiFi SNR bounds
-        // Update exponential moving averages
-        if (station->snrFast == 0.0 && station->snrSlow == 0.0)
-        {
-            station->snrFast = snr;
-            station->snrSlow = snr;
-            station->snrVariance = 0.1;
-            std::cout << "[FIXED METRICS INIT] Initialized SNR averages to " << snr
-                      << "dB (realistic)" << std::endl;
-        }
-        else
-        {
-            double oldFast = station->snrFast;
-            station->snrFast = m_snrAlpha * snr + (1 - m_snrAlpha) * station->snrFast;
-            station->snrSlow = (m_snrAlpha / 10) * snr + (1 - m_snrAlpha / 10) * station->snrSlow;
-
-            // Update variance
-            double diff = snr - oldFast;
-            station->snrVariance = 0.9 * station->snrVariance + 0.1 * (diff * diff);
-        }
-
-        std::cout << "[FIXED METRICS UPDATE] SNR=" << snr
-                  << "dB (realistic), Fast=" << station->snrFast << "dB, Slow=" << station->snrSlow
-                  << "dB, Variance=" << station->snrVariance << std::endl;
-    }
-    else
-    {
-        std::cout << "[ERROR METRICS] SNR out of realistic range: " << snr
-                  << "dB, expected [-30, 45] dB" << std::endl;
-    }
-
-    // FIXED: Success/failure tracking
-    if (success)
-    {
-        station->consecSuccess++;
-        station->consecFailure = 0;
-        station->lastPacketSuccess = true;
-
-        // Update short-term success window
-        station->shortWindow.push_back(true);
-        station->mediumWindow.push_back(true);
-    }
-    else
-    {
-        station->consecFailure++;
-        station->consecSuccess = 0;
-        station->lastPacketSuccess = false;
-
-        station->shortWindow.push_back(false);
-        station->mediumWindow.push_back(false);
-    }
-
-    // FIXED: Maintain window sizes
-    if (station->shortWindow.size() > m_windowSize)
-    {
-        station->shortWindow.pop_front();
-    }
-    if (station->mediumWindow.size() > (m_windowSize * 2))
-    {
-        station->mediumWindow.pop_front();
-    }
-
-    // FIXED: Update confidence and severity based on recent performance
-    double recentSuccessRate = 0.5;
-    if (!station->shortWindow.empty())
-    {
-        int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(), true);
-        recentSuccessRate = static_cast<double>(successes) / station->shortWindow.size();
-    }
-
-    station->confidence = 0.8 * station->confidence + 0.2 * recentSuccessRate;
-    station->severity = 1.0 - station->confidence; // Inverse relationship
-
-    station->lastUpdateTime = now;
-
-    std::cout << "[FIXED METRICS FINAL] Success=" << success
-              << ", ConsecSucc=" << station->consecSuccess
-              << ", ConsecFail=" << station->consecFailure << ", Confidence=" << station->confidence
-              << ", Severity=" << station->severity << std::endl;
-}
-
-void
-SmartWifiManagerRf::LogContextAndDecision(const SafetyAssessment& safety,
-                                          uint32_t mlRate,
-                                          uint32_t ruleRate,
-                                          uint32_t finalRate) const
-{
-    std::cout << "[FIXED CONTEXT] Context=" << safety.contextStr << " Risk=" << safety.riskLevel
-              << " Emergency=" << safety.requiresEmergencyAction
-              << " RecommendedSafeRate=" << safety.recommendedSafeRate << " MLRate=" << mlRate
-              << " RuleRate=" << ruleRate << " FinalRate=" << finalRate << std::endl;
-}
-
-void
 SmartWifiManagerRf::DebugPrintCurrentConfig() const
 {
-    std::cout << "[MANAGER CONFIG] Distance: " << m_benchmarkDistance << "m" << std::endl;
-    std::cout << "[MANAGER CONFIG] Interferers: " << m_currentInterferers << std::endl;
-    std::cout << "[MANAGER CONFIG] Strategy: " << m_oracleStrategy << std::endl;
-    std::cout << "[MANAGER CONFIG] Model: " << m_modelName << std::endl;
-    std::cout << "[MANAGER CONFIG] SNR Range: [" << m_minSnrDb << ", " << m_maxSnrDb << "] dB"
-              << std::endl;
+    std::cout << "[ML-FIRST CONFIG] Distance: " << m_benchmarkDistance.load() << "m" << std::endl;
+    std::cout << "[ML-FIRST CONFIG] Interferers: " << m_currentInterferers.load() << std::endl;
+    std::cout << "[ML-FIRST CONFIG] Strategy: " << m_oracleStrategy << std::endl;
+    std::cout << "[ML-FIRST CONFIG] Confidence Threshold: " << m_confidenceThreshold
+              << " (adaptive)" << std::endl;
+    std::cout << "[ML-FIRST CONFIG] ML Weight: " << m_mlGuidanceWeight << std::endl;
 }
 
 } // namespace ns3

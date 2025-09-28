@@ -36,7 +36,7 @@ class ModelConfig:
     model_path: str
     scaler_path: str
     description: str = ""
-    features_count: int = 28  # FIXED: 28 safe features
+    features_count: int = 21  # FIXED: Changed from 28 to 21
     rate_classes: int = 8
 
 @dataclass
@@ -53,51 +53,62 @@ class ServerConfig:
 
 # ================== FEATURE DEFINITIONS ==================
 class WiFiFeatures:
-    """WiFi feature definitions and validation - UPDATED for 28 safe features."""
+    """WiFi feature definitions and validation - UPDATED for 21 safe features."""
     
-    # FIXED: 28 safe features matching your training script exactly
+    # FIXED: 21 safe features matching your training script exactly
     FEATURE_NAMES = [
+        # SNR features (7)
         "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
-        "snrStabilityIndex", "snrPredictionConfidence", "shortSuccRatio", "medSuccRatio", 
-        "consecSuccess", "consecFailure", "packetLossRate",
-        "retrySuccessRatio", "recentRateChanges", "timeSinceLastRateChange", 
-        "rateStabilityScore", "severity", "confidence",
-        "T1", "T2", "T3", "decisionReason", "packetSuccess", "offeredLoad", 
-        "queueLen", "retryCount", "channelWidth", "mobilityMetric", "snrVariance"
+        "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
+        
+        # Performance features (6) 
+        "shortSuccRatio", "medSuccRatio", "consecSuccess", "consecFailure",
+        "packetLossRate", "retrySuccessRatio",
+        
+        # Rate adaptation features (3)
+        "recentRateChanges", "timeSinceLastRateChange", "rateStabilityScore",
+        
+        # Network assessment features (3)
+        "severity", "confidence", "packetSuccess",
+        
+        # Network configuration features (2)
+        "channelWidth", "mobilityMetric"
     ]
     
-    # FIXED: Updated ranges for 28 safe features (indices 0-27)
+    # FIXED: Updated ranges for 21 safe features (indices 0-20)
     FEATURE_RANGES = {
+        # SNR features (7)
         0: (-5.0, 40.0, "lastSnr (dB)"),
         1: (-5.0, 40.0, "snrFast (dB)"),
         2: (-5.0, 40.0, "snrSlow (dB)"),
         3: (-10.0, 10.0, "snrTrendShort"),
         4: (0.0, 10.0, "snrStabilityIndex"),
         5: (0.0, 1.0, "snrPredictionConfidence"),
-        6: (0.0, 1.0, "shortSuccRatio"),
-        7: (0.0, 1.0, "medSuccRatio"),
-        8: (0, float('inf'), "consecSuccess"),
-        9: (0, float('inf'), "consecFailure"),
-        10: (0.0, 1.0, "packetLossRate"),
-        11: (0.0, 1.0, "retrySuccessRatio"),
-        12: (0, 100, "recentRateChanges"),
-        13: (0.0, 1e6, "timeSinceLastRateChange (ms)"),
-        14: (0.0, 1.0, "rateStabilityScore"),
-        15: (0.0, 1.0, "severity"),
-        16: (0.0, 1.0, "confidence"),
-        17: (0.0, 1e6, "T1 (ms)"),
-        18: (0.0, 1e6, "T2 (ms)"),
-        19: (0.0, 1e6, "T3 (ms)"),
-        20: (0.0, 100.0, "decisionReason"),
-        21: (0.0, 1.0, "packetSuccess"),
-        22: (0.0, 1e9, "offeredLoad"),
-        23: (0.0, 1e7, "queueLen"),
-        24: (0.0, 100.0, "retryCount"),
-        25: (5.0, 160.0, "channelWidth (MHz)"),
-        26: (0.0, 1.0, "mobilityMetric"),
-        27: (0.0, 100.0, "snrVariance")
+        6: (0.0, 100.0, "snrVariance"),
+        
+        # Performance features (6)
+        7: (0.0, 1.0, "shortSuccRatio"),
+        8: (0.0, 1.0, "medSuccRatio"),
+        9: (0, float('inf'), "consecSuccess"),
+        10: (0, float('inf'), "consecFailure"),
+        11: (0.0, 1.0, "packetLossRate"),
+        12: (0.0, 1.0, "retrySuccessRatio"),
+        
+        # Rate adaptation features (3)
+        13: (0, 100, "recentRateChanges"),
+        14: (0.0, 1e6, "timeSinceLastRateChange (ms)"),
+        15: (0.0, 1.0, "rateStabilityScore"),
+        
+        # Network assessment features (3)
+        16: (0.0, 1.0, "severity"),
+        17: (0.0, 1.0, "confidence"),
+        18: (0.0, 1.0, "packetSuccess"),
+        
+        # Network configuration features (2)
+        19: (5.0, 160.0, "channelWidth (MHz)"),
+        20: (0.0, 1.0, "mobilityMetric")
     }
-    
+
     @classmethod
     def clamp_features_inplace(cls, arr: np.ndarray) -> List[str]:
         """Clamp features to realistic ranges IN-PLACE. Returns list of warnings."""
@@ -245,8 +256,8 @@ class EnhancedMLInferenceServer:
         self.logger = logging.getLogger('MLInferenceServer')
         self.logger.info(f"🚀 Enhanced ML Inference Server v2.0 initializing...")
         self.logger.info(f"👤 Author: ahmedjk34 (https://github.com/ahmedjk34)")
-        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (safe features only)")
-    
+        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (safe features only)")    
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully."""
         self.logger.info(f"Received signal {signum}, shutting down gracefully...")
@@ -441,8 +452,8 @@ class EnhancedMLInferenceServer:
             if not data:
                 return
             
-            self.logger.debug(f"[{client_id}] 📨 Received: {data[:100]}...")
-            
+            self.logger.debug(f"[{client_id}] 📨 Received: {data[:100]}...")       
+
             # Handle special commands
             if data.strip() == "SHUTDOWN":
                 self.logger.info(f"[{client_id}] 🛑 Shutdown requested")
@@ -478,12 +489,12 @@ class EnhancedMLInferenceServer:
                 
                 # Check if last part is a model name
                 model_name = None
-                if len(parts) > 28 and parts[-1] in self.models:  # FIXED: 28 features
+                if len(parts) > 21 and parts[-1] in self.models:  # FIXED: 21 features
                     model_name = parts[-1]
                     features = [float(x) for x in parts[:-1]]
                 else:
                     features = [float(x) for x in parts]
-                
+
                 result = self.predict(features, model_name)
                 
             except Exception as e:
@@ -536,8 +547,7 @@ class EnhancedMLInferenceServer:
             self.logger.info(f"📊 Loaded models: {list(self.models.keys())}")
             self.logger.info(f"📈 Monitoring enabled: {self.config.enable_monitoring}")
             self.logger.info(f"🔧 Max connections: {self.config.max_connections}")
-            self.logger.info(f"🔢 Features expected: {len(WiFiFeatures.FEATURE_NAMES)} (safe features only)")
-            
+            self.logger.info(f"🔢 Features expected: {len(WiFiFeatures.FEATURE_NAMES)} (safe features only)")            
             # Print available commands
             self.logger.info("📋 Available commands: INFO, STATS, MODELS, SHUTDOWN")
             
@@ -606,16 +616,16 @@ def create_default_config(config_path: str):
                 "name": "oracle_balanced",
                 "model_path": "step3_rf_oracle_balanced_model_FIXED.joblib",
                 "scaler_path": "step3_scaler_oracle_balanced_FIXED.joblib",
-                "description": "Oracle balanced strategy - optimal for real-world scenarios (98.1% CV accuracy)",
-                "features_count": 28,
+                "description": "Oracle balanced strategy - optimal for real-world scenarios",
+                "features_count": 21,  # FIXED: Changed from 28 to 21
                 "rate_classes": 8
             },
             {
                 "name": "rateIdx",
                 "model_path": "step3_rf_rateIdx_model_FIXED.joblib", 
-                "scaler_path": "step3_scaler_FIXED.joblib",
-                "description": "Original rateIdx model - current protocol behavior (97.8% CV accuracy)",
-                "features_count": 28,
+                "scaler_path": "step3_scaler_rateIdx_FIXED.joblib",
+                "description": "Original rateIdx model - current protocol behavior",
+                "features_count": 21,  # FIXED: Changed from 28 to 21
                 "rate_classes": 8
             }
         ]
