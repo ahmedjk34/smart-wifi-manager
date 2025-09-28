@@ -472,7 +472,6 @@ SmartWifiManagerRf::ApplyRealisticSnrBounds(double snr) const
     return std::max(m_minSnrDb, std::min(m_maxSnrDb, snr + m_snrOffset));
 }
 
-// FIXED: Enhanced feature extraction for 28 safe features
 std::vector<double>
 SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
 {
@@ -494,41 +493,56 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
         medSuccRatio = static_cast<double>(successes) / station->mediumWindow.size();
     }
 
-    // FIXED: 28 safe features using REALISTIC SNR consistently
-    std::vector<double> features(28);
+    // FIXED: 18 SAFE features only - NO DATA LEAKAGE
+    std::vector<double> features(18);
 
-    features[0] = station->lastSnr;                             // REALISTIC SNR
-    features[1] = station->snrFast;                             // REALISTIC SNR Fast
-    features[2] = station->snrSlow;                             // REALISTIC SNR Slow
-    features[3] = GetSnrTrendShort(st);                         // SNR trend
-    features[4] = GetSnrStabilityIndex(st);                     // SNR stability
-    features[5] = GetSnrPredictionConfidence(st);               // SNR prediction confidence
-    features[6] = std::max(0.0, std::min(1.0, shortSuccRatio)); // Short success ratio
-    features[7] = std::max(0.0, std::min(1.0, medSuccRatio));   // Medium success ratio
-    features[8] =
-        std::min(100.0, static_cast<double>(station->consecSuccess)); // Consecutive successes
+    // SNR features (7 features)
+    features[0] = station->lastSnr;                                     // REALISTIC SNR
+    features[1] = station->snrFast;                                     // REALISTIC SNR Fast
+    features[2] = station->snrSlow;                                     // REALISTIC SNR Slow
+    features[3] = GetSnrTrendShort(st);                                 // SNR trend
+    features[4] = GetSnrStabilityIndex(st);                             // SNR stability
+    features[5] = GetSnrPredictionConfidence(st);                       // SNR prediction confidence
+    features[6] = std::max(0.0, std::min(100.0, station->snrVariance)); // SNR variance
+
+    // Performance features (6 features)
+    features[7] = std::max(0.0, std::min(1.0, shortSuccRatio)); // Short success ratio
+    features[8] = std::max(0.0, std::min(1.0, medSuccRatio));   // Medium success ratio
     features[9] =
+        std::min(100.0, static_cast<double>(station->consecSuccess)); // Consecutive successes
+    features[10] =
         std::min(100.0, static_cast<double>(station->consecFailure)); // Consecutive failures
-    features[10] = GetPacketLossRate(st);                             // Packet loss rate
-    features[11] = GetRetrySuccessRatio(st);                          // Retry success ratio
-    features[12] = static_cast<double>(GetRecentRateChanges(st));     // Recent rate changes
-    features[13] = GetTimeSinceLastRateChange(st);                    // Time since last rate change
-    features[14] = GetRateStabilityScore(st);                         // Rate stability score
-    features[15] = std::max(0.0, std::min(1.0, station->severity));   // Severity
-    features[16] = std::max(0.0, std::min(1.0, station->confidence)); // Confidence
-    features[17] = static_cast<double>(station->T1);                  // T1
-    features[18] = static_cast<double>(station->T2);                  // T2
-    features[19] = static_cast<double>(station->T3);                  // T3
-    features[20] = static_cast<double>(station->decisionReason);      // Decision reason
-    features[21] = station->lastPacketSuccess ? 1.0 : 0.0;            // Packet success
-    features[22] = GetOfferedLoad();                                  // Offered load
-    features[23] = static_cast<double>(station->queueLength);         // Queue length
-    features[24] = static_cast<double>(station->retryCount);          // Retry count
-    features[25] = static_cast<double>(GetChannelWidth(st));          // Channel width
-    features[26] = GetMobilityMetric(st);                             // Mobility metric
-    features[27] = std::max(0.0, std::min(100.0, station->snrVariance)); // SNR variance
+    features[11] = GetPacketLossRate(st);                             // Packet loss rate
+    features[12] = GetRetrySuccessRatio(st);                          // Retry success ratio
 
-    std::cout << "[FIXED FEATURES] 28 Features with REALISTIC SNR: lastSnr=" << features[0]
+    // Rate adaptation features (3 features)
+    features[13] = static_cast<double>(GetRecentRateChanges(st)); // Recent rate changes
+    features[14] = GetTimeSinceLastRateChange(st);                // Time since last rate change
+    features[15] = GetRateStabilityScore(st);                     // Rate stability score
+
+    // Network assessment features (3 features)
+    features[16] = std::max(0.0, std::min(1.0, station->severity));   // Severity
+    features[17] = std::max(0.0, std::min(1.0, station->confidence)); // Confidence
+    features[18] = station->lastPacketSuccess ? 1.0 : 0.0;            // Packet success
+
+    // Network configuration features (2 features) - MOVED TO END
+    features[19] = static_cast<double>(GetChannelWidth(st)); // Channel width
+    features[20] = GetMobilityMetric(st);                    // Mobility metric
+
+    // REMOVED ALL LEAKY FEATURES:
+    // - phyRate: Perfect correlation with target
+    // - optimalRateDistance: 8 unique values = 8 classes
+    // - recentThroughputTrend: High correlation with target
+    // - conservativeFactor: Inverse correlation with target
+    // - aggressiveFactor: Related to conservative
+    // - recommendedSafeRate: Direct target hint
+    // - T1, T2, T3: Always constant (useless)
+    // - decisionReason: Always 0 (useless)
+    // - offeredLoad: Always 0 (useless)
+    // - queueLen: Always 0 (useless)
+    // - retryCount: Always 0 (useless)
+
+    std::cout << "[FIXED FEATURES] 18 SAFE Features (NO LEAKAGE): lastSnr=" << features[0]
               << "dB snrFast=" << features[1] << "dB snrSlow=" << features[2] << "dB" << std::endl;
 
     return features;
@@ -547,7 +561,7 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     result.model = m_modelName;
 
     // FIXED: Validate 28 features
-    if (features.size() != 28)
+    if (features.size() != 18)
     {
         result.error = "Invalid feature count: expected 28, got " + std::to_string(features.size());
         std::cout << "[ERROR FIXED ML] " << result.error << std::endl;
@@ -772,7 +786,7 @@ void
 SmartWifiManagerRf::LogFeatureVector(const std::vector<double>& features,
                                      const std::string& context) const
 {
-    if (features.size() != 28)
+    if (features.size() != 18)
     {
         std::cout << "[ERROR FIXED LOG] " << context << ": Expected 28 features, got "
                   << features.size() << std::endl;
