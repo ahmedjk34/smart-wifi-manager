@@ -155,7 +155,7 @@ SmartWifiManagerRf::GetTypeId()
                           MakeUintegerChecker<uint16_t>())
             .AddAttribute("ConfidenceThreshold",
                           "Base ML confidence threshold (adaptive)",
-                          DoubleValue(0.20), // ML-FIRST: Lower for more ML usage
+                          DoubleValue(0.15), // ML-FIRST: Even lower for maximum ML usage
                           MakeDoubleAccessor(&SmartWifiManagerRf::m_confidenceThreshold),
                           MakeDoubleChecker<double>())
             .AddAttribute("MLGuidanceWeight",
@@ -257,7 +257,7 @@ SmartWifiManagerRf::SmartWifiManagerRf()
       m_pythonScript(""),
       m_modelName("oracle_balanced"),
       m_oracleStrategy("oracle_balanced"),
-      m_confidenceThreshold(0.20),     // ML-FIRST: Lower threshold
+      m_confidenceThreshold(0.15),     // ML-FIRST: Even lower threshold for maximum ML usage
       m_riskThreshold(0.7),            // Reasonable risk tolerance
       m_failureThreshold(5),           // Reasonable failure tolerance
       m_mlGuidanceWeight(0.75),        // ML-FIRST: Higher ML weight
@@ -493,18 +493,18 @@ SmartWifiManagerRf::CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState
 
     if (currentDistance <= 25.0 && currentInterferers <= 1)
     {
-        // EXCELLENT conditions - trust ML more
-        adaptiveThreshold = std::max(0.15, baseThreshold - 0.08);
+        // EXCELLENT conditions - trust ML more aggressively
+        adaptiveThreshold = std::max(0.10, baseThreshold - 0.10);
     }
     else if (currentDistance <= 40.0 && currentInterferers <= 2)
     {
-        // GOOD conditions - slightly lower threshold
-        adaptiveThreshold = std::max(0.18, baseThreshold - 0.04);
+        // GOOD conditions - moderately lower threshold
+        adaptiveThreshold = std::max(0.12, baseThreshold - 0.06);
     }
     else if (currentDistance > 55.0 || currentInterferers > 3)
     {
-        // HARSH conditions - be more cautious
-        adaptiveThreshold = std::min(0.35, baseThreshold + 0.08);
+        // HARSH conditions - still be somewhat trusting of ML
+        adaptiveThreshold = std::min(0.25, baseThreshold + 0.05);
     }
 
     // LEARNING-BASED ADAPTATION
@@ -905,7 +905,7 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         std::vector<double> features = ExtractFeatures(st);
         InferenceResult result = RunMLInference(features);
 
-        if (result.success && result.confidence > 0.1) // Very low minimum threshold
+        if (result.success && result.confidence > 0.05) // Very aggressive minimum threshold
         {
             m_mlInferences++;
             station->mlInferencesReceived++;
