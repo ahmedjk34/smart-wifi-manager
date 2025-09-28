@@ -584,9 +584,9 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                    DoubleValue(1.0)); // Reference distance
 
         // Add random propagation loss for realism
-        // channel.AddPropagationLoss("ns3::RandomPropagationLossModel",
-        //                            "Variable",
-        //                            StringValue("ns3::UniformRandomVariable[Min=0|Max=3]"));
+        channel.AddPropagationLoss("ns3::RandomPropagationLossModel",
+                                   "Variable",
+                                   StringValue("ns3::UniformRandomVariable[Min=0|Max=3]"));
 
         YansWifiPhyHelper phy;
         phy.SetChannel(channel.Create());
