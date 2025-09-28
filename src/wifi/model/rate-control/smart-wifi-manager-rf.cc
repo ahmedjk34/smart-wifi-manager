@@ -103,6 +103,11 @@ SmartWifiManagerRf::GetTypeId()
                           StringValue("oracle_balanced"),
                           MakeStringAccessor(&SmartWifiManagerRf::m_modelName),
                           MakeStringChecker())
+            .AddAttribute("ModelType",
+                          "Model type (oracle/v3)",
+                          StringValue("oracle"),
+                          MakeStringAccessor(&SmartWifiManagerRf::m_modelType),
+                          MakeStringChecker())
             .AddAttribute("OracleStrategy",
                           "Oracle strategy",
                           StringValue("oracle_balanced"),
@@ -170,7 +175,27 @@ SmartWifiManagerRf::GetTypeId()
             .AddTraceSource("MLInferences",
                             "Number of ML inferences made",
                             MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlInferences),
-                            "ns3::TracedValueCallback::Uint32");
+                            "ns3::TracedValueCallback::Uint32")
+            .AddAttribute("EnableProbabilities",
+                          "Enable probability output",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_enableProbabilities),
+                          MakeBooleanChecker())
+            .AddAttribute("MaxInferenceTime",
+                          "Max inference time (ms)",
+                          UintegerValue(500),
+                          MakeUintegerAccessor(&SmartWifiManagerRf::m_maxInferenceTime),
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("UseRealisticSnr",
+                          "Use realistic SNR calculation",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&SmartWifiManagerRf::m_useRealisticSnr),
+                          MakeBooleanChecker())
+            .AddAttribute("SnrOffset",
+                          "SNR offset for calibration (dB)",
+                          DoubleValue(0.0),
+                          MakeDoubleAccessor(&SmartWifiManagerRf::m_snrOffset),
+                          MakeDoubleChecker<double>());
     return tid;
 }
 
