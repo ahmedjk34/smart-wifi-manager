@@ -455,13 +455,19 @@ def enforce_data_types(df: pd.DataFrame, logger) -> pd.DataFrame:
     return df_clean
 
 def validate_wifi_constraints(df: pd.DataFrame, logger) -> pd.DataFrame:
-    """Validate WiFi-specific constraints"""
+    """Validate WiFi-specific constraints with EXPANDED PHY rate support"""
     logger.info("📡 Validating WiFi constraints...")
     
     df_clean = df.copy()
     initial_count = len(df_clean)
     
-    # Validate rate indices
+    # FIXED: Expanded valid PHY rates for complete 802.11g support
+    EXPANDED_VALID_PHY_RATES = [
+        1000000, 2000000, 3000000, 4000000, 5500000, 6000000, 9000000, 11000000,
+        12000000, 18000000, 24000000, 36000000, 48000000, 54000000  # Complete 802.11g
+    ]
+    
+    # Validate rate indices (keep existing)
     if 'rateIdx' in df_clean.columns:
         invalid_rates = ~df_clean['rateIdx'].isin(VALID_RATE_INDICES)
         invalid_count = invalid_rates.sum()
@@ -469,15 +475,16 @@ def validate_wifi_constraints(df: pd.DataFrame, logger) -> pd.DataFrame:
             logger.info(f"  ⚠️ Found {invalid_count} rows with invalid rate indices")
             df_clean = df_clean[~invalid_rates]
     
-    # Validate PHY rates
+    # FIXED: Use expanded PHY rates
     if 'phyRate' in df_clean.columns:
-        invalid_phy = ~df_clean['phyRate'].isin(VALID_PHY_RATES)
+        invalid_phy = ~df_clean['phyRate'].isin(EXPANDED_VALID_PHY_RATES)
         invalid_count = invalid_phy.sum()
         if invalid_count > 0:
             logger.info(f"  ⚠️ Found {invalid_count} rows with invalid PHY rates")
+            logger.info(f"  📊 Keeping additional rates: {set(df_clean['phyRate'].unique()) - set(VALID_PHY_RATES)}")
             df_clean = df_clean[~invalid_phy]
     
-    # Validate channel widths
+    # Validate channel widths (keep existing)
     if 'channelWidth' in df_clean.columns:
         invalid_channels = ~df_clean['channelWidth'].isin(VALID_CHANNEL_WIDTHS)
         invalid_count = invalid_channels.sum()
