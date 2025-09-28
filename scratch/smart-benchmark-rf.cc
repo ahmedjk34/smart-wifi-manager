@@ -158,18 +158,20 @@ LogEnhancedFeaturesAndRate(const std::vector<double>& features,
                            std::string modelName,
                            std::string oracleStrategy)
 {
-    if (features.size() != 28)
+    if (features.size() != 21) // FIXED: Changed from 28 to 21
     {
         logFile << "[ERROR ENHANCED] Feature count mismatch! Got " << features.size()
-                << " features, expected 28." << std::endl;
-        detailedLog << "[CRITICAL ERROR] Enhanced pipeline expects 28 safe features, received "
+                << " features, expected 21." << std::endl;
+        detailedLog << "[CRITICAL ERROR] Enhanced pipeline expects 21 safe features, received "
                     << features.size() << std::endl;
         return;
     }
 
     detailedLog << "[ENHANCED ML DEBUG - REALISTIC SNR] Oracle: " << oracleStrategy
                 << " | Model: " << modelName << std::endl;
-    detailedLog << "[ENHANCED ML DEBUG - REALISTIC SNR] 28 Safe Features (using realistic SNR): ";
+    detailedLog
+        << "[ENHANCED ML DEBUG - REALISTIC SNR] 21 Safe Features (using realistic SNR): "; // FIXED:
+                                                                                           // 21
 
     // Log first few features for verification
     detailedLog << "lastSnr_Realistic=" << std::setprecision(6) << features[0]
@@ -881,7 +883,7 @@ main(int argc, char* argv[])
             << std::endl;
     logFile << "Author: ahmedjk34 (https://github.com/ahmedjk34)" << std::endl;
     logFile << "Date: 2025-09-23" << std::endl;
-    logFile << "Enhanced Pipeline: 28 safe features, 98.1% CV accuracy" << std::endl;
+    logFile << "Enhanced Pipeline: 21 safe features" << std::endl;
     logFile << "FIXED: Physics-based SNR conversion (-30dB to +45dB)" << std::endl;
     logFile << "FIXED: Distance and interferer count properly updated per test case" << std::endl;
 
@@ -953,7 +955,7 @@ main(int argc, char* argv[])
     std::cout << "🔧 FIXED: Physics-based SNR conversion" << std::endl;
     std::cout << "🔧 FIXED: Distance and interferer count properly updated per test case"
               << std::endl;
-    std::cout << "⚡ 28 safe features, 98.1% CV accuracy pipeline" << std::endl;
+    std::cout << "⚡ 21 safe features pipeline" << std::endl;
     std::cout << "✅ SNR values: -30dB to +45dB (realistic WiFi range)" << std::endl;
 
     // Create enhanced CSV with comprehensive headers
