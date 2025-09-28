@@ -1016,11 +1016,22 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context))
             ? "ML-LED"
             : "RULE-LED";
+
+    uint64_t finalDataRate = GetSupported(st, finalRate).GetDataRate(allowedWidth);
+    std::ostringstream rateStr;
+    if (finalDataRate >= 1000000)
+        rateStr << (finalDataRate / 1000000.0) << "Mbps";
+    else if (finalDataRate >= 1000)
+        rateStr << (finalDataRate / 1000.0) << "Kbps";
+    else
+        rateStr << finalDataRate << "bps";
+
     std::cout << "[ML-FIRST DECISION] Call#" << s_callCounter << " | " << fusionType
               << " | SNR=" << station->lastSnr << "dB | Context=" << safety.contextStr
               << " | Distance=" << currentDistance << "m | Interferers=" << currentInterferers
               << " | Rule=" << ruleRate << " | ML=" << mlRate << "(conf=" << mlConfidence << ")"
-              << " | Final=" << finalRate << " | Status=" << mlStatus
+              << " | Final=" << finalRate << " | DataRate=" << rateStr.str()
+              << " | Status=" << mlStatus
               << " | Threshold=" << CalculateAdaptiveConfidenceThreshold(station, safety.context)
               << std::endl;
 
@@ -1033,11 +1044,6 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
                   << ") | Strategy: " << m_oracleStrategy << std::endl;
         m_currentRate = rate;
     }
-
-    // In DoGetDataTxVector, after fusion but before return:
-    std::cout << "\n\n[FINAL RATE DEBUG] ML=" << mlRate << " Rule=" << ruleRate
-              << " MLConf=" << mlConfidence << " FinalRate=" << finalRate
-              << " DataRate=" << mode.GetDataRate(allowedWidth) << std::endl;
 
     return WifiTxVector(
         mode,
@@ -1121,6 +1127,11 @@ SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
                       << adjustedRate << std::endl;
         }
     }
+
+    std::cout << "[RULE DEBUG] SNR=" << snr << "dB -> BaseRate=" << baseRate
+              << " | SuccRatio=" << shortSuccRatio << " | ConsecSuccess=" << station->consecSuccess
+              << " | ConsecFail=" << station->consecFailure << " -> AdjustedRate=" << adjustedRate
+              << std::endl;
 
     return adjustedRate;
 }
