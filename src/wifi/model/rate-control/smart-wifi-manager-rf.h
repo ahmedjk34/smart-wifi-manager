@@ -31,6 +31,7 @@
 #include <chrono>
 #include <deque>
 #include <string>
+#include <vector>
 
 namespace ns3
 {
@@ -50,6 +51,8 @@ enum class WifiContextType
     UNKNOWN           // Unknown/unclassified state
 };
 
+class SmartWifiManagerRfState; // Forward declaration
+
 /**
  * \brief Enhanced Smart Rate control algorithm using Random Forest ML models - FIXED SNR ENGINE
  * \ingroup wifi
@@ -58,7 +61,7 @@ enum class WifiContextType
  * - Machine Learning guidance from trained Random Forest models (98.1% accuracy)
  * - Rule-based safety mechanisms for reliability
  * - Context-aware risk assessment
- * - 28 safe features with no data leakage
+ * - 21 safe features with no data leakage
  * - FIXED: Consistent realistic SNR calculation (-30dB to +45dB)
  *
  * Key innovations:
@@ -94,12 +97,13 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
      */
     struct SafetyAssessment
     {
-        WifiContextType context;       // Current network context
-        double riskLevel;              // Risk level (0.0-1.0)
-        uint32_t recommendedSafeRate;  // Safe rate for current conditions
-        bool requiresEmergencyAction;  // Whether emergency action needed
-        double confidenceInAssessment; // Confidence in assessment
-        std::string contextStr;        // Human-readable context string
+        WifiContextType context;          // Current network context
+        double riskLevel;                 // Risk level (0.0-1.0)
+        uint32_t recommendedSafeRate;     // Safe rate for current conditions
+        bool requiresEmergencyAction;     // Whether emergency action needed
+        double confidenceInAssessment;    // Confidence in assessment
+        std::string contextStr;           // Human-readable context string
+        SmartWifiManagerRfState* station; // Pointer to station for fusion access
     };
 
     // Enhanced configuration methods
@@ -146,12 +150,12 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     WifiTxVector DoGetDataTxVector(WifiRemoteStation* station, uint16_t allowedWidth) override;
     WifiTxVector DoGetRtsTxVector(WifiRemoteStation* station) override;
 
-    // Enhanced ML inference with 28 safe features
+    // Enhanced ML inference with 21 safe features
     InferenceResult RunMLInference(const std::vector<double>& features) const;
     std::vector<double> ExtractFeatures(WifiRemoteStation* station) const;
     void UpdateMetrics(WifiRemoteStation* station, bool success, double snr);
 
-    // Enhanced feature calculation methods (28 safe features)
+    // Enhanced feature calculation methods (21 safe features)
     double GetOfferedLoad() const;
     double GetMobilityMetric(WifiRemoteStation* station) const;
     double GetRetrySuccessRatio(WifiRemoteStation* station) const;
@@ -169,16 +173,15 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     double ConvertToRealisticSnr(double ns3Snr) const;
 
     // Enhanced context and safety assessment
-    SafetyAssessment AssessNetworkSafety(struct SmartWifiManagerRfState* station);
-    WifiContextType ClassifyNetworkContext(struct SmartWifiManagerRfState* station) const;
+    SafetyAssessment AssessNetworkSafety(SmartWifiManagerRfState* station);
+    WifiContextType ClassifyNetworkContext(SmartWifiManagerRfState* station) const;
     std::string ContextTypeToString(WifiContextType type) const;
-    double CalculateRiskLevel(struct SmartWifiManagerRfState* station) const;
-    uint32_t GetContextSafeRate(struct SmartWifiManagerRfState* station,
-                                WifiContextType context) const;
+    double CalculateRiskLevel(SmartWifiManagerRfState* station) const;
+    uint32_t GetContextSafeRate(SmartWifiManagerRfState* station, WifiContextType context) const;
 
     // Enhanced rate decision algorithms
-    uint32_t GetRuleBasedRate(struct SmartWifiManagerRfState* station) const;
-    uint32_t GetEnhancedRuleBasedRate(struct SmartWifiManagerRfState* station,
+    uint32_t GetRuleBasedRate(SmartWifiManagerRfState* station) const;
+    uint32_t GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
                                       const SafetyAssessment& safety) const;
     uint32_t FuseMLAndRuleBased(uint32_t mlRate,
                                 uint32_t ruleRate,
@@ -246,13 +249,16 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     mutable Time m_lastMlTime;         // Time of last ML inference
     mutable double m_lastMlConfidence; // Cached ML confidence
     mutable std::string m_lastMlModel; // Cached model name
+
+    double CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState* station,
+                                                WifiContextType context) const;
 };
 
 /**
  * \brief FIXED SmartWifiManagerRf station state with consistent SNR handling
  *
  * This structure maintains all necessary state for intelligent rate adaptation
- * including the 28 safe features required by the enhanced ML pipeline.
+ * including the 21 safe features required by the enhanced ML pipeline.
  * FIXED: Consistent SNR storage and processing.
  */
 struct SmartWifiManagerRfState : public WifiRemoteStation
@@ -299,7 +305,7 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     uint32_t decisionReason;     // Decision reason code
     bool lastPacketSuccess;      // Last packet success status
 
-    // Enhanced packet tracking for 28 features
+    // Enhanced packet tracking for 21 features
     uint32_t totalPackets;      // Total packets transmitted
     uint32_t lostPackets;       // Total packets lost
     uint32_t totalRetries;      // Total retry attempts
@@ -316,6 +322,16 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     uint32_t mlInferencesSuccessful; // Successful ML inferences
     double avgMlConfidence;          // Running average ML confidence
     std::string preferredModel;      // Preferred model for this station
+
+    // ENHANCED ML PERFORMANCE TRACKING AND LEARNING
+    uint32_t lastMLInfluencedRate;    // Last rate set with ML influence
+    Time lastMLInfluenceTime;         // When ML last influenced a decision
+    double mlPerformanceScore;        // Running score of ML performance (0.0-1.0)
+    uint32_t mlSuccessfulPredictions; // Count of successful ML predictions
+    double mlContextConfidence[6];    // Per-context ML confidence tracking
+    uint32_t mlContextUsage[6];       // Per-context ML usage count
+    double recentMLAccuracy;          // Recent ML prediction accuracy estimate
+    Time lastMLPerformanceUpdate;     // Last time ML performance was evaluated
 };
 
 } // namespace ns3
