@@ -154,11 +154,11 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     phy.SetChannel(channel.Create());
 
     WifiHelper wifi;
-    wifi.SetStandard(WIFI_STANDARD_80211g);
+    wifi.SetStandard(WIFI_STANDARD_80211a);
     wifi.SetRemoteStationManager("ns3::AarfWifiManager");
 
     WifiMacHelper mac;
-    Ssid ssid = Ssid("ns3-80211g");
+    Ssid ssid = Ssid("ns3-80211a");
 
     mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
