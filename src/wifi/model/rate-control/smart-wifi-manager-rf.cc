@@ -1034,6 +1034,11 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         m_currentRate = rate;
     }
 
+    // In DoGetDataTxVector, after fusion but before return:
+    std::cout << "\n\n[FINAL RATE DEBUG] ML=" << mlRate << " Rule=" << ruleRate
+              << " MLConf=" << mlConfidence << " FinalRate=" << finalRate
+              << " DataRate=" << mode.GetDataRate(allowedWidth) << std::endl;
+
     return WifiTxVector(
         mode,
         GetDefaultTxPowerLevel(),
