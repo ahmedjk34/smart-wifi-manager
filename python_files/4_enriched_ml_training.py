@@ -61,22 +61,22 @@ CHUNKSIZE = 250_000                      # Only used if ENABLE_ROW_LIMITING=True
 # FIXED FEATURE COLUMNS - REMOVED DATA LEAKAGE FEATURES
 # FIXED: GUARANTEED SAFE FEATURES - ZERO DATA LEAKAGE
 FEATURE_COLS = [
-    # SNR features - core network measurements
+    # SNR features (7 features)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
-    # Performance features - network behavior
+    # Performance features (6 features) 
     "shortSuccRatio", "medSuccRatio", "consecSuccess", "consecFailure",
-    "packetLossRate", "retrySuccessRatio", 
+    "packetLossRate", "retrySuccessRatio",
     
-    # Rate adaptation features - historical behavior
+    # Rate adaptation features (3 features)
     "recentRateChanges", "timeSinceLastRateChange", "rateStabilityScore",
     
-    # Network assessment features
-    "severity", "confidence", "packetSuccess",
+    # Network assessment features (3 features)
+    "severity", "confidence", "packetSuccess", 
     
-    # Network configuration - static but safe
-    "channelWidth", "mobilityMetric",
+    # Network configuration features (2 features - KEEP queueLen for now)
+    "channelWidth", "mobilityMetric"
     
     # REMOVED ALL LEAKY FEATURES:
     # "phyRate" - LEAKY: Perfect correlation with rateIdx
@@ -90,7 +90,16 @@ FEATURE_COLS = [
     # "offeredLoad" - USELESS: Always 0 in your data
     # "queueLen" - USELESS: Always 0 in your data  
     # "retryCount" - USELESS: Always 0 in your data
+
+    # Note: queueLen still in dataset but mostly zeros - could remove later
+
 ]
+
+# OLD: FEATURE_COLS had 18 features
+# NEW: After removing leaky features, we have 21 features
+
+# Update assertion
+assert len(FEATURE_COLS) == 21, f"Expected 20 safe features, got {len(FEATURE_COLS)}"
 
 
 
