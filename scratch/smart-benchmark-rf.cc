@@ -576,7 +576,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         phy.SetChannel(channel.Create());
 
         WifiHelper wifi;
-        wifi.SetStandard(WIFI_STANDARD_80211g);
+        wifi.SetStandard(WIFI_STANDARD_80211a);
 
         // FIXED: Proper model paths and ML-FIRST configuration
         std::string modelPath = "step3_rf_" + tc.oracleStrategy + "_model_FIXED.joblib";
@@ -628,13 +628,13 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         WifiMacHelper mac;
         Ssid ssid = Ssid("smartrf-" + tc.oracleStrategy);
 
+        // to ensure rates mapping [0-7] -> [6,9,12,18,24,36,48,54] Mbps is consistent
         mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
         mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-        // Install interferer devices
         mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
 
