@@ -14,15 +14,15 @@ PerformanceBasedParameterGenerator::GenerateStratifiedScenarios(uint32_t totalSc
     std::vector<ScenarioParams> scenarios;
 
     // Adjusted distribution to ensure better data collection
-    // Category A: Poor Performance Scenarios (30% - reduced for better overall success)
-    uint32_t categoryA = totalScenarios * 0.30;
+    // Category A: Poor Performance Scenarios (25% - reduced for better overall success)
+    uint32_t categoryA = totalScenarios * 0.25;
     for (uint32_t i = 0; i < categoryA; ++i)
     {
         scenarios.push_back(GeneratePoorPerformanceScenario(i));
     }
 
-    // Category B: Medium Performance/Boundary Scenarios (40% - increased)
-    uint32_t categoryB = totalScenarios * 0.40;
+    // Category B: Medium Performance/Boundary Scenarios (45% - increased)
+    uint32_t categoryB = totalScenarios * 0.45;
     for (uint32_t i = 0; i < categoryB; ++i)
     {
         scenarios.push_back(GenerateMediumPerformanceScenario(i));

@@ -905,7 +905,7 @@ main(int argc, char* argv[])
     }
 
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(800);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(2000);
 
     std::cout << "Generated " << testCases.size() << " performance-based scenarios" << std::endl;
 

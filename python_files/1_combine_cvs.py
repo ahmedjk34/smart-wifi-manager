@@ -1,140 +1,199 @@
 import os
 import pandas as pd
+import gc
+from typing import List, Iterator
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
 LOG_DIR = os.path.join(PARENT_DIR, "balanced-results")
 OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALL.csv")
 
-# Check if the directory exists before proceeding
-if not os.path.exists(LOG_DIR):
-    print(f"Error: Directory '{LOG_DIR}' does not exist.")
-    print("Please check if:")
-    print("1. The 'logged-results' folder exists in the same directory as this script")
-    print("2. You're running the script from the correct location")
-    print("3. The folder name is spelled correctly")
-    exit(1)
-
-# Check if directory is empty
-csv_files = [f for f in os.listdir(LOG_DIR) if f.endswith('.csv')]
-
-if not csv_files:
-    print(f"No CSV files found in '{LOG_DIR}'")
-    exit(1)
-
-print(f"Found {len(csv_files)} CSV files in '{LOG_DIR}'")
-
-dfs = []
-bad_files = []
-for fname in csv_files:
-    fpath = os.path.join(LOG_DIR, fname)
-    try:
-        # Try multiple parsing strategies for corrupted CSVs
-        df = None
-        
-        # Strategy 1: Standard parsing with error handling
+def get_file_info(log_dir: str) -> List[tuple]:
+    """Get file information without loading the full files"""
+    csv_files = [f for f in os.listdir(log_dir) if f.endswith('.csv')]
+    file_info = []
+    
+    for fname in csv_files:
+        fpath = os.path.join(log_dir, fname)
         try:
-            df = pd.read_csv(fpath, low_memory=False)
-        except pd.errors.ParserError:
-            # Strategy 2: Skip bad lines
-            try:
-                df = pd.read_csv(fpath, on_bad_lines='skip', low_memory=False)
-                print(f"Warning: {fname} had bad lines that were skipped")
-            except:
-                # Strategy 3: Use python engine (slower but more robust)
-                try:
-                    df = pd.read_csv(fpath, engine='python', on_bad_lines='skip', low_memory=False)
-                    print(f"Warning: {fname} required python engine with line skipping")
-                except:
-                    raise Exception("All parsing strategies failed")
-        
-        if df is None or df.empty:
-            print(f"Warning: {fname} is empty")
-            bad_files.append(fname)
-            continue
+            # Read just the first few rows to get column info and estimate size
+            sample_df = pd.read_csv(fpath, nrows=5, low_memory=False)
+            
+            # Count total rows (more memory efficient than loading all)
+            with open(fpath, 'r') as f:
+                row_count = sum(1 for line in f) - 1  # -1 for header
+            
+            file_info.append((fname, row_count, len(sample_df.columns), sample_df.columns.tolist()))
+            print(f"{fname}: {row_count:,} rows, {len(sample_df.columns)} cols")
+        except Exception as e:
+            print(f"Error reading {fname}: {e}")
+            
+    return file_info
 
-        # --- PATCH: Drop blank rows (all columns except scenario_file are NaN/empty) ---
-        cols_to_check = [col for col in df.columns if col != 'scenario_file']
-        df_clean = df.dropna(subset=cols_to_check, how='all')
-        # Also drop rows that are only empty strings except scenario_file
-        df_clean = df_clean.loc[
-            ~(df_clean[cols_to_check].apply(lambda row: all(
+def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 10000):
+    """Process files in chunks to avoid memory issues"""
+    
+    # Get file information first
+    file_info = get_file_info(log_dir)
+    total_rows = sum(info[1] for info in file_info)
+    print(f"\nTotal estimated rows: {total_rows:,}")
+    
+    # Get all unique columns
+    all_columns = set()
+    for _, _, _, cols in file_info:
+        all_columns.update(cols)
+    all_columns = sorted(all_columns)
+    print(f"Total unique columns: {len(all_columns)}")
+    
+    # Sort files by size (process smaller ones first)
+    file_info.sort(key=lambda x: x[1])
+    
+    # Initialize output file with headers
+    header_written = False
+    processed_rows = 0
+    
+    for fname, row_count, col_count, file_cols in file_info:
+        fpath = os.path.join(log_dir, fname)
+        print(f"\nProcessing {fname} ({row_count:,} rows)...")
+        
+        try:
+            # Process large files in chunks
+            if row_count > chunk_size:
+                chunk_iter = pd.read_csv(fpath, chunksize=chunk_size, low_memory=False)
+                
+                for i, chunk in enumerate(chunk_iter):
+                    # Clean the chunk
+                    chunk = clean_dataframe(chunk, fname, all_columns)
+                    
+                    if chunk.empty:
+                        continue
+                        
+                    # Write to output
+                    write_mode = 'w' if not header_written else 'a'
+                    chunk.to_csv(output_csv, mode=write_mode, 
+                                index=False, header=not header_written)
+                    header_written = True
+                    processed_rows += len(chunk)
+                    
+                    print(f"  Chunk {i+1}: {len(chunk):,} rows (Total: {processed_rows:,})")
+                    
+                    # Force garbage collection
+                    del chunk
+                    gc.collect()
+            else:
+                # Process smaller files normally
+                df = pd.read_csv(fpath, low_memory=False)
+                df = clean_dataframe(df, fname, all_columns)
+                
+                if not df.empty:
+                    write_mode = 'w' if not header_written else 'a'
+                    df.to_csv(output_csv, mode=write_mode, 
+                            index=False, header=not header_written)
+                    header_written = True
+                    processed_rows += len(df)
+                    print(f"  Added {len(df):,} rows (Total: {processed_rows:,})")
+                
+                del df
+                gc.collect()
+                
+        except Exception as e:
+            print(f"Error processing {fname}: {e}")
+            continue
+    
+    print(f"\n✓ Successfully combined {processed_rows:,} rows into {output_csv}")
+
+def clean_dataframe(df: pd.DataFrame, fname: str, all_columns: List[str]) -> pd.DataFrame:
+    """Clean and standardize dataframe"""
+    if df.empty:
+        return df
+    
+    # Add scenario_file column
+    df['scenario_file'] = fname
+    
+    # Remove blank rows (excluding scenario_file)
+    cols_to_check = [col for col in df.columns if col != 'scenario_file']
+    if cols_to_check:
+        df = df.dropna(subset=cols_to_check, how='all')
+        df = df.loc[
+            ~(df[cols_to_check].apply(lambda row: all(
                 (pd.isna(x) or (isinstance(x, str) and x.strip() == "")) for x in row
             ), axis=1))
         ]
-        if df_clean.empty:
-            print(f"Warning: {fname} only contained blank rows, skipping.")
-            bad_files.append(fname)
-            continue
+    
+    # Align columns
+    for col in all_columns:
+        if col not in df.columns:
+            df[col] = None
+    
+    # Reorder columns
+    df = df[all_columns]
+    
+    return df
 
-        df_clean['scenario_file'] = fname
-        dfs.append(df_clean)
-        print(f"Successfully loaded: {fname} ({df_clean.shape[0]} rows, {df_clean.shape[1]} cols)")
+def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0.1):
+    """Process with random sampling to reduce data size"""
+    file_info = get_file_info(log_dir)
+    
+    print(f"\n=== SAMPLING MODE (taking {sample_ratio*100}% of data) ===")
+    
+    dfs = []
+    for fname, row_count, col_count, file_cols in file_info:
+        fpath = os.path.join(log_dir, fname)
         
-    except Exception as e:
-        print(f"Skipping {fname}: {str(e)[:100]}...")
-        bad_files.append(fname)
-
-if dfs:
-    print(f"\n--- COMBINING DATA ---")
-    
-    # Check if all dataframes have compatible columns before combining
-    all_columns = set()
-    for df in dfs:
-        all_columns.update(df.columns)
-    
-    print(f"Total unique columns found: {len(all_columns)}")
-    
-    # Align all dataframes to have the same columns
-    for i, df in enumerate(dfs):
-        missing_cols = all_columns - set(df.columns)
-        for col in missing_cols:
-            df[col] = None  # Fill missing columns with None
-    
-    combined_df = pd.concat(dfs, ignore_index=True, sort=False)
-
-    # --- PATCH: Drop blank rows after combining (extra safety) ---
-    cols_to_check = [col for col in combined_df.columns if col != 'scenario_file']
-    combined_df = combined_df.dropna(subset=cols_to_check, how='all')
-    combined_df = combined_df.loc[
-        ~(combined_df[cols_to_check].apply(lambda row: all(
-            (pd.isna(x) or (isinstance(x, str) and x.strip() == "")) for x in row
-        ), axis=1))
-    ]
-
-    # Try to save with error handling
-    try:
-        combined_df.to_csv(OUTPUT_CSV, index=False)
-        print(f"✓ Combined {len(dfs)} files into {OUTPUT_CSV}")
-    except PermissionError:
-        # Try with a different filename if the original is locked
-        import time
-        timestamp = int(time.time())
-        backup_name = os.path.join(PARENT_DIR, f"smart-v3-logged-ALL-{timestamp}.csv")
         try:
-            combined_df.to_csv(backup_name, index=False)
-            print(f"✓ Original file was locked, saved as: {backup_name}")
+            if row_count > 5000:  # Only sample large files
+                sample_size = max(int(row_count * sample_ratio), 100)  # At least 100 rows
+                df = pd.read_csv(fpath, low_memory=False).sample(n=min(sample_size, row_count))
+                print(f"Sampled {len(df):,} rows from {fname}")
+            else:
+                df = pd.read_csv(fpath, low_memory=False)
+                print(f"Loaded all {len(df):,} rows from {fname}")
+            
+            df['scenario_file'] = fname
+            dfs.append(df)
+            
         except Exception as e:
-            print(f"✗ Failed to save file: {e}")
-            print("Make sure no programs have the output file open and you have write permissions")
-            exit(1)
-    except Exception as e:
-        print(f"✗ Error saving file: {e}")
-        exit(1)
-    print(f"✓ Total rows: {combined_df.shape[0]}")
-    print(f"✓ Total columns: {combined_df.shape[1]}")
+            print(f"Error processing {fname}: {e}")
     
-    # Show summary statistics
-    print(f"\n--- SUMMARY BY FILE TYPE ---")
-    file_summary = combined_df['scenario_file'].value_counts()
-    print(f"Files with most data:")
-    for fname, count in file_summary.head(5).items():
-        print(f"  {fname}: {count} rows")
+    if dfs:
+        # Get all columns
+        all_columns = set()
+        for df in dfs:
+            all_columns.update(df.columns)
         
-else:
-    print("No valid CSV files found to combine.")
+        # Align columns
+        for df in dfs:
+            for col in all_columns:
+                if col not in df.columns:
+                    df[col] = None
+        
+        # Filter out empty dataframes before concatenating
+        non_empty_dfs = [df for df in dfs if not df.empty]
+        if non_empty_dfs:
+            combined_df = pd.concat(non_empty_dfs, ignore_index=True, sort=False)
+        else:
+            combined_df = pd.DataFrame()
+        combined_df.to_csv(output_csv.replace('.csv', '_sampled.csv'), index=False)
+        print(f"✓ Saved sampled data: {len(combined_df):,} rows")
 
-if bad_files:
-    print(f"\n⚠ Skipped {len(bad_files)} bad/empty/corrupt files:")
-    for f in bad_files:
-        print("  ", f)
+# Main execution
+if __name__ == "__main__":
+    if not os.path.exists(LOG_DIR):
+        print(f"Error: Directory '{LOG_DIR}' does not exist.")
+        exit(1)
+    
+    print("Choose processing method:")
+    print("1. Chunk processing (memory efficient)")
+    print("2. Sampling (10% of data)")
+    print("3. File info only")
+    
+    choice = input("Enter choice (1-3): ").strip()
+    
+    if choice == "1":
+        process_files_in_chunks(LOG_DIR, OUTPUT_CSV, chunk_size=5000)
+    elif choice == "2":
+        process_with_sampling(LOG_DIR, OUTPUT_CSV, sample_ratio=0.1)
+    elif choice == "3":
+        get_file_info(LOG_DIR)
+    else:
+        print("Invalid choice")
