@@ -493,8 +493,8 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
         medSuccRatio = static_cast<double>(successes) / station->mediumWindow.size();
     }
 
-    // FIXED: 18 SAFE features only - NO DATA LEAKAGE
-    std::vector<double> features(18);
+    // FIXED: 21 SAFE features only - NO DATA LEAKAGE
+    std::vector<double> features(21); // FIXED: Changed from 20 to 21
 
     // SNR features (7 features)
     features[0] = station->lastSnr;                                     // REALISTIC SNR
@@ -525,7 +525,7 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     features[17] = std::max(0.0, std::min(1.0, station->confidence)); // Confidence
     features[18] = station->lastPacketSuccess ? 1.0 : 0.0;            // Packet success
 
-    // Network configuration features (2 features) - MOVED TO END
+    // Network configuration features (2 features)
     features[19] = static_cast<double>(GetChannelWidth(st)); // Channel width
     features[20] = GetMobilityMetric(st);                    // Mobility metric
 
@@ -539,10 +539,10 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
     // - T1, T2, T3: Always constant (useless)
     // - decisionReason: Always 0 (useless)
     // - offeredLoad: Always 0 (useless)
-    // - queueLen: Always 0 (useless)
+    // - queueLen: Mostly 0 (not included)
     // - retryCount: Always 0 (useless)
 
-    std::cout << "[FIXED FEATURES] 18 SAFE Features (NO LEAKAGE): lastSnr=" << features[0]
+    std::cout << "[FIXED FEATURES] 21 SAFE Features (NO LEAKAGE): lastSnr=" << features[0]
               << "dB snrFast=" << features[1] << "dB snrSlow=" << features[2] << "dB" << std::endl;
 
     return features;
@@ -560,8 +560,8 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features) const
     result.confidence = 0.0;
     result.model = m_modelName;
 
-    // FIXED: Validate 28 features
-    if (features.size() != 18)
+    // FIXED: Validate 21 features
+    if (features.size() != 21)
     {
         result.error = "Invalid feature count: expected 28, got " + std::to_string(features.size());
         std::cout << "[ERROR FIXED ML] " << result.error << std::endl;
@@ -786,7 +786,7 @@ void
 SmartWifiManagerRf::LogFeatureVector(const std::vector<double>& features,
                                      const std::string& context) const
 {
-    if (features.size() != 18)
+    if (features.size() != 21)
     {
         std::cout << "[ERROR FIXED LOG] " << context << ": Expected 28 features, got "
                   << features.size() << std::endl;
