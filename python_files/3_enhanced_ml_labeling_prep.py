@@ -209,6 +209,38 @@ def filter_sane_rows(df: pd.DataFrame) -> pd.DataFrame:
     
     logger.info(f"FIXED: Kept {len(df_filtered)} out of {before} rows ({len(df_filtered)/before*100:.1f}% retained)")
     return df_filtered
+
+# ----------------------------------------
+# FEATURE REMOVAL FUNCTIONS
+# ----------------------------------------
+def remove_leaky_features_from_dataframe(df):
+    """Remove all leaky and useless features from the dataframe"""
+    FEATURES_TO_REMOVE = [
+        # Leaky features - CRITICAL to remove
+        'phyRate', 'optimalRateDistance', 'recentThroughputTrend',
+        'conservativeFactor', 'aggressiveFactor', 'recommendedSafeRate',
+        
+        # Useless constant features - waste space
+        'T1', 'T2', 'T3', 'decisionReason', 'offeredLoad', 'retryCount'
+    ]
+    
+    initial_cols = len(df.columns)
+    removed_features = []
+    
+    for feature in FEATURES_TO_REMOVE:
+        if feature in df.columns:
+            removed_features.append(feature)
+    
+    df_clean = df.drop(columns=removed_features)
+    removed_cols = len(removed_features)
+    
+    logger.info(f"🧹 Removed {removed_cols} leaky/useless features: {removed_features}")
+    logger.info(f"📊 Remaining columns: {len(df_clean.columns)}")
+    print(f"🧹 REMOVED LEAKY FEATURES: {removed_features}")
+    print(f"📊 Dataset now has {len(df_clean.columns)} columns (was {initial_cols})")
+    
+    return df_clean
+
 # ----------------------------------------
 # CONTEXT CLASSIFICATION
 # ----------------------------------------
@@ -234,38 +266,77 @@ def classify_network_context(row) -> str:
 # ORACLE LABEL CREATION
 # ----------------------------------------
 def create_context_specific_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
+    """FIXED: Less deterministic oracle generation to reduce SNR correlation"""
     snr = safe_float(row.get('lastSnr', 0))
     success_ratio = safe_float(row.get('shortSuccRatio', 1))
     consec_failures = safe_int(row.get('consecFailure', 0))
     consec_success = safe_int(row.get('consecSuccess', 0))
+    
+    # ADD RANDOMNESS to break perfect correlation
+    noise = np.random.uniform(-0.3, 0.3)  # ±0.3 rate randomness
+    
     labels = {}
+    
     if context == 'emergency_recovery':
-        labels['oracle_conservative'] = get_emergency_safe_rate(snr, success_ratio)
-        labels['oracle_balanced'] = labels['oracle_conservative']
-        labels['oracle_aggressive'] = min(labels['oracle_conservative'] + 1, 7)
+        # Base rate on SUCCESS RATIO more than SNR
+        if success_ratio < 0.3:
+            base_rate = 0
+        elif success_ratio < 0.6:
+            base_rate = 1
+        else:
+            base_rate = 2
+        
+        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
+        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
+        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 2 + noise)))
+        
     elif context == 'poor_unstable':
-        safe_rate = get_snr_based_safe_rate(snr)
-        labels['oracle_conservative'] = safe_rate
-        labels['oracle_balanced'] = min(safe_rate + 1, 7) if success_ratio > 0.7 else safe_rate
-        labels['oracle_aggressive'] = get_throughput_optimal_rate(row)
+        # Use SUCCESS RATIO primarily, SNR secondarily
+        if success_ratio > 0.8:
+            base_rate = 3 + int(snr / 10)  # Reduced SNR influence
+        elif success_ratio > 0.6:
+            base_rate = 2 + int(snr / 15)  # Even less SNR influence
+        else:
+            base_rate = 1
+            
+        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
+        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
+        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 2 + noise)))
+        
     elif context == 'marginal_conditions':
-        conservative = get_snr_based_safe_rate(snr)
-        aggressive = get_throughput_optimal_rate(row)
-        labels['oracle_conservative'] = conservative
-        labels['oracle_balanced'] = (conservative + aggressive) // 2
-        labels['oracle_aggressive'] = aggressive
+        # Balance success ratio and consecutive patterns
+        if consec_success > 5 and success_ratio > 0.7:
+            base_rate = 4
+        elif success_ratio > 0.5:
+            base_rate = 3
+        else:
+            base_rate = 2
+            
+        labels['oracle_conservative'] = max(0, min(7, int(base_rate - 1 + noise)))
+        labels['oracle_balanced'] = max(0, min(7, int(base_rate + noise)))
+        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 1 + noise)))
+        
     elif context in ['good_stable', 'good_unstable']:
-        conservative = max(current_rate - 1, 0) if success_ratio < 0.8 else current_rate
-        aggressive = get_throughput_optimal_rate(row)
-        labels['oracle_conservative'] = conservative
-        labels['oracle_balanced'] = min(aggressive, 7)
-        labels['oracle_aggressive'] = min(aggressive + 1, 7) if consec_success > 5 else aggressive
+        # Use current rate as baseline, adjust by success
+        adjustment = 1 if success_ratio > 0.9 else 0 if success_ratio > 0.7 else -1
+        base_rate = max(0, min(7, current_rate + adjustment))
+        
+        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
+        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
+        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 2 + noise)))
+        
     elif context == 'excellent_stable':
-        labels['oracle_conservative'] = get_throughput_optimal_rate(row)
-        labels['oracle_balanced'] = min(get_throughput_optimal_rate(row) + 1, 7)
-        labels['oracle_aggressive'] = 7
+        # Allow higher rates but with some randomness
+        base_rate = min(6, current_rate + 2)
+        
+        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
+        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
+        labels['oracle_aggressive'] = 7  # Always max for aggressive in excellent conditions
+    
+    # Ensure all labels are valid
     for key in labels:
-        labels[key] = clamp_rateidx(labels[key])
+        labels[key] = max(0, min(7, labels[key]))
+    
     return labels
 
 def get_emergency_safe_rate(snr: float, success_ratio: float) -> int:
@@ -586,6 +657,10 @@ def main():
     all_label_cols = oracle_labels + ['rateIdx']
     class_weights = compute_and_save_class_weights(final_df, all_label_cols, weights_output_dir)
 
+    # --- REMOVE LEAKY FEATURES BEFORE SAVING ---
+    logger.info("🧹 Removing leaky and useless features before saving...")
+    final_df = remove_leaky_features_from_dataframe(final_df)
+    
     # --- Save ---
     try:
         final_df.to_csv(OUTPUT_CSV, index=False)
