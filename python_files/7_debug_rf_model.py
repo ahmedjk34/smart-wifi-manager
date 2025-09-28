@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 def analyze_performance_issues():
     # Load benchmark results
     try:
-        df = pd.read_csv('enhanced-smartrf-benchmark-results.csv')
+        df = pd.read_csv('smartrf-benchmark-results.csv')
         
         print("🔍 SMARTRF PERFORMANCE ANALYSIS")
         print("=" * 50)
