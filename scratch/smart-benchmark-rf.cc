@@ -51,49 +51,65 @@ double maxCollectedSnr = -1e9;
 std::mutex snrCollectionMutex; // Thread safety
 
 // FIXED: Unified SNR conversion function (single source of truth)
-double
-ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
+enum SnrModel
 {
-    // Validate inputs
-    if (distance <= 0.0 || distance > 200.0)
-    {
-        distance = 20.0; // Safe fallback
-    }
+    LOG_MODEL,
+    SOFT_MODEL,
+    INTF_MODEL
+};
+
+double
+ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
+{
+    if (distance <= 0.0)
+        distance = 1.0;
+    if (distance > 200.0)
+        distance = 200.0;
     if (interferers > 10)
+        interferers = 10;
+
+    double realisticSnr = 0.0;
+
+    switch (model)
     {
-        interferers = 10; // Reasonable upper bound
+    case LOG_MODEL: {
+        // Log-distance path loss style
+        double snr0 = 40.0;
+        double pathLossExp = 2.2;
+        realisticSnr = snr0 - 10 * pathLossExp * log10(distance);
+        realisticSnr -= (interferers * 1.5);
+        break;
     }
 
-    double realisticSnr;
+    case SOFT_MODEL: {
+        // Piecewise linear, softer drops
+        if (distance <= 20.0)
+            realisticSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 100.0)
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+        else
+            realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
 
-    // Physics-based realistic SNR calculation
-    if (distance <= 10.0)
-    {
-        realisticSnr = 40.0 - (distance * 1.5); // Close: 40dB to 25dB
-    }
-    else if (distance <= 30.0)
-    {
-        realisticSnr = 25.0 - ((distance - 10.0) * 1.0); // Medium: 25dB to 5dB
-    }
-    else if (distance <= 60.0)
-    {
-        realisticSnr = 5.0 - ((distance - 30.0) * 0.75); // Far: 5dB to -17.5dB
-    }
-    else
-    {
-        realisticSnr = -17.5 - ((distance - 60.0) * 0.5); // Very far: -17.5dB to -30dB+
+        realisticSnr -= (interferers * 2.0);
+        break;
     }
 
-    // Add interference degradation (linear penalty)
-    realisticSnr -= (interferers * 3.0);
+    case INTF_MODEL: {
+        // Interference-dominated model
+        realisticSnr = 38.0 - 10 * log10(distance * distance);
+        realisticSnr -= (pow(interferers, 1.2) * 1.2);
+        break;
+    }
+    }
 
-    // Add realistic variation based on NS-3 input (controlled randomness)
-    double variation = fmod(std::abs(ns3Value), 20.0) - 10.0; // ±10dB variation
-    realisticSnr += variation * 0.3;                          // Scale down the variation
+    // Add random-like variation (fading effect)
+    double variation = fmod(std::abs(ns3Value), 12.0) - 6.0;
+    realisticSnr += variation * 0.4;
 
-    // CRITICAL: Bound to realistic WiFi SNR range
+    // Clamp values
     realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
-
     return realisticSnr;
 }
 
@@ -320,7 +336,7 @@ PhyRxBeginTrace(std::string context, Ptr<const Packet> packet, RxPowerWattPerCha
     // Convert to realistic SNR using CURRENT test case settings
     double rawSnrFromPower = 10 * log10(totalRxPower * 1000) + 90; // Rough conversion
     double realisticSnr =
-        ConvertNS3ToRealisticSnr(rawSnrFromPower, currentDistance, currentInterferers);
+        ConvertNS3ToRealisticSnr(rawSnrFromPower, currentDistance, currentInterferers, SOFT_MODEL);
 
     // FIXED: Thread-safe SNR collection
     {
@@ -370,7 +386,8 @@ MonitorSniffRx(std::string context,
     }
 
     // Convert using VERIFIED current distance from manager
-    double realisticSnr = ConvertNS3ToRealisticSnr(rawSnr, currentDistance, currentInterferers);
+    double realisticSnr =
+        ConvertNS3ToRealisticSnr(rawSnr, currentDistance, currentInterferers, SOFT_MODEL);
 
     // FIXED: Thread-safe SNR collection with validation
     if (realisticSnr >= -30.0 && realisticSnr <= 45.0)
@@ -548,8 +565,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     std::cout << "Distance: " << tc.staDistance << "m | Interferers: " << tc.numInterferers
               << std::endl;
     std::cout << "Expected SNR: "
-              << ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers) << "dB"
-              << std::endl;
+              << ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL)
+              << "dB" << std::endl;
     std::cout << std::string(60, '=') << std::endl;
 
     logFile << "[TEST START] " << testCaseNumber << " | " << tc.scenarioName
@@ -1014,7 +1031,10 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                 else
                 {
                     // Fallback if no valid samples
-                    avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers);
+                    avgSnr = ConvertNS3ToRealisticSnr(100.0,
+                                                      tc.staDistance,
+                                                      tc.numInterferers,
+                                                      SOFT_MODEL);
                     minCollectedSnr = avgSnr - 3.0;
                     maxCollectedSnr = avgSnr + 3.0;
                     std::cout << "WARNING: No valid SNR samples, using distance-based estimate"
@@ -1033,7 +1053,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             else
             {
                 // Use distance-based estimation as fallback
-                avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers);
+                avgSnr =
+                    ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL);
                 minCollectedSnr = avgSnr - 5.0;
                 maxCollectedSnr = avgSnr + 5.0;
 
@@ -1335,8 +1356,8 @@ main(int argc, char* argv[])
                   << std::endl;
         std::cout << "Distance: " << tc.staDistance << "m | Interferers: " << tc.numInterferers
                   << " | Expected SNR: "
-                  << ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers) << "dB"
-                  << std::endl;
+                  << ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL)
+                  << "dB" << std::endl;
 
         logFile << "[BENCHMARK PROGRESS] Starting test " << testCaseNumber << "/" << totalTests
                 << " - " << tc.oracleStrategy << ": " << tc.scenarioName

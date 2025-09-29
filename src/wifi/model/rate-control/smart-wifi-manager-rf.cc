@@ -58,49 +58,65 @@ NS_LOG_COMPONENT_DEFINE("SmartWifiManagerRf");
 NS_OBJECT_ENSURE_REGISTERED(SmartWifiManagerRf);
 
 // FIXED: Global realistic SNR conversion function for consistency
-double
-ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
+enum SnrModel
 {
-    // Validate inputs first
-    if (distance <= 0.0 || distance > 200.0)
-    {
-        distance = 20.0; // Safe fallback
-    }
+    LOG_MODEL,
+    SOFT_MODEL,
+    INTF_MODEL
+};
+
+double
+ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
+{
+    if (distance <= 0.0)
+        distance = 1.0;
+    if (distance > 200.0)
+        distance = 200.0;
     if (interferers > 10)
+        interferers = 10;
+
+    double realisticSnr = 0.0;
+
+    switch (model)
     {
-        interferers = 10; // Reasonable upper bound
+    case LOG_MODEL: {
+        // Log-distance path loss style
+        double snr0 = 40.0;
+        double pathLossExp = 2.2;
+        realisticSnr = snr0 - 10 * pathLossExp * log10(distance);
+        realisticSnr -= (interferers * 1.5);
+        break;
     }
 
-    double realisticSnr;
+    case SOFT_MODEL: {
+        // Piecewise linear, softer drops
+        if (distance <= 20.0)
+            realisticSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 100.0)
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+        else
+            realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
 
-    // Distance-based realistic SNR calculation
-    if (distance <= 10.0)
-    {
-        realisticSnr = 45.0 - (distance * 1.0);
-    }
-    else if (distance <= 30.0)
-    {
-        realisticSnr = 35.0 - ((distance - 10.0) * 0.75);
-    }
-    else if (distance <= 60.0)
-    {
-        realisticSnr = 20.0 - ((distance - 30.0) * 0.5);
-    }
-    else
-    {
-        realisticSnr = 5.0 - ((distance - 60.0) * 0.25);
+        realisticSnr -= (interferers * 2.0);
+        break;
     }
 
-    // Apply interference penalty
-    realisticSnr -= (interferers * 3.0);
+    case INTF_MODEL: {
+        // Interference-dominated model
+        realisticSnr = 38.0 - 10 * log10(distance * distance);
+        realisticSnr -= (pow(interferers, 1.2) * 1.2);
+        break;
+    }
+    }
 
-    // Add controlled variation based on NS-3 input
-    double variation = fmod(ns3Value, 20.0) - 10.0;
-    realisticSnr += variation * 0.3;
+    // Add random-like variation (fading effect)
+    double variation = fmod(std::abs(ns3Value), 12.0) - 6.0;
+    realisticSnr += variation * 0.4;
 
-    // Apply realistic bounds
+    // Clamp values
     realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
-
     return realisticSnr;
 }
 
@@ -338,7 +354,8 @@ SmartWifiManagerRf::DoCreateStation() const
     double currentDistance = m_benchmarkDistance.load();
     uint32_t currentInterferers = m_currentInterferers.load();
 
-    double initialSnr = ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers);
+    double initialSnr =
+        ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers, SOFT_MODEL);
 
     // Initialize all SNR metrics properly
     station->lastSnr = initialSnr;
@@ -410,7 +427,8 @@ SmartWifiManagerRf::ConvertToRealisticSnr(double ns3Snr) const
     // FIXED: Use atomic loads for thread safety
     return ConvertNS3ToRealisticSnr(ns3Snr,
                                     m_benchmarkDistance.load(),
-                                    m_currentInterferers.load());
+                                    m_currentInterferers.load(),
+                                    SOFT_MODEL);
 }
 
 // ENHANCED: ML-aware context assessment with learning

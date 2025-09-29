@@ -16,35 +16,64 @@
 using namespace ns3;
 
 // Add after the includes section:
-double
-ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
+enum SnrModel
 {
-    if (distance <= 0.0 || distance > 200.0)
-        distance = 20.0;
+    LOG_MODEL,
+    SOFT_MODEL,
+    INTF_MODEL
+};
+
+double
+ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
+{
+    if (distance <= 0.0)
+        distance = 1.0;
+    if (distance > 200.0)
+        distance = 200.0;
     if (interferers > 10)
         interferers = 10;
 
-    double realisticSnr;
-    if (distance <= 10.0)
+    double realisticSnr = 0.0;
+
+    switch (model)
     {
-        realisticSnr = 40.0 - (distance * 1.5);
-    }
-    else if (distance <= 30.0)
-    {
-        realisticSnr = 25.0 - ((distance - 10.0) * 1.0);
-    }
-    else if (distance <= 60.0)
-    {
-        realisticSnr = 5.0 - ((distance - 30.0) * 0.75);
-    }
-    else
-    {
-        realisticSnr = -17.5 - ((distance - 60.0) * 0.5);
+    case LOG_MODEL: {
+        // Log-distance path loss style
+        double snr0 = 40.0;
+        double pathLossExp = 2.2;
+        realisticSnr = snr0 - 10 * pathLossExp * log10(distance);
+        realisticSnr -= (interferers * 1.5);
+        break;
     }
 
-    realisticSnr -= (interferers * 3.0);
-    double variation = fmod(std::abs(ns3Value), 20.0) - 10.0;
-    realisticSnr += variation * 0.3;
+    case SOFT_MODEL: {
+        // Piecewise linear, softer drops
+        if (distance <= 20.0)
+            realisticSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 100.0)
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+        else
+            realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
+
+        realisticSnr -= (interferers * 2.0);
+        break;
+    }
+
+    case INTF_MODEL: {
+        // Interference-dominated model
+        realisticSnr = 38.0 - 10 * log10(distance * distance);
+        realisticSnr -= (pow(interferers, 1.2) * 1.2);
+        break;
+    }
+    }
+
+    // Add random-like variation (fading effect)
+    double variation = fmod(std::abs(ns3Value), 12.0) - 6.0;
+    realisticSnr += variation * 0.4;
+
+    // Clamp values
     realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
     return realisticSnr;
 }
@@ -322,7 +351,7 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     }
 
     // use realistic SNR conversion
-    double avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers);
+    double avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL);
     currentStats.avgSNR = avgSnr;
     currentStats.minSNR = avgSnr - 3.0;
     currentStats.maxSNR = avgSnr + 3.0;

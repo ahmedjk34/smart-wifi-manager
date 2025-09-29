@@ -112,20 +112,62 @@ far_mobile_oracle_conservative,oracle_conservative,45.0,7.1,1.2,FAIR
 ### SNR Conversion Algorithm
 
 ```cpp
-double ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers) {
-    // Distance-based realistic SNR modeling
-    if (distance <= 10.0) realisticSnr = 35.0 - (distance * 1.5);      // Close range
-    else if (distance <= 30.0) realisticSnr = 20.0 - ((distance-10)*1.0); // Medium range
-    else if (distance <= 50.0) realisticSnr = 0.0 - ((distance-30)*0.75);  // Far range
-    else realisticSnr = -15.0 - ((distance-50)*0.5);                    // Very far
+enum SnrModel { LOG_MODEL, SOFT_MODEL, INTF_MODEL };
 
-    // Apply interference and variation
-    realisticSnr -= (interferers * 3.0);
-    realisticSnr += (fmod(ns3Value, 20.0) - 10.0) * 0.3;
+double ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
+{
+    if (distance <= 0.0) distance = 1.0;
+    if (distance > 200.0) distance = 200.0;
+    if (interferers > 10) interferers = 10;
 
-    // Bound to realistic WiFi range
-    return std::max(-30.0, std::min(45.0, realisticSnr));
+    double realisticSnr = 0.0;
+
+    switch (model)
+    {
+        case LOG_MODEL:
+        {
+            // Log-distance path loss style
+            double snr0 = 40.0;
+            double pathLossExp = 2.2;
+            realisticSnr = snr0 - 10 * pathLossExp * log10(distance);
+            realisticSnr -= (interferers * 1.5);
+            break;
+        }
+
+        case SOFT_MODEL:
+        {
+            // Piecewise linear, softer drops
+            if (distance <= 20.0)
+                realisticSnr = 35.0 - (distance * 0.8);
+            else if (distance <= 50.0)
+                realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+            else if (distance <= 100.0)
+                realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+            else
+                realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
+
+            realisticSnr -= (interferers * 2.0);
+            break;
+        }
+
+        case INTF_MODEL:
+        {
+            // Interference-dominated model
+            realisticSnr = 38.0 - 10 * log10(distance * distance);
+            realisticSnr -= (pow(interferers, 1.2) * 1.2);
+            break;
+        }
+    }
+
+    // Add random-like variation (fading effect)
+    double variation = fmod(std::abs(ns3Value), 12.0) - 6.0;
+    realisticSnr += variation * 0.4;
+
+    // Clamp values
+    realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
+    return realisticSnr;
 }
+
 ```
 
 ## 👤 **Author**
