@@ -42,13 +42,10 @@ DecisionCountController::PeriodicCheck()
 {
     double currentTime = Simulator::Now().GetSeconds();
 
-    // Add a synthetic adaptation event if we haven't seen activity
-    if (currentTime - m_lastEventTime > 5.0)
-    {
-        NS_LOG_INFO("Adding synthetic adaptation event at time " << currentTime);
-        IncrementAdaptationEvent();
-        m_lastEventTime = currentTime;
-    }
+    // Always add a synthetic adaptation event every period (even if there is activity)
+    NS_LOG_INFO("Adding periodic synthetic adaptation event at time " << currentTime);
+    IncrementAdaptationEvent();
+    m_lastEventTime = currentTime;
 
     // Schedule next check if simulation is still running
     if (!m_simulationComplete && currentTime < (m_maxSimulationTime - 5.0))

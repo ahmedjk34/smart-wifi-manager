@@ -58,49 +58,65 @@ NS_LOG_COMPONENT_DEFINE("SmartWifiManagerRf");
 NS_OBJECT_ENSURE_REGISTERED(SmartWifiManagerRf);
 
 // FIXED: Global realistic SNR conversion function for consistency
-double
-ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers)
+enum SnrModel
 {
-    // Validate inputs first
-    if (distance <= 0.0 || distance > 200.0)
-    {
-        distance = 20.0; // Safe fallback
-    }
+    LOG_MODEL,
+    SOFT_MODEL,
+    INTF_MODEL
+};
+
+double
+ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
+{
+    if (distance <= 0.0)
+        distance = 1.0;
+    if (distance > 200.0)
+        distance = 200.0;
     if (interferers > 10)
+        interferers = 10;
+
+    double realisticSnr = 0.0;
+
+    switch (model)
     {
-        interferers = 10; // Reasonable upper bound
+    case LOG_MODEL: {
+        // Log-distance path loss style
+        double snr0 = 40.0;
+        double pathLossExp = 2.2;
+        realisticSnr = snr0 - 10 * pathLossExp * log10(distance);
+        realisticSnr -= (interferers * 1.5);
+        break;
     }
 
-    double realisticSnr;
+    case SOFT_MODEL: {
+        // Piecewise linear, softer drops
+        if (distance <= 20.0)
+            realisticSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 100.0)
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+        else
+            realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
 
-    // Distance-based realistic SNR calculation
-    if (distance <= 10.0)
-    {
-        realisticSnr = 45.0 - (distance * 1.0);
-    }
-    else if (distance <= 30.0)
-    {
-        realisticSnr = 35.0 - ((distance - 10.0) * 0.75);
-    }
-    else if (distance <= 60.0)
-    {
-        realisticSnr = 20.0 - ((distance - 30.0) * 0.5);
-    }
-    else
-    {
-        realisticSnr = 5.0 - ((distance - 60.0) * 0.25);
+        realisticSnr -= (interferers * 2.0);
+        break;
     }
 
-    // Apply interference penalty
-    realisticSnr -= (interferers * 3.0);
+    case INTF_MODEL: {
+        // Interference-dominated model
+        realisticSnr = 38.0 - 10 * log10(distance * distance);
+        realisticSnr -= (pow(interferers, 1.2) * 1.2);
+        break;
+    }
+    }
 
-    // Add controlled variation based on NS-3 input
-    double variation = fmod(ns3Value, 20.0) - 10.0;
-    realisticSnr += variation * 0.3;
+    // Add random-like variation (fading effect)
+    double variation = fmod(std::abs(ns3Value), 12.0) - 6.0;
+    realisticSnr += variation * 0.4;
 
-    // Apply realistic bounds
+    // Clamp values
     realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
-
     return realisticSnr;
 }
 
@@ -338,7 +354,8 @@ SmartWifiManagerRf::DoCreateStation() const
     double currentDistance = m_benchmarkDistance.load();
     uint32_t currentInterferers = m_currentInterferers.load();
 
-    double initialSnr = ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers);
+    double initialSnr =
+        ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers, SOFT_MODEL);
 
     // Initialize all SNR metrics properly
     station->lastSnr = initialSnr;
@@ -410,7 +427,8 @@ SmartWifiManagerRf::ConvertToRealisticSnr(double ns3Snr) const
     // FIXED: Use atomic loads for thread safety
     return ConvertNS3ToRealisticSnr(ns3Snr,
                                     m_benchmarkDistance.load(),
-                                    m_currentInterferers.load());
+                                    m_currentInterferers.load(),
+                                    SOFT_MODEL);
 }
 
 // ENHANCED: ML-aware context assessment with learning
@@ -1016,11 +1034,22 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context))
             ? "ML-LED"
             : "RULE-LED";
+
+    uint64_t finalDataRate = GetSupported(st, finalRate).GetDataRate(allowedWidth);
+    std::ostringstream rateStr;
+    if (finalDataRate >= 1000000)
+        rateStr << (finalDataRate / 1000000.0) << "Mbps";
+    else if (finalDataRate >= 1000)
+        rateStr << (finalDataRate / 1000.0) << "Kbps";
+    else
+        rateStr << finalDataRate << "bps";
+
     std::cout << "[ML-FIRST DECISION] Call#" << s_callCounter << " | " << fusionType
               << " | SNR=" << station->lastSnr << "dB | Context=" << safety.contextStr
               << " | Distance=" << currentDistance << "m | Interferers=" << currentInterferers
               << " | Rule=" << ruleRate << " | ML=" << mlRate << "(conf=" << mlConfidence << ")"
-              << " | Final=" << finalRate << " | Status=" << mlStatus
+              << " | Final=" << finalRate << " | DataRate=" << rateStr.str()
+              << " | Status=" << mlStatus
               << " | Threshold=" << CalculateAdaptiveConfidenceThreshold(station, safety.context)
               << std::endl;
 
@@ -1034,10 +1063,12 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         m_currentRate = rate;
     }
 
-    // In DoGetDataTxVector, after fusion but before return:
-    std::cout << "\n\n[FINAL RATE DEBUG] ML=" << mlRate << " Rule=" << ruleRate
-              << " MLConf=" << mlConfidence << " FinalRate=" << finalRate
-              << " DataRate=" << mode.GetDataRate(allowedWidth) << std::endl;
+    std::cout << "[RATE-DEBUG] Algorithm=" << typeid(*this).name()
+              << " | Chosen Rate Index=" << finalRate << " | Mbps=" << (finalDataRate / 1e6)
+              << std::endl;
+
+    std::cout << "[SNR-DEBUG] SNR=" << station->lastSnr << " | SuccRatio=" << station->consecSuccess
+              << " | Loss=" << station->lostPackets << std::endl;
 
     return WifiTxVector(
         mode,
@@ -1068,61 +1099,346 @@ SmartWifiManagerRf::DoGetRtsTxVector(WifiRemoteStation* st)
         GetAggregation(st));
 }
 
-// Enhanced rule-based rate with ML awareness
+// Enhanced rule-based rate with ML awareness => This is the AARF algorithm, we can use if we want
+// exact head to head comparision uint32_t
+// SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
+//                                              const SafetyAssessment& safety) const
+// {
+//     double snr = station->lastSnr;
+//     double shortSuccRatio = 0.5;
+//     if (!station->shortWindow.empty())
+//     {
+//         int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(),
+//         true); shortSuccRatio = static_cast<double>(successes) / station->shortWindow.size();
+//     }
+
+//     uint32_t baseRate;
+//     if (snr >= 30)
+//         baseRate = 7;
+//     else if (snr >= 20)
+//         baseRate = 6;
+//     else if (snr >= 15)
+//         baseRate = 5;
+//     else if (snr >= 10)
+//         baseRate = 4;
+//     else if (snr >= 5)
+//         baseRate = 3;
+//     else if (snr >= 0)
+//         baseRate = 2;
+//     else if (snr >= -10)
+//         baseRate = 1;
+//     else
+//         baseRate = 0;
+
+//     uint32_t adjustedRate = baseRate;
+
+//     // Success-based adjustments (less conservative than before)
+//     if (shortSuccRatio > 0.9 && station->consecSuccess > 50)
+//     {
+//         adjustedRate = std::min(baseRate + 1, static_cast<uint32_t>(7));
+//     }
+//     else if (shortSuccRatio < 0.6 || station->consecFailure > 3)
+//     {
+//         adjustedRate = (baseRate > 0) ? baseRate - 1 : 0;
+//     }
+
+//     // ML-AWARE ADJUSTMENT: If ML has been performing well, be slightly more optimistic
+//     if (station->recentMLAccuracy > 0.4 && station->mlInferencesSuccessful > 8)
+//     {
+//         if (shortSuccRatio > 0.8 && adjustedRate < 6)
+//         {
+//             adjustedRate = std::min(adjustedRate + 1, static_cast<uint32_t>(6));
+//             std::cout << "[ML-AWARE RULE] Good ML track -> Optimistic rule boost to "
+//                       << adjustedRate << std::endl;
+//         }
+//     }
+
+//     std::cout << "[RULE DEBUG] SNR=" << snr << "dB -> BaseRate=" << baseRate
+//               << " | SuccRatio=" << shortSuccRatio << " | ConsecSuccess=" <<
+//               station->consecSuccess
+//               << " | ConsecFail=" << station->consecFailure << " -> AdjustedRate=" <<
+//               adjustedRate
+//               << std::endl;
+
+//     return adjustedRate;
+// }
+
+// ENHANCED MULTI-FACTOR RULE-BASED RATE ADAPTATION
+// Far superior to basic AARF - uses all 21 features and rich station state
 uint32_t
 SmartWifiManagerRf::GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
                                              const SafetyAssessment& safety) const
 {
+    // ============================================================================
+    // PHASE 1: BASE RATE SELECTION (SNR + Context Aware)
+    // ============================================================================
     double snr = station->lastSnr;
+    double snrFast = station->snrFast;
+    double snrSlow = station->snrSlow;
+
+    // Use EWMA SNRs for smoother decisions
+    double effectiveSnr = (snrFast * 0.7 + snrSlow * 0.3);
+
+    // Context-aware base rate mapping (more aggressive than basic AARF)
+    uint32_t baseRate;
+    if (effectiveSnr >= 35)
+        baseRate = 7; // Excellent: 54 Mbps
+    else if (effectiveSnr >= 28)
+        baseRate = 6; // Very good: 48 Mbps
+    else if (effectiveSnr >= 22)
+        baseRate = 6; // Good: 48 Mbps (more aggressive than AARF's 36)
+    else if (effectiveSnr >= 16)
+        baseRate = 5; // Decent: 36 Mbps
+    else if (effectiveSnr >= 11)
+        baseRate = 4; // Fair: 24 Mbps
+    else if (effectiveSnr >= 6)
+        baseRate = 3; // Marginal: 18 Mbps
+    else if (effectiveSnr >= 1)
+        baseRate = 2; // Poor: 12 Mbps
+    else if (effectiveSnr >= -5)
+        baseRate = 1; // Very poor: 9 Mbps
+    else
+        baseRate = 0; // Critical: 6 Mbps
+
+    // ============================================================================
+    // PHASE 2: SUCCESS RATIO ANALYSIS (Multi-Window)
+    // ============================================================================
     double shortSuccRatio = 0.5;
+    double medSuccRatio = 0.5;
+
     if (!station->shortWindow.empty())
     {
         int successes = std::count(station->shortWindow.begin(), station->shortWindow.end(), true);
         shortSuccRatio = static_cast<double>(successes) / station->shortWindow.size();
     }
-
-    uint32_t baseRate;
-    if (snr >= 30)
-        baseRate = 7;
-    else if (snr >= 20)
-        baseRate = 6;
-    else if (snr >= 15)
-        baseRate = 5;
-    else if (snr >= 10)
-        baseRate = 4;
-    else if (snr >= 5)
-        baseRate = 3;
-    else if (snr >= 0)
-        baseRate = 2;
-    else if (snr >= -10)
-        baseRate = 1;
-    else
-        baseRate = 0;
-
-    uint32_t adjustedRate = baseRate;
-
-    // Success-based adjustments (less conservative than before)
-    if (shortSuccRatio > 0.9 && station->consecSuccess > 50)
+    if (!station->mediumWindow.empty())
     {
-        adjustedRate = std::min(baseRate + 1, static_cast<uint32_t>(7));
-    }
-    else if (shortSuccRatio < 0.6 || station->consecFailure > 3)
-    {
-        adjustedRate = (baseRate > 0) ? baseRate - 1 : 0;
+        int successes =
+            std::count(station->mediumWindow.begin(), station->mediumWindow.end(), true);
+        medSuccRatio = static_cast<double>(successes) / station->mediumWindow.size();
     }
 
-    // ML-AWARE ADJUSTMENT: If ML has been performing well, be slightly more optimistic
-    if (station->recentMLAccuracy > 0.4 && station->mlInferencesSuccessful > 8)
+    // Weighted success metric (recent matters more)
+    double weightedSuccess = (shortSuccRatio * 0.7 + medSuccRatio * 0.3);
+
+    // ============================================================================
+    // PHASE 3: SNR STABILITY AND TREND ANALYSIS
+    // ============================================================================
+    double snrTrend = GetSnrTrendShort(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+    double snrStability = GetSnrStabilityIndex(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+    double snrVariance = station->snrVariance;
+
+    // Stability bonus/penalty
+    int stabilityAdjustment = 0;
+    if (snrStability > 8.0 && snrVariance < 2.0)
     {
-        if (shortSuccRatio > 0.8 && adjustedRate < 6)
+        stabilityAdjustment = +1; // Very stable -> more aggressive
+    }
+    else if (snrStability < 4.0 || snrVariance > 10.0)
+    {
+        stabilityAdjustment = -1; // Unstable -> more conservative
+    }
+
+    // Trend-based proactive adjustment
+    int trendAdjustment = 0;
+    if (snrTrend > 2.0 && weightedSuccess > 0.85)
+    {
+        trendAdjustment = +1; // Improving conditions
+    }
+    else if (snrTrend < -2.0 || weightedSuccess < 0.7)
+    {
+        trendAdjustment = -1; // Degrading conditions
+    }
+
+    // ============================================================================
+    // PHASE 4: PACKET LOSS AND RETRY ANALYSIS
+    // ============================================================================
+    double packetLoss = GetPacketLossRate(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+    double retryRatio = GetRetrySuccessRatio(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+
+    int lossAdjustment = 0;
+    if (packetLoss > 0.15) // High loss
+    {
+        lossAdjustment = -2; // Aggressive backoff
+    }
+    else if (packetLoss > 0.08) // Moderate loss
+    {
+        lossAdjustment = -1;
+    }
+    else if (packetLoss < 0.02 && retryRatio > 0.8) // Very low loss, good retries
+    {
+        lossAdjustment = +1; // Can be more aggressive
+    }
+
+    // ============================================================================
+    // PHASE 5: RATE STABILITY ANALYSIS (Anti-Thrashing)
+    // ============================================================================
+    uint32_t recentChanges = GetRecentRateChanges(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+    double rateStability = GetRateStabilityScore(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+    double timeSinceChange = GetTimeSinceLastRateChange(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+
+    int stabilizationPenalty = 0;
+    if (recentChanges > 15) // Too much thrashing
+    {
+        stabilizationPenalty = -1; // Dampen changes
+    }
+    else if (recentChanges < 5 && timeSinceChange > 2000.0) // Very stable for a while
+    {
+        // Allow exploration if conditions are good
+        if (weightedSuccess > 0.9 && snrStability > 7.0)
         {
-            adjustedRate = std::min(adjustedRate + 1, static_cast<uint32_t>(6));
-            std::cout << "[ML-AWARE RULE] Good ML track -> Optimistic rule boost to "
-                      << adjustedRate << std::endl;
+            stabilizationPenalty = 0; // OK to try higher rate
         }
     }
 
-    return adjustedRate;
+    // ============================================================================
+    // PHASE 6: CONSECUTIVE SUCCESS/FAILURE LOGIC (AARF-style but enhanced)
+    // ============================================================================
+    int consecutiveAdjustment = 0;
+
+    // Success-based rate increase (stricter than AARF)
+    if (station->consecSuccess > 60 && weightedSuccess > 0.92)
+    {
+        consecutiveAdjustment = +2; // Very confident increase
+    }
+    else if (station->consecSuccess > 40 && weightedSuccess > 0.88)
+    {
+        consecutiveAdjustment = +1; // Standard increase
+    }
+
+    // Failure-based rate decrease (smarter than AARF)
+    if (station->consecFailure >= 5)
+    {
+        consecutiveAdjustment = -3; // Emergency backoff
+    }
+    else if (station->consecFailure >= 3)
+    {
+        consecutiveAdjustment = -2; // Strong backoff
+    }
+    else if (station->consecFailure >= 2 && weightedSuccess < 0.7)
+    {
+        consecutiveAdjustment = -1; // Cautious backoff
+    }
+
+    // ============================================================================
+    // PHASE 7: MOBILITY AWARENESS
+    // ============================================================================
+    double mobility = GetMobilityMetric(
+        const_cast<WifiRemoteStation*>(static_cast<const WifiRemoteStation*>(station)));
+
+    int mobilityAdjustment = 0;
+    if (mobility > 0.7) // High mobility
+    {
+        mobilityAdjustment = -1; // More conservative in mobile scenarios
+    }
+    else if (mobility < 0.2 && snrStability > 7.0) // Very stable stationary
+    {
+        mobilityAdjustment = +1; // Can be more aggressive
+    }
+
+    // ============================================================================
+    // PHASE 8: CONTEXT-SPECIFIC INTELLIGENCE
+    // ============================================================================
+    int contextAdjustment = 0;
+
+    switch (safety.context)
+    {
+    case WifiContextType::EXCELLENT_STABLE:
+        // Be aggressive in excellent conditions
+        contextAdjustment = +1;
+        break;
+
+    case WifiContextType::GOOD_STABLE:
+        // Neutral - let other factors decide
+        contextAdjustment = 0;
+        break;
+
+    case WifiContextType::GOOD_UNSTABLE:
+        // Slightly conservative due to instability
+        contextAdjustment = -1;
+        break;
+
+    case WifiContextType::MARGINAL:
+        // Conservative
+        contextAdjustment = -1;
+        break;
+
+    case WifiContextType::POOR_UNSTABLE:
+        // Very conservative
+        contextAdjustment = -2;
+        break;
+
+    case WifiContextType::EMERGENCY:
+        // Emergency mode - handled separately
+        return safety.recommendedSafeRate;
+
+    default:
+        contextAdjustment = 0;
+    }
+
+    // ============================================================================
+    // PHASE 9: INTELLIGENT FUSION OF ALL FACTORS
+    // ============================================================================
+    int totalAdjustment = stabilityAdjustment + trendAdjustment + lossAdjustment +
+                          stabilizationPenalty + consecutiveAdjustment + mobilityAdjustment +
+                          contextAdjustment;
+
+    // Apply adjustment with intelligent bounds
+    int adjustedRate = static_cast<int>(baseRate) + totalAdjustment;
+
+    // Safety bounds
+    adjustedRate = std::max(0, std::min(7, adjustedRate));
+
+    // ============================================================================
+    // PHASE 10: FINAL SANITY CHECKS AND SAFETY OVERRIDES
+    // ============================================================================
+
+    // Don't jump more than 2 rates at once (unless emergency)
+    if (std::abs(static_cast<int>(adjustedRate) - static_cast<int>(station->currentRateIndex)) > 2)
+    {
+        if (adjustedRate > static_cast<int>(station->currentRateIndex))
+        {
+            adjustedRate = station->currentRateIndex + 2;
+        }
+        else
+        {
+            adjustedRate = std::max(0, static_cast<int>(station->currentRateIndex) - 2);
+        }
+    }
+
+    // Final risk-based override
+    if (safety.riskLevel > 0.6 && adjustedRate > 4)
+    {
+        adjustedRate = std::min(adjustedRate, 4); // Cap at 24 Mbps in risky conditions
+    }
+
+    // ============================================================================
+    // COMPREHENSIVE DEBUG LOGGING
+    // ============================================================================
+    std::cout << "[ENHANCED RULE] SNR=" << snr << "dB (eff=" << effectiveSnr << "dB)"
+              << " | Base=" << baseRate << " | SuccRatio=" << std::fixed << std::setprecision(2)
+              << weightedSuccess << " | Loss=" << packetLoss << " | Stab=" << snrStability
+              << " | Trend=" << snrTrend << std::endl;
+
+    std::cout << "[ADJUSTMENTS] Stab=" << stabilityAdjustment << " Trend=" << trendAdjustment
+              << " Loss=" << lossAdjustment << " Consec=" << consecutiveAdjustment
+              << " Mobility=" << mobilityAdjustment << " Context=" << contextAdjustment
+              << " RateStab=" << stabilizationPenalty << " | TOTAL=" << totalAdjustment
+              << std::endl;
+
+    std::cout << "[FINAL RULE RATE] " << baseRate << " + " << totalAdjustment << " = "
+              << adjustedRate << " | ConsecSucc=" << station->consecSuccess
+              << " | ConsecFail=" << station->consecFailure << " | Changes=" << recentChanges
+              << std::endl;
+
+    return static_cast<uint32_t>(adjustedRate);
 }
 
 // Safety assessment (enhanced but not overly conservative)

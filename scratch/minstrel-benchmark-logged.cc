@@ -10,17 +10,94 @@
 #include "ns3/decision-count-controller.h"
 #include "ns3/performance-based-parameter-generator.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <string>
 #include <vector>
 
 using namespace ns3;
+
+// === SNR Conversion Utility ===
+enum SnrModel
+{
+    LOG_MODEL,
+    SOFT_MODEL,
+    INTF_MODEL
+};
+
+// --- SNR Conversion Debugging Globals ---
+static int g_snrConversionCallCount = 0;
+static std::vector<double> g_lastConvertedSnrs;
+double g_currentTestDistance = 20.0;
+uint32_t g_currentInterferers = 0;
+
+double
+ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
+{
+    g_snrConversionCallCount++; // DEBUG: Track how many times the function is called
+    if (g_snrConversionCallCount < 10 || g_snrConversionCallCount % 50 == 0)
+    {
+        std::cout << "[DEBUG] ConvertNS3ToRealisticSnr called #" << g_snrConversionCallCount
+                  << " | ns3Value=" << ns3Value << " | distance=" << distance
+                  << " | interferers=" << interferers << " | model=" << model << std::endl;
+    }
+
+    if (distance <= 0.0)
+        distance = 1.0;
+    if (distance > 200.0)
+        distance = 200.0;
+    if (interferers > 10)
+        interferers = 10;
+
+    double realisticSnr = 0.0;
+
+    switch (model)
+    {
+    case LOG_MODEL: {
+        double snr0 = 40.0;
+        double pathLossExp = 2.2;
+        realisticSnr = snr0 - 10 * pathLossExp * log10(distance);
+        realisticSnr -= (interferers * 1.5);
+        break;
+    }
+    case SOFT_MODEL: {
+        if (distance <= 20.0)
+            realisticSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 100.0)
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+        else
+            realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
+
+        realisticSnr -= (interferers * 2.0);
+        break;
+    }
+    case INTF_MODEL: {
+        realisticSnr = 38.0 - 10 * log10(distance * distance);
+        realisticSnr -= (pow(interferers, 1.2) * 1.2);
+        break;
+    }
+    }
+
+    double variation = fmod(std::abs(ns3Value), 12.0) - 6.0;
+    realisticSnr += variation * 0.4;
+
+    realisticSnr = std::max(-30.0, std::min(45.0, realisticSnr));
+
+    g_lastConvertedSnrs.push_back(realisticSnr);
+    if (g_lastConvertedSnrs.size() > 10)
+        g_lastConvertedSnrs.erase(g_lastConvertedSnrs.begin());
+
+    return realisticSnr;
+}
 
 // Global decision controller
 DecisionCountController* g_decisionController = nullptr;
@@ -126,21 +203,35 @@ class DetailedMinstrelLogger
         m_logFile.flush();
     }
 
-    void LogPacketResult(uint32_t nodeId, bool success, double snr, uint32_t rateIndex)
+    void LogPacketResult(uint32_t nodeId, bool success, double ns3Snr, uint32_t rateIndex)
     {
         if (!m_logFile.is_open())
             return;
 
+        // Use new SNR model for logging
+        double realisticSnr = ConvertNS3ToRealisticSnr(ns3Snr,
+                                                       g_currentTestDistance,
+                                                       g_currentInterferers,
+                                                       SOFT_MODEL);
+
         // Stratified sampling - similar to SmartWifiManagerV3Logged
-        double logProb = GetStratifiedLogProbability(rateIndex, snr, success);
+        double logProb = GetStratifiedLogProbability(rateIndex, realisticSnr, success);
         if (m_uniformDist(m_rng) > logProb)
             return;
 
         StationState& st = m_stationStates[nodeId];
         st.nodeId = nodeId;
 
-        UpdateStationState(st, success, snr, rateIndex);
+        UpdateStationState(st, success, realisticSnr, rateIndex);
         WriteLogEntry(st, success);
+
+        // Debug output for SNR conversion
+        if (m_stationStates.size() < 5 || nodeId % 20 == 0)
+        {
+            std::cout << "[DEBUG] (Logger) NodeId=" << nodeId << " ns3Snr=" << ns3Snr
+                      << " -> realisticSnr=" << realisticSnr << " (rate=" << rateIndex << ")"
+                      << std::endl;
+        }
     }
 
   private:
@@ -290,7 +381,7 @@ class DetailedMinstrelLogger
         m_logFile.flush();
     }
 
-    // Feature calculation methods (similar to SmartWifiManagerV3Logged)
+    // Feature calculation methods (same as before)
     double CalculateSuccessRatio(const std::vector<bool>& history, uint32_t window) const
     {
         if (history.empty())
@@ -433,6 +524,20 @@ class DetailedMinstrelLogger
         return static_cast<double>(conservative) / st.rateHistory.size();
     }
 
+    uint8_t TierFromSnr(double snr) const
+    {
+        if (!std::isfinite(snr))
+            return 0;
+        return (snr > 25)   ? 7
+               : (snr > 21) ? 6
+               : (snr > 18) ? 5
+               : (snr > 15) ? 4
+               : (snr > 12) ? 3
+               : (snr > 9)  ? 2
+               : (snr > 6)  ? 1
+                            : 0;
+    }
+
     uint32_t GetRecommendedSafeRate(const StationState& st) const
     {
         return TierFromSnr(st.lastSnr);
@@ -474,20 +579,6 @@ class DetailedMinstrelLogger
         }
         return variance / window;
     }
-
-    uint8_t TierFromSnr(double snr) const
-    {
-        if (!std::isfinite(snr))
-            return 0;
-        return (snr > 25)   ? 7
-               : (snr > 21) ? 6
-               : (snr > 18) ? 5
-               : (snr > 15) ? 4
-               : (snr > 12) ? 3
-               : (snr > 9)  ? 2
-               : (snr > 6)  ? 1
-                            : 0;
-    }
 };
 
 // Global detailed logger
@@ -525,8 +616,9 @@ MinstrelDecisionTrace(std::string context,
     // Log to detailed logger with simulated SNR
     if (g_detailedLogger)
     {
-        double simulatedSnr = 15.0 + (rateIndex * 2.0); // Simple SNR simulation
-        g_detailedLogger->LogPacketResult(nodeId, true, simulatedSnr, rateIndex);
+        // Use a simulated ns3 SNR but convert via proper model
+        double ns3Snr = 15.0 + (rateIndex * 2.0); // Simulated raw SNR
+        g_detailedLogger->LogPacketResult(nodeId, true, ns3Snr, rateIndex);
     }
 }
 
@@ -545,10 +637,10 @@ TxTrace(Ptr<const Packet> packet)
     if (g_detailedLogger)
     {
         uint32_t nodeId = 0;                         // Default node ID
-        double estimatedSnr = 12.0 + (txCount % 20); // Simulated SNR variation
+        double ns3Snr = 12.0 + (txCount % 20);       // Simulated raw SNR variation
         uint32_t estimatedRate = (txCount / 50) % 8; // Rate cycling simulation
         bool success = (txCount % 10) != 0;          // 90% success rate simulation
-        g_detailedLogger->LogPacketResult(nodeId, success, estimatedSnr, estimatedRate);
+        g_detailedLogger->LogPacketResult(nodeId, success, ns3Snr, estimatedRate);
     }
 }
 
@@ -580,10 +672,10 @@ TxTraceWithContext(std::string context, Ptr<const Packet> packet)
             }
         }
 
-        double estimatedSnr = 12.0 + (txCount % 20);
+        double ns3Snr = 12.0 + (txCount % 20);
         uint32_t estimatedRate = (txCount / 50) % 8;
         bool success = (txCount % 10) != 0;
-        g_detailedLogger->LogPacketResult(nodeId, success, estimatedSnr, estimatedRate);
+        g_detailedLogger->LogPacketResult(nodeId, success, ns3Snr, estimatedRate);
     }
 }
 
@@ -592,6 +684,10 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
 {
     DecisionCountController controller(tc.targetDecisions, 120); // 2 min max
     g_decisionController = &controller;
+
+    // Set global scenario info for SNR conversion model
+    g_currentTestDistance = tc.distance;
+    g_currentInterferers = tc.interferers;
 
     // Initialize detailed logger for this test case
     DetailedMinstrelLogger detailedLogger;
@@ -637,7 +733,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     wifi.SetStandard(WIFI_STANDARD_80211g);
 
     // --- Configure Minstrel Manager with more aggressive parameters ---
-    wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged", // Use your custom implementation
+    wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged",
                                  "LookAroundRate",
                                  UintegerValue(20),
                                  "EwmaLevel",
@@ -687,10 +783,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         staMobility.SetPositionAllocator(staPositionAlloc);
         staMobility.Install(wifiStaNodes);
 
-        // Reduced speed and added bounds checking
         Vector velocity(tc.speed * 0.5, 0.0, 0.0); // Reduce speed by half
         if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
-            velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1); // Minimal y movement
+            velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1);
         wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
     }
     else
@@ -714,7 +809,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         for (uint32_t i = 0; i < tc.interferers; ++i)
         {
             double angle = 2.0 * M_PI * i / std::max<uint32_t>(tc.interferers, 1);
-            double radius = 30.0 + i * 15.0; // Increased separation
+            double radius = 30.0 + i * 15.0;
 
             interfererApAlloc->Add(Vector(radius * std::cos(angle), radius * std::sin(angle), 0.0));
             interfererStaAlloc->Add(
@@ -757,11 +852,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     // Main traffic: UDP with variable packet size and rate
     OnOffHelper onoff("ns3::UdpSocketFactory", InetSocketAddress(apInterface.GetAddress(0), port));
 
-    // Parse traffic rate and convert to more conservative values
     std::string adjustedRate = tc.trafficRate;
     if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
     {
-        // Reduce traffic rate for challenging scenarios
         double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
         rateValue *= 0.5; // Reduce by half
         adjustedRate = std::to_string(static_cast<int>(rateValue)) + "Mbps";
@@ -771,7 +864,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     onoff.SetAttribute("PacketSize", UintegerValue(tc.packetSize));
     onoff.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
     onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0.0]"));
-    onoff.SetAttribute("StartTime", TimeValue(Seconds(1.0))); // Start earlier
+    onoff.SetAttribute("StartTime", TimeValue(Seconds(1.0)));
     onoff.SetAttribute("StopTime", TimeValue(Seconds(118.0)));
     ApplicationContainer clientApps = onoff.Install(wifiStaNodes.Get(0));
 
@@ -780,12 +873,11 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     serverApps.Start(Seconds(0.5));
     serverApps.Stop(Seconds(120.0));
 
-    // Interferer applications with reduced intensity
     if (tc.interferers > 0)
     {
         for (uint32_t i = 0; i < tc.interferers; ++i)
         {
-            std::string interfererRate = "1Mbps"; // Much reduced from original
+            std::string interfererRate = "1Mbps";
             if (tc.category == "HighInterference")
                 interfererRate = "2Mbps";
             else if (tc.category == "PoorPerformance")
@@ -795,7 +887,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
                 "ns3::UdpSocketFactory",
                 InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
             interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate(interfererRate)));
-            interfererOnOff.SetAttribute("PacketSize", UintegerValue(256)); // Smaller packets
+            interfererOnOff.SetAttribute("PacketSize", UintegerValue(256));
             interfererOnOff.SetAttribute("OnTime",
                                          StringValue("ns3::ExponentialRandomVariable[Mean=0.5]"));
             interfererOnOff.SetAttribute("OffTime",
@@ -815,12 +907,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
     // --- Connect traces with improved patterns ---
-    // Connect to your custom MinstrelWifiManagerLogged trace source
     Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/"
                                   "RemoteStationManager/$ns3::MinstrelWifiManagerLogged/RateChange",
                                   MakeCallback(&RateTrace));
-
-    // Connect to packet transmission for debugging - try both with and without context
     try
     {
         Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
@@ -828,7 +917,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     }
     catch (...)
     {
-        // If the above fails, try with context
         try
         {
             Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
@@ -840,7 +928,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         }
     }
 
-    // Schedule periodic checks to force rate adaptations
     for (double t = 5.0; t < 115.0; t += 10.0)
     {
         Simulator::Schedule(Seconds(t), [&controller]() { controller.IncrementAdaptationEvent(); });
@@ -851,10 +938,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     Simulator::Stop(Seconds(120.0));
     Simulator::Run();
 
-    // --- Results collection ---
     double throughput = 0, packetLoss = 0, avgDelay = 0;
     double rxPackets = 0, txPackets = 0, rxBytes = 0;
-    double simulationTime = Simulator::Now().GetSeconds() - 1.0; // Adjusted for earlier start
+    double simulationTime = Simulator::Now().GetSeconds() - 1.0;
 
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
@@ -880,8 +966,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
 
     collectedDecisions = controller.GetSuccessCount() + controller.GetFailureCount();
 
-    // Note: No more CSV summary output - only detailed logging now
-
     std::cout << "  Collected: " << collectedDecisions << "/" << tc.targetDecisions
               << " decisions in " << simulationTime << "s"
               << " (TX: " << txPackets << ", RX: " << rxPackets << ")" << std::endl;
@@ -895,7 +979,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
 int
 main(int argc, char* argv[])
 {
-    // Enable logging for debugging
     LogComponentEnable("MinstrelWifiManagerLogged", LOG_LEVEL_INFO);
     LogComponentEnable("DecisionCountController", LOG_LEVEL_INFO);
 
@@ -905,11 +988,9 @@ main(int argc, char* argv[])
     }
 
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(2000);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(40000);
 
     std::cout << "Generated " << testCases.size() << " performance-based scenarios" << std::endl;
-
-    // Note: Removed CSV summary file creation - only detailed logs now
 
     std::map<std::string, uint32_t> categoryStats;
     std::map<std::string, std::vector<uint32_t>> decisionCountsByCategory;
@@ -946,6 +1027,14 @@ main(int argc, char* argv[])
 
     std::cout << "\nTotal decisions collected: " << totalDecisions << std::endl;
     std::cout << "Detailed logs saved in: balanced-results/*_detailed.csv" << std::endl;
+
+    // Print SNR conversion debug summary
+    std::cout << "\n--- SNR Conversion Debug ---" << std::endl;
+    std::cout << "Total ConvertNS3ToRealisticSnr calls: " << g_snrConversionCallCount << std::endl;
+    std::cout << "Last 10 converted SNRs: ";
+    for (double snr : g_lastConvertedSnrs)
+        std::cout << std::setprecision(2) << snr << " ";
+    std::cout << std::endl;
 
     return 0;
 }
