@@ -1045,6 +1045,13 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         m_currentRate = rate;
     }
 
+    std::cout << "[RATE-DEBUG] Algorithm=" << typeid(*this).name()
+              << " | Chosen Rate Index=" << finalRate << " | Mbps=" << (finalDataRate / 1e6)
+              << std::endl;
+
+    std::cout << "[SNR-DEBUG] SNR=" << station->lastSnr << " | SuccRatio=" << station->consecSuccess
+              << " | Loss=" << station->lostPackets << std::endl;
+
     return WifiTxVector(
         mode,
         GetDefaultTxPowerLevel(),
