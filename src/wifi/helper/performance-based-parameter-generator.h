@@ -30,14 +30,14 @@ class PerformanceBasedParameterGenerator
   private:
     // Expanded tier definitions for better coverage
     // in performance-based-parameter-generator.h
-    const double POOR_SNR_MIN = -15.0;
-    const double POOR_SNR_MAX = 12.0;
-    const double MEDIUM_SNR_MIN = 12.0;
-    const double MEDIUM_SNR_MAX = 22.0;
-    const double GOOD_SNR_MIN = 22.0;
-    const double GOOD_SNR_MAX = 35.0; // expanded
-    const double EXCELLENT_SNR_MIN = 35.0;
-    const double EXCELLENT_SNR_MAX = 45.0; // new tier
+    // const double POOR_SNR_MIN = -15.0;
+    // const double POOR_SNR_MAX = 12.0;
+    // const double MEDIUM_SNR_MIN = 12.0;
+    // const double MEDIUM_SNR_MAX = 22.0;
+    // const double GOOD_SNR_MIN = 22.0;
+    // const double GOOD_SNR_MAX = 35.0; // expanded
+    // const double EXCELLENT_SNR_MIN = 35.0;
+    // const double EXCELLENT_SNR_MAX = 45.0; // new tier
 
   public:
     std::vector<ScenarioParams> GenerateStratifiedScenarios(uint32_t totalScenarios = 200);
@@ -52,6 +52,7 @@ class PerformanceBasedParameterGenerator
     ScenarioParams GenerateExtremeScenario(uint32_t index);
     ScenarioParams GenerateEdgeStressScenario(uint32_t index);
     ScenarioParams GenerateRandomChaosScenario(uint32_t index);
+    ScenarioParams GenerateExcellentPerformanceScenario(uint32_t index);
 
     // Utility
     double CalculateDistanceForSnr(double targetSnr, uint32_t interferers);
