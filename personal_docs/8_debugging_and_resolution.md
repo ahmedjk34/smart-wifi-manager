@@ -609,6 +609,237 @@ std::vector<double> features(21);
 
 ---
 
+## ns-3 WiFi Rate Index Mapping Problem and Solution
+
+### Problem Description
+
+**The Critical Issue**
+
+When implementing custom WiFi rate adaptation algorithms in ns-3, a common expectation is that rate indexes 0-7 should map directly to the 802.11g OFDM rates:
+
+- Index 0 → 6 Mbps
+- Index 1 → 9 Mbps
+- Index 2 → 12 Mbps
+- Index 3 → 18 Mbps
+- Index 4 → 24 Mbps
+- Index 5 → 36 Mbps
+- Index 6 → 48 Mbps
+- Index 7 → 54 Mbps
+
+However, when using `WIFI_STANDARD_80211g`, ns-3 includes **both DSSS and OFDM rates**, creating a 12-rate system instead of the expected 8-rate OFDM-only system.
+
+**What Actually Happens with 802.11g**
+
+```cpp
+// Using WIFI_STANDARD_80211g results in:
+[SUPPORTED RATES TABLE]
+Index 0: DsssRate1Mbps     | DataRate=1000000     ← DSSS rates
+Index 1: DsssRate2Mbps     | DataRate=2000000     ← (unwanted)
+Index 2: DsssRate5_5Mbps   | DataRate=5500000     ←
+Index 3: DsssRate11Mbps    | DataRate=11000000    ←
+Index 4: ErpOfdmRate6Mbps  | DataRate=6000000     ← OFDM rates start here
+Index 5: ErpOfdmRate9Mbps  | DataRate=9000000
+Index 6: ErpOfdmRate12Mbps | DataRate=12000000
+Index 7: ErpOfdmRate18Mbps | DataRate=18000000    ← Rate 7 = 18 Mbps (not 54!)
+Index 8: ErpOfdmRate24Mbps | DataRate=24000000
+Index 9: ErpOfdmRate36Mbps | DataRate=36000000
+Index 10: ErpOfdmRate48Mbps| DataRate=48000000
+Index 11: ErpOfdmRate54Mbps| DataRate=54000000    ← 54 Mbps is actually index 11
+```
+
+**The Symptom**
+
+Your rate adaptation algorithm selects rate index 7 expecting 54 Mbps, but gets 18 Mbps instead, causing:
+
+- Suboptimal performance
+- Incorrect throughput calculations
+- Algorithm logic based on wrong rate assumptions
+- Debugging confusion
+
+**_Why This Happens_**
+
+`WIFI_STANDARD_80211g` includes DSSS rates for backward compatibility with 802.11b devices. This is correct behavior according to the 802.11g standard, but problematic for algorithms expecting OFDM-only rate tables.
+
+**_Failed Solutions_**
+
+**❌ Using `SupportedRates` attribute (doesn't work in modern ns-3):**
+
+```cpp
+// This CRASHES in ns-3.41+
+mac.SetType("ns3::StaWifiMac",
+            "Ssid", SsidValue(ssid),
+            "SupportedRates", StringValue("ErpOfdmRate6Mbps;ErpOfdmRate9Mbps;..."));
+// Error: Invalid attribute set (SupportedRates) on ns3::StaWifiMac
+```
+
+**❌ Complex workarounds:\*\***
+
+- Manually filtering supported rates after device creation
+- Rate index translation functions
+- PHY attribute modifications
+
+### The Solution
+
+**✅ Use `WIFI_STANDARD_80211a` Instead**
+
+The cleanest solution is to use 802.11a, which only includes OFDM rates:
+
+```cpp
+// BEFORE (problematic):
+wifi.SetStandard(WIFI_STANDARD_80211g);
+
+// AFTER (fixed):
+wifi.SetStandard(WIFI_STANDARD_80211a);
+```
+
+**Results After Fix**
+
+```cpp
+[SUPPORTED RATES TABLE]
+Index 0: OfdmRate6Mbps  | DataRate=6000000     ← Perfect mapping
+Index 1: OfdmRate9Mbps  | DataRate=9000000
+Index 2: OfdmRate12Mbps | DataRate=12000000
+Index 3: OfdmRate18Mbps | DataRate=18000000
+Index 4: OfdmRate24Mbps | DataRate=24000000
+Index 5: OfdmRate36Mbps | DataRate=36000000
+Index 6: OfdmRate48Mbps | DataRate=48000000
+Index 7: OfdmRate54Mbps | DataRate=54000000    ← Rate 7 = 54 Mbps ✓
+```
+
+### Implementation Guide
+
+**Step 1: Change WiFi Standard**
+
+```cpp
+WifiHelper wifi;
+wifi.SetStandard(WIFI_STANDARD_80211a);  // Changed from 80211g
+```
+
+**Step 2: Keep Everything Else the Same**
+
+All other configuration remains identical:
+
+```cpp
+// Same PHY configuration
+YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
+YansWifiPhyHelper phy;
+phy.SetChannel(channel.Create());
+
+// Same MAC configuration
+WifiMacHelper mac;
+Ssid ssid = Ssid("your-network");
+mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
+
+// Same device installation
+NetDeviceContainer devices = wifi.Install(phy, mac, nodes);
+```
+
+**Step 3: Verify the Fix**
+
+Add verification code to confirm rate mapping:
+
+```cpp
+// Verification: Print rate table after device creation
+Ptr<WifiNetDevice> device = DynamicCast<WifiNetDevice>(devices.Get(0));
+if (device) {
+    Ptr<WifiRemoteStationManager> manager = device->GetRemoteStationManager();
+    std::cout << "[RATE TABLE VERIFICATION]" << std::endl;
+
+    for (uint32_t i = 0; i < 8; ++i) {  // Should now be exactly 8 rates
+        WifiMode mode = manager->GetSupported(device->GetMac()->GetAddress(), i);
+        std::cout << "Index " << i << ": " << mode.GetUniqueName()
+                  << " | DataRate=" << mode.GetDataRate(20) << std::endl;
+    }
+}
+```
+
+### Why This Solution Works
+
+**Advantages of 802.11a**
+
+1. **OFDM-only**: Contains exactly the 8 OFDM rates (6-54 Mbps)
+2. **Same rates**: Identical to 802.11g's OFDM portion
+3. **Clean mapping**: Perfect 0-7 index mapping
+4. **No compatibility issues**: Supported in all ns-3 versions
+5. **No workarounds needed**: One-line change
+
+**Technical Differences**
+
+- **Frequency band**: 5 GHz instead of 2.4 GHz
+- **No DSSS**: Only OFDM modulation
+- **Same data rates**: 6, 9, 12, 18, 24, 36, 48, 54 Mbps
+
+For rate adaptation algorithm testing, the frequency band difference is irrelevant since you're focusing on algorithmic performance, not RF propagation characteristics.
+
+## **CRITICAL REMINDER: APPLY THIS FIX TO ALL PROJECTS**
+
+### ⚠️ Check All Your ns-3 WiFi Projects
+
+This issue affects **any custom WiFi rate adaptation algorithm** expecting OFDM-only rates. Search your codebase for:
+
+```bash
+# Find all files using 802.11g
+grep -r "WIFI_STANDARD_80211g" /path/to/your/projects/
+
+# Look for rate adaptation implementations
+grep -r "GetSupported\|SetDataRate\|rate.*index" /path/to/your/projects/
+```
+
+### Projects That Need This Fix
+
+- Custom rate adaptation managers
+- WiFi performance benchmarks
+- ML-based rate control algorithms
+- Any code assuming 8-rate OFDM tables
+- Research simulations expecting specific rate mappings
+
+### Before Deploying Any WiFi Simulation
+
+1. **Verify rate table size**: Should be 8 rates for OFDM-only
+2. **Check rate 7 mapping**: Should be 54 Mbps, not 18 Mbps
+3. **Test with known scenarios**: Verify expected throughput
+4. **Add debug output**: Print rate table during initialization
+
+## Alternative Solutions (If 802.11a Not Suitable)
+
+If you specifically need 2.4 GHz operation (802.11g), consider:
+
+### Option 1: Rate Index Translation
+
+```cpp
+uint32_t TranslateToOfdmIndex(uint32_t ofdmIndex) {
+    // Map OFDM indices 0-7 to actual indices 4-11 in 802.11g
+    return ofdmIndex + 4;
+}
+```
+
+### Option 2: Disable DSSS Support (ns-3 version dependent)
+
+```cpp
+Config::SetDefault("ns3::WifiPhy::DsssSupported", BooleanValue(false));
+wifi.SetStandard(WIFI_STANDARD_80211g);
+```
+
+## Testing Your Fix
+
+### Verification Checklist
+
+- [ ] Rate table contains exactly 8 entries
+- [ ] Index 0 = 6 Mbps
+- [ ] Index 7 = 54 Mbps
+- [ ] No DSSS rates present
+- [ ] Algorithm selects expected rates
+- [ ] Throughput matches expectations
+
+### Debug Output Template
+
+```cpp
+std::cout << "[RATE MAPPING DEBUG]" << std::endl;
+std::cout << "Expected: Index 7 = 54 Mbps" << std::endl;
+std::cout << "Actual: Index 7 = " << GetDataRateForIndex(7) << " bps" << std::endl;
+std::cout << "Status: " << (GetDataRateForIndex(7) == 54000000 ? "FIXED" : "BROKEN") << std::endl;
+```
+
 ## Conclusion
 
 This debugging journey successfully transformed a data-leakage-plagued ML system with unrealistic 99.9% accuracy into a production-ready WiFi rate adaptation system achieving honest 49.9% performance. The key insights were:
@@ -618,5 +849,9 @@ This debugging journey successfully transformed a data-leakage-plagued ML system
 3. **System Integration Matters**: Multi-component systems require careful feature synchronization
 4. **Class Imbalance is Addressable**: Proper weighting can handle even extreme imbalance (269:1 ratios)
 5. **Validation is Essential**: Automated leakage detection prevents regression
+
+The 802.11g vs 802.11a issue is a common pitfall in ns-3 WiFi simulations. Using `WIFI_STANDARD_80211a` provides the cleanest solution for algorithms expecting OFDM-only rate tables with proper 0-7 indexing.
+
+**Remember**: This fix must be applied to **every ns-3 project** with custom WiFi rate adaptation to ensure rate index 7 correctly maps to 54 Mbps instead of 18 Mbps.
 
 The system is now ready for real-world deployment and continued improvement through the identified next steps.
