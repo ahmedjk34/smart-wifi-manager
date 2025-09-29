@@ -1263,6 +1263,15 @@ MinstrelWifiManagerLogged::TierFromSnr(MinstrelWifiRemoteStationLogged* st, doub
                         : 0;
 }
 
+extern "C" void
+LogEnhancedFeaturesAndRate(std::string context,
+                           uint32_t newState,
+                           ns3::Time start,
+                           ns3::Time duration)
+{
+    // Do nothing
+}
+
 void
 MinstrelWifiManagerLogged::LogDecision(MinstrelWifiRemoteStationLogged* st,
                                        int decisionReason,
