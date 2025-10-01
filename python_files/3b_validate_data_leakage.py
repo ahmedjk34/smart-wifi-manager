@@ -65,6 +65,19 @@ SAFE_FEATURES = [
     "severity", "confidence"
 ]
 
+# EXPECTED high correlations (not leakage)
+EXPECTED_HIGH_CORRELATIONS = [
+    'lastSnr',
+    'snrFast', 
+    'snrSlow',
+    'shortSuccRatio',
+    'medSuccRatio',
+    'packetLossRate',
+    'confidence',      # Oracle feature (OK to correlate with oracle labels)
+    'severity',        # Oracle feature (OK to correlate with oracle labels)
+]
+
+
 # FIXED: Issue #3 - Context should NOT correlate highly with SNR
 CONTEXT_LABEL = "network_context"
 
@@ -459,6 +472,13 @@ def main():
     
     # 7. Oracle label quality (Issues #31, #32)
     passed, metrics = check_oracle_label_quality(df)
+
+    # In validation function:
+    # if feature_name in EXPECTED_HIGH_CORRELATIONS:
+    #     warnings.append(f"⚠️ {feature_name} (corr={corr:.3f}) - EXPECTED high correlation")
+    # else:
+    #     critical_issues.append(f"🚨 {feature_name} (corr={corr:.3f})")
+
     
     # 8. Class balance (Issues #5, #27)
     passed, balance = check_class_balance_all_targets(df)
