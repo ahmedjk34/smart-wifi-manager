@@ -61,22 +61,20 @@ CHUNKSIZE = 250_000                      # Only used if ENABLE_ROW_LIMITING=True
 # FIXED FEATURE COLUMNS - REMOVED DATA LEAKAGE FEATURES
 # FIXED: GUARANTEED SAFE FEATURES - ZERO DATA LEAKAGE
 FEATURE_COLS = [
-    # SNR features (7 features)
+    # SNR features (7 features) - SAFE
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
-    # Performance features (6 features) 
-    "shortSuccRatio", "medSuccRatio", "consecSuccess", "consecFailure",
-    "packetLossRate", "retrySuccessRatio",
+    # MAYBE keep these IF they're from t-1 (previous time window)
+    "shortSuccRatio", "medSuccRatio",  # Only if measured BEFORE current decision
+    "packetLossRate",  # Only if from previous window
     
-    # Rate adaptation features (3 features)
-    "recentRateChanges", "timeSinceLastRateChange", "rateStabilityScore",
+    # Network state (2 features) - SAFE
+    "channelWidth", "mobilityMetric",
     
-    # Network assessment features (3 features)
-    "severity", "confidence", "packetSuccess", 
+    # Assessment features (2 features) - SAFE if from previous decision
+    "severity", "confidence"
     
-    # Network configuration features (2 features - KEEP queueLen for now)
-    "channelWidth", "mobilityMetric"
     
     # REMOVED ALL LEAKY FEATURES:
     # "phyRate" - LEAKY: Perfect correlation with rateIdx
@@ -99,8 +97,7 @@ FEATURE_COLS = [
 # NEW: After removing leaky features, we have 21 features
 
 # Update assertion
-assert len(FEATURE_COLS) == 21, f"Expected 20 safe features, got {len(FEATURE_COLS)}"
-
+assert len(FEATURE_COLS) == 14, f"Expected 14 truly safe features, got {len(FEATURE_COLS)}"
 
 
 CONTEXT_LABEL = "network_context"
@@ -583,92 +580,197 @@ def save_comprehensive_documentation(results, feature_cols, total_time, logger, 
         logger.error(f"❌ Documentation saving failed: {str(e)}")
         raise
 
+
+def scenario_aware_split(df, label, test_size=0.2, val_size=0.2):
+    """Split by scenario to prevent temporal leakage"""
+    logger = logging.getLogger(__name__)
+    
+    if 'scenario_file' not in df.columns:
+        logger.warning("No scenario_file column, falling back to random split")
+        return perform_train_split_fixed(df[FEATURE_COLS], df[label], logger)
+    
+    # Get unique scenarios
+    scenarios = df['scenario_file'].unique()
+    n_scenarios = len(scenarios)
+    logger.info(f"Found {n_scenarios} unique scenarios")
+    
+    n_test = max(1, int(n_scenarios * test_size))
+    n_val = max(1, int(n_scenarios * val_size))
+    
+    # Shuffle scenarios
+    np.random.seed(42)
+    shuffled = scenarios.copy()
+    np.random.shuffle(shuffled)
+    
+    # Split scenarios
+    test_scenarios = shuffled[:n_test]
+    val_scenarios = shuffled[n_test:n_test+n_val]
+    train_scenarios = shuffled[n_test+n_val:]
+    
+    logger.info(f"Train: {len(train_scenarios)} scenarios")
+    logger.info(f"Val: {len(val_scenarios)} scenarios")
+    logger.info(f"Test: {len(test_scenarios)} scenarios")
+    
+    # Split data
+    train_df = df[df['scenario_file'].isin(train_scenarios)]
+    val_df = df[df['scenario_file'].isin(val_scenarios)]
+    test_df = df[df['scenario_file'].isin(test_scenarios)]
+    
+    # Extract X, y
+    X_train = train_df[FEATURE_COLS]
+    y_train = train_df[label]
+    X_val = val_df[FEATURE_COLS]
+    y_val = val_df[label]
+    X_test = test_df[FEATURE_COLS]
+    y_test = test_df[label]
+    
+    return X_train, X_val, X_test, y_train, y_val, y_test
+
+
 def main():
-    """Main training pipeline with configurable target labels."""
+    """Main training pipeline - trains ALL oracle models"""
     logger = setup_logging()
     pipeline_start = time.time()
     
+    # DEFINE ALL TARGETS TO TRAIN
+    TARGETS_TO_TRAIN = ["oracle_conservative", "oracle_balanced", "oracle_aggressive"]
+    
+    all_results = {}  # Store results for all models
+    
     try:
-        logger.info(f"🎯 Training model for target label: {TARGET_LABEL}")
+        for target_idx, current_target in enumerate(TARGETS_TO_TRAIN, 1):
+            logger.info("="*80)
+            logger.info(f"TRAINING MODEL {target_idx}/{len(TARGETS_TO_TRAIN)}: {current_target}")
+            logger.info("="*80)
+            
+            # Update filenames for current target
+            scaler_file = f"step3_scaler_{current_target}_FIXED.joblib"
+            model_file = f"step3_rf_{current_target}_model_FIXED.joblib"
+            
+            # STEP 0: LOAD CLASS WEIGHTS
+            class_weights = load_class_weights(CLASS_WEIGHTS_FILE, current_target, logger)
+            
+            # STEP 1: LOAD DATASET (only once if first iteration)
+            if target_idx == 1:
+                logger.info(f"Loading dataset...")
+                df, available_features = bulletproof_load_dataset(
+                    CSV_FILE, FEATURE_COLS, current_target, logger, CONTEXT_LABEL
+                )
+                
+                if df is None:
+                    logger.error("Dataset loading failed")
+                    return False
+            else:
+                logger.info(f"Reusing loaded dataset for {current_target}")
+            
+            # Verify target exists
+            if current_target not in df.columns:
+                logger.error(f"Target {current_target} not found in dataset, skipping")
+                continue
+            
+            # STEP 2: SCENARIO-AWARE SPLIT
+            logger.info(f"Splitting data for {current_target}...")
+            X_train, X_val, X_test, y_train, y_val, y_test = scenario_aware_split(
+                df, current_target, test_size=0.2, val_size=0.2
+            )
+            
+            # Compute class weights if not loaded
+            if class_weights is None:
+                class_weights = compute_class_weights_if_needed(y_train, current_target, logger)
+            
+            logger.info(f"Training data: X_train={X_train.shape}, y_train={y_train.shape}")
+            
+            # STEP 3: FEATURE SCALING
+            X_train_scaled, X_val_scaled, X_test_scaled, scaler = scale_features(
+                X_train, X_val, X_test, logger
+            )
+            
+            # Save scaler with target-specific name
+            joblib.dump(scaler, scaler_file)
+            logger.info(f"Scaler saved to {scaler_file}")
+            
+            # STEP 4: TRAIN MODEL
+            rf_model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=15,
+                random_state=42,
+                n_jobs=-1,
+                verbose=0
+            )
+            
+            val_acc, test_acc, train_time, cv_mean = train_and_eval(
+                rf_model, X_train_scaled, y_train, X_val_scaled, y_val,
+                X_test_scaled, y_test, current_target, logger, available_features,
+                class_weights=class_weights
+            )
+            
+            # Save model with target-specific name
+            joblib.dump(rf_model, model_file)
+            logger.info(f"Model saved to {model_file}")
+            
+            # Store results
+            all_results[current_target] = {
+                'val_acc': val_acc,
+                'test_acc': test_acc,
+                'cv_mean': cv_mean,
+                'train_time': train_time
+            }
+            
+            logger.info(f"Completed {current_target}: Val={val_acc:.1%}, Test={test_acc:.1%}, CV={cv_mean:.1%}")
         
-        # STEP 0: LOAD CLASS WEIGHTS
-        class_weights = load_class_weights(CLASS_WEIGHTS_FILE, TARGET_LABEL, logger)
-        
-        # STEP 1: BULLETPROOF DATASET LOADING
-        df, available_features = bulletproof_load_dataset(
-            CSV_FILE, FEATURE_COLS, TARGET_LABEL, logger, CONTEXT_LABEL
-        )
-        
-        if df is None:
-            logger.error("❌ Dataset loading failed")
-            return False
-        
-        # Prepare features and target
-        X = df[available_features]
-        y = df[TARGET_LABEL].astype(int)
-        
-        # Compute class weights if not loaded from file
-        if class_weights is None:
-            class_weights = compute_class_weights_if_needed(y, TARGET_LABEL, logger)
-        
-        logger.info(f"🔢 Final training data: X={X.shape}, y={y.shape}")
-        logger.info(f"💾 Estimated memory usage: ~{X.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-        
-        # STEP 2: STRATIFIED DATA SPLITTING
-        X_train, X_val, X_test, y_train, y_val, y_test = perform_train_split_fixed(X, y, logger)
-        
-        # STEP 3: FEATURE SCALING
-        X_train_scaled, X_val_scaled, X_test_scaled, scaler = scale_features(X_train, X_val, X_test, logger)
-        
-        # STEP 4: MODEL TRAINING WITH CLASS WEIGHTS
-        results = []
-        rf_model = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=15,
-            random_state=42,
-            n_jobs=-1,
-            verbose=0
-        )
-        
-        model_results = train_and_eval(
-            rf_model, X_train_scaled, y_train, X_val_scaled, y_val, 
-            X_test_scaled, y_test, TARGET_LABEL, logger, available_features, 
-            class_weights=class_weights
-        )
-        results.append(model_results)
-        
-        # STEP 5: SAVE COMPREHENSIVE DOCUMENTATION
+        # SUMMARY OF ALL MODELS
         total_time = time.time() - pipeline_start
-        save_comprehensive_documentation(
-            results, available_features, total_time, logger, TARGET_LABEL, 
-            used_class_weights=(class_weights is not None)
-        )
+        logger.info("\n" + "="*80)
+        logger.info("TRAINING COMPLETE FOR ALL MODELS")
+        logger.info("="*80)
         
-        # SUCCESS!
-        val_acc, test_acc, train_time, cv_mean = model_results
-        logger.info("🎉 CONFIGURABLE TRAINING COMPLETED SUCCESSFULLY!")
-        logger.info(f"🏆 Final Results for {TARGET_LABEL}: Val={val_acc:.1%}, Test={test_acc:.1%}, CV={cv_mean:.1%}")
+        for target, results in all_results.items():
+            logger.info(f"\n{target}:")
+            logger.info(f"  Validation: {results['val_acc']:.1%}")
+            logger.info(f"  Test: {results['test_acc']:.1%}")
+            logger.info(f"  CV: {results['cv_mean']:.1%}")
+            logger.info(f"  Time: {results['train_time']:.1f}s")
         
-        # Performance assessment
-        if cv_mean > 0.90:
-            logger.info("✅ EXCELLENT PERFORMANCE: >90% accuracy!")
-        elif cv_mean > 0.75:
-            logger.info("✅ GOOD PERFORMANCE: >75% accuracy!")
-        else:
-            logger.info("📊 MODERATE PERFORMANCE: Room for improvement")
+        logger.info(f"\nTotal pipeline time: {total_time:.1f}s ({total_time/60:.1f} min)")
+        
+        # Save combined documentation
+        save_all_models_documentation(all_results, available_features, total_time, logger)
         
         return True
         
     except Exception as e:
-        logger.error(f"❌ Pipeline failed: {e}")
+        logger.error(f"Pipeline failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
-    finally:
-        if 'pipeline_start' in locals():
-            final_time = time.time() - pipeline_start
-            logger.info(f"\n⏱️  Total execution time: {final_time:.2f} seconds")
 
+def save_all_models_documentation(all_results, feature_cols, total_time, logger):
+    """Save documentation for all trained models"""
+    doc_file = "step3_ALL_MODELS_training_results.txt"
+    
+    with open(doc_file, "w", encoding="utf-8") as f:
+        f.write("="*60 + "\n")
+        f.write("ALL ORACLE MODELS TRAINING RESULTS\n")
+        f.write("="*60 + "\n")
+        f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total Runtime: {total_time:.2f}s ({total_time/60:.2f} min)\n\n")
+        
+        f.write("MODELS TRAINED:\n")
+        for idx, (target, results) in enumerate(all_results.items(), 1):
+            f.write(f"\n{idx}. {target}\n")
+            f.write(f"   Validation: {results['val_acc']:.4f} ({results['val_acc']*100:.1f}%)\n")
+            f.write(f"   Test: {results['test_acc']:.4f} ({results['test_acc']*100:.1f}%)\n")
+            f.write(f"   CV: {results['cv_mean']:.4f} ({results['cv_mean']*100:.1f}%)\n")
+            f.write(f"   Training Time: {results['train_time']:.2f}s\n")
+        
+        f.write(f"\nFEATURES USED ({len(feature_cols)}): {', '.join(feature_cols)}\n")
+        f.write(f"\nFILES GENERATED:\n")
+        for target in all_results.keys():
+            f.write(f"  - step3_scaler_{target}_FIXED.joblib\n")
+            f.write(f"  - step3_rf_{target}_model_FIXED.joblib\n")
+    
+    logger.info(f"Combined documentation saved to {doc_file}")
+    
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
