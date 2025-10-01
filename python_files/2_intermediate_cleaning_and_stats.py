@@ -570,29 +570,35 @@ def validate_wifi_constraints(df: pd.DataFrame, logger) -> pd.DataFrame:
     
     # Validate rate indices
     if 'rateIdx' in df_clean.columns:
-        invalid_rates = ~df_clean['rateIdx'].isin(VALID_RATE_INDICES)
-        invalid_count = invalid_rates.sum()
+        # Handle NA values explicitly
+        valid_mask = df_clean['rateIdx'].notna() & df_clean['rateIdx'].isin(VALID_RATE_INDICES)
+        invalid_count = (~valid_mask).sum()
         if invalid_count > 0:
-            logger.info(f"  ⚠️ Found {invalid_count} rows with invalid rate indices")
-            df_clean = df_clean[~invalid_rates]
+            logger.info(f"  ⚠️ Found {invalid_count} rows with invalid/missing rate indices")
+            df_clean = df_clean[valid_mask]
     
-    # FIXED: Use expanded PHY rates (complete 802.11g)
+    # FIXED: Use expanded PHY rates (complete 802.11g) and handle NA values
     if 'phyRate' in df_clean.columns:
-        invalid_phy = ~df_clean['phyRate'].isin(VALID_PHY_RATES)
-        invalid_count = invalid_phy.sum()
+        # Handle NA values explicitly
+        valid_mask = df_clean['phyRate'].notna() & df_clean['phyRate'].isin(VALID_PHY_RATES)
+        invalid_count = (~valid_mask).sum()
         if invalid_count > 0:
-            logger.info(f"  ⚠️ Found {invalid_count} rows with invalid PHY rates")
-            unique_invalid = df_clean[invalid_phy]['phyRate'].unique()
-            logger.info(f"  📊 Invalid PHY rates found: {sorted(unique_invalid)}")
-            df_clean = df_clean[~invalid_phy]
+            logger.info(f"  ⚠️ Found {invalid_count} rows with invalid/missing PHY rates")
+            # Only show unique invalid values for non-NA entries
+            invalid_non_na = df_clean[df_clean['phyRate'].notna() & ~df_clean['phyRate'].isin(VALID_PHY_RATES)]['phyRate']
+            if len(invalid_non_na) > 0:
+                unique_invalid = invalid_non_na.unique()
+                logger.info(f"  📊 Invalid PHY rates found: {sorted(unique_invalid)}")
+            df_clean = df_clean[valid_mask]
     
     # Validate channel widths
     if 'channelWidth' in df_clean.columns:
-        invalid_channels = ~df_clean['channelWidth'].isin(VALID_CHANNEL_WIDTHS)
-        invalid_count = invalid_channels.sum()
+        # Handle NA values explicitly
+        valid_mask = df_clean['channelWidth'].notna() & df_clean['channelWidth'].isin(VALID_CHANNEL_WIDTHS)
+        invalid_count = (~valid_mask).sum()
         if invalid_count > 0:
-            logger.info(f"  ⚠️ Found {invalid_count} rows with invalid channel widths")
-            df_clean = df_clean[~invalid_channels]
+            logger.info(f"  ⚠️ Found {invalid_count} rows with invalid/missing channel widths")
+            df_clean = df_clean[valid_mask]
     
     removed_count = initial_count - len(df_clean)
     logger.info(f"✅ WiFi validation complete. Removed {removed_count} invalid rows")
