@@ -246,8 +246,7 @@ class DetailedMinstrelLogger
             p *= 1.5;
         if (idx <= 1)
             p = 1.0;
-        if (idx >= 6 && snr > 25.0 && success)
-            p *= 0.5;
+        // Removed: if (idx >= 6 && snr > 25.0 && success) p *= 0.5;
         return std::min(1.0, p);
     }
 
@@ -735,11 +734,11 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     // --- Configure Minstrel Manager with more aggressive parameters ---
     wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged",
                                  "LookAroundRate",
-                                 UintegerValue(20),
+                                 UintegerValue(35),
                                  "EwmaLevel",
-                                 UintegerValue(75),
+                                 UintegerValue(65),
                                  "SampleColumn",
-                                 UintegerValue(10),
+                                 UintegerValue(20),
                                  "PacketLength",
                                  UintegerValue(1200),
                                  "PrintStats",
@@ -988,7 +987,7 @@ main(int argc, char* argv[])
     }
 
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(40000);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(80000);
 
     std::cout << "Generated " << testCases.size() << " performance-based scenarios" << std::endl;
 
