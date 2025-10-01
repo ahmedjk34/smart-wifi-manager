@@ -352,81 +352,185 @@ def classify_network_context(row) -> str:
         return 'good_stable'
 
 # ================== ORACLE LABEL CREATION (FIXED) ==================
+# def create_context_specific_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
+#     """
+#     FIXED: Issues #2, #33, #9, #10
+#     - NO SNR in oracle logic (Issue #2)
+#     - NO consecSuccess/consecFailure (Issue #33)
+#     - Increased noise to ±1.0 with strategy biases (Issue #9)
+#     - No hardcoded rate 7 (Issue #10)
+#     """
+#     """
+#     FIXED: More aggressive oracle that explores ALL rates based on SNR + success
+#     """
+#     short_succ = safe_float(row.get('shortSuccRatio', 1))
+#     packet_loss = safe_float(row.get('packetLossRate', 0))
+#     snr = safe_float(row.get('lastSnr', 20))  # ← USE SNR for oracle only!
+    
+#     # Base rate selection using SNR + success (oracle can use SNR!)
+#     if context == "emergency_recovery":
+#         if short_succ < 0.25 or packet_loss > 0.6:
+#             base = 0
+#         elif short_succ < 0.6:
+#             base = 1
+#         else:
+#             base = 2
+    
+#     elif context == "poor_unstable":
+#         if packet_loss > 0.4:
+#             base = max(0, current_rate - 2)
+#         elif snr < 12:  # ← Use SNR for oracle
+#             base = 2
+#         elif short_succ > 0.7:
+#             base = 4  # ← Allow exploration
+#         else:
+#             base = 2
+    
+#     elif context == "marginal_conditions":
+#         if snr > 18 and short_succ > 0.8:
+#             base = 5  # ← Push higher
+#         elif snr > 15 and short_succ > 0.7:
+#             base = 4
+#         elif short_succ > 0.5:
+#             base = 3
+#         else:
+#             base = 2
+    
+#     elif context in ["good_stable", "good_unstable"]:
+#         # FIXED: Use SNR to determine optimal rate
+#         if snr > 26 and short_succ > 0.9:
+#             base = 6
+#         elif snr > 22 and short_succ > 0.85:
+#             base = 5
+#         elif snr > 18 and short_succ > 0.75:
+#             base = 4
+#         elif snr > 15:
+#             base = 3
+#         else:
+#             base = max(0, current_rate - 1)
+    
+#     elif context == "excellent_stable":
+#         # FIXED: Push for highest rates
+#         if snr > 30 and short_succ > 0.95:
+#             base = 7  # ← Actually use rate 7!
+#         elif snr > 26 and short_succ > 0.9:
+#             base = 6
+#         elif snr > 22:
+#             base = 5
+#         else:
+#             base = 4
+#     else:
+#         base = current_rate
+    
+#     # Apply strategy-specific noise
+#     cons_noise = np.random.uniform(-1.2, 0.5)
+#     bal_noise = np.random.uniform(-1.0, 1.0)
+#     agg_noise = np.random.uniform(-0.5, 1.5)  # ← More aggressive!
+    
+#     cons = int(np.clip(base + cons_noise, 0, 7))
+#     bal = int(np.clip(base + bal_noise, 0, 7))
+#     agg = int(np.clip(base + agg_noise, 0, 7))
+    
+#     return {
+#         "oracle_conservative": cons,
+#         "oracle_balanced": bal,
+#         "oracle_aggressive": agg,
+#     }
+
+
 def create_context_specific_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
     """
-    FIXED: Issues #2, #33, #9, #10
-    - NO SNR in oracle logic (Issue #2)
-    - NO consecSuccess/consecFailure (Issue #33)
-    - Increased noise to ±1.0 with strategy biases (Issue #9)
-    - No hardcoded rate 7 (Issue #10)
-    """
-    """
-    FIXED: More aggressive oracle that explores ALL rates based on SNR + success
-    """
-    short_succ = safe_float(row.get('shortSuccRatio', 1))
-    packet_loss = safe_float(row.get('packetLossRate', 0))
-    snr = safe_float(row.get('lastSnr', 20))  # ← USE SNR for oracle only!
+    TRULY FIXED: Oracle uses ONLY success patterns, packet loss, and context
+    NO SNR WHATSOEVER (prevents circular reasoning)
     
-    # Base rate selection using SNR + success (oracle can use SNR!)
+    Strategy:
+    - Conservative: Stay at current rate unless clear problems
+    - Balanced: Adjust based on success/loss patterns
+    - Aggressive: Push higher if conditions allow
+    """
+    short_succ = safe_float(row.get('shortSuccRatio', 1.0))
+    packet_loss = safe_float(row.get('packetLossRate', 0.0))
+    med_succ = safe_float(row.get('medSuccRatio', 1.0))
+    
+    # Determine base rate from SUCCESS PATTERNS only
     if context == "emergency_recovery":
-        if short_succ < 0.25 or packet_loss > 0.6:
-            base = 0
-        elif short_succ < 0.6:
-            base = 1
+        # Critical: Drop to very low rates
+        if packet_loss > 0.7 or short_succ < 0.3:
+            base = 0  # Absolute emergency
+        elif packet_loss > 0.5 or short_succ < 0.5:
+            base = 1  # Severe issues
         else:
-            base = 2
+            base = 2  # Recovery mode
     
     elif context == "poor_unstable":
+        # Poor conditions: Conservative approach
         if packet_loss > 0.4:
-            base = max(0, current_rate - 2)
-        elif snr < 12:  # ← Use SNR for oracle
-            base = 2
-        elif short_succ > 0.7:
-            base = 4  # ← Allow exploration
+            base = max(0, current_rate - 2)  # Drop 2 rates
+        elif short_succ < 0.6:
+            base = max(0, current_rate - 1)  # Drop 1 rate
+        elif short_succ > 0.75 and med_succ > 0.8:
+            base = min(current_rate + 1, 4)  # Cautious increase
         else:
-            base = 2
+            base = min(current_rate, 3)  # Stay low-medium
     
     elif context == "marginal_conditions":
-        if snr > 18 and short_succ > 0.8:
-            base = 5  # ← Push higher
-        elif snr > 15 and short_succ > 0.7:
-            base = 4
-        elif short_succ > 0.5:
-            base = 3
+        # Marginal: Use success ratios to decide
+        if short_succ > 0.85 and med_succ > 0.85 and packet_loss < 0.15:
+            base = min(current_rate + 2, 5)  # Can push higher
+        elif short_succ > 0.75 and packet_loss < 0.2:
+            base = min(current_rate + 1, 4)  # Cautious increase
+        elif short_succ < 0.6 or packet_loss > 0.3:
+            base = max(0, current_rate - 1)  # Drop down
         else:
-            base = 2
+            base = min(current_rate, 4)  # Stay medium
     
-    elif context in ["good_stable", "good_unstable"]:
-        # FIXED: Use SNR to determine optimal rate
-        if snr > 26 and short_succ > 0.9:
-            base = 6
-        elif snr > 22 and short_succ > 0.85:
-            base = 5
-        elif snr > 18 and short_succ > 0.75:
-            base = 4
-        elif snr > 15:
-            base = 3
+    elif context == "good_unstable":
+        # Good but unstable: Be cautious
+        if short_succ > 0.9 and packet_loss < 0.1:
+            base = min(current_rate + 1, 5)  # Cautious increase
+        elif short_succ < 0.75:
+            base = current_rate  # Hold steady
         else:
-            base = max(0, current_rate - 1)
+            base = min(current_rate, 5)  # Stay good range
+    
+    elif context == "good_stable":
+        # Good and stable: Can be more aggressive
+        if short_succ > 0.95 and med_succ > 0.95 and packet_loss < 0.05:
+            base = min(current_rate + 2, 6)  # Push high
+        elif short_succ > 0.9 and packet_loss < 0.1:
+            base = min(current_rate + 1, 6)  # Moderate increase
+        elif short_succ < 0.8:
+            base = current_rate  # Hold
+        else:
+            base = min(current_rate, 5)  # Stay good range
     
     elif context == "excellent_stable":
-        # FIXED: Push for highest rates
-        if snr > 30 and short_succ > 0.95:
-            base = 7  # ← Actually use rate 7!
-        elif snr > 26 and short_succ > 0.9:
-            base = 6
-        elif snr > 22:
-            base = 5
+        # Excellent: Aim for highest rates
+        if short_succ > 0.98 and med_succ > 0.98 and packet_loss < 0.02:
+            base = 7  # Perfect conditions → highest rate
+        elif short_succ > 0.95 and packet_loss < 0.05:
+            base = 6  # Near perfect → high rate
+        elif short_succ > 0.9 and packet_loss < 0.1:
+            base = 5  # Very good → good rate
         else:
-            base = 4
+            base = min(current_rate, 6)  # Stay high range
+    
     else:
+        # Default: Hold current rate
         base = current_rate
     
-    # Apply strategy-specific noise
-    cons_noise = np.random.uniform(-1.2, 0.5)
-    bal_noise = np.random.uniform(-1.0, 1.0)
-    agg_noise = np.random.uniform(-0.5, 1.5)  # ← More aggressive!
+    # Clamp base to valid range
+    base = int(np.clip(base, 0, 7))
     
+    # Apply strategy-specific noise with biases
+    cons_noise = np.random.uniform(ORACLE_NOISE['conservative_min'], 
+                                   ORACLE_NOISE['conservative_max'])
+    bal_noise = np.random.uniform(ORACLE_NOISE['balanced_min'], 
+                                  ORACLE_NOISE['balanced_max'])
+    agg_noise = np.random.uniform(ORACLE_NOISE['aggressive_min'], 
+                                  ORACLE_NOISE['aggressive_max'])
+    
+    # Apply noise and clamp
     cons = int(np.clip(base + cons_noise, 0, 7))
     bal = int(np.clip(base + bal_noise, 0, 7))
     agg = int(np.clip(base + agg_noise, 0, 7))
@@ -436,7 +540,6 @@ def create_context_specific_labels(row: pd.Series, context: str, current_rate: i
         "oracle_balanced": bal,
         "oracle_aggressive": agg,
     }
-
 # ================== SYNTHETIC EDGE CASES (REDUCED) ==================
 def generate_critical_edge_cases(target_samples: int = 5000) -> pd.DataFrame:
     """
