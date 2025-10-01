@@ -31,7 +31,7 @@ warnings.filterwarnings('ignore')
 
 # ================== CONFIGURATION ==================
 CSV_FILE = "smart-v3-ml-enriched.csv"
-TARGET_LABEL = "oracle_balanced"  # Options: "rateIdx", "oracle_conservative", "oracle_balanced", "oracle_aggressive"
+TARGET_LABEL = "oracle_aggressive"  # Options: "rateIdx", "oracle_conservative", "oracle_balanced", "oracle_aggressive"
 MODEL_FILE = f"step3_rf_{TARGET_LABEL}_model_FIXED.joblib"
 SCALER_FILE = f"step3_scaler_{TARGET_LABEL}_FIXED.joblib"
 CLASS_WEIGHTS_FILE = "python_files/model_artifacts/class_weights.json"
