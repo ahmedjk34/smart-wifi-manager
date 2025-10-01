@@ -243,22 +243,44 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 # ================== SANITY FILTERING ==================
 def filter_sane_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """FIXED: Much more permissive sanity filtering to preserve data"""
+    """
+    FIXED: Only validate columns that actually exist
+    Temporal leakage features (consecSuccess/consecFailure) already removed by File 2
+    """
     before = len(df)
     
-    df_filtered = df[
-        df['rateIdx'].apply(lambda x: is_valid_rateidx(x)) &
-        df['phyRate'].apply(lambda x: safe_int(x) >= 1000000 and safe_int(x) <= 54000000) &
-        df['lastSnr'].apply(lambda x: -10 < safe_float(x) < 60) &
-        df['shortSuccRatio'].apply(lambda x: 0 <= safe_float(x) <= 1.01 if not pd.isna(x) else True) &
-        df['medSuccRatio'].apply(lambda x: 0 <= safe_float(x) <= 1.01 if not pd.isna(x) else True) &
-        df['consecFailure'].apply(lambda x: 0 <= safe_int(x) < 50) &
-        df['consecSuccess'].apply(lambda x: 0 <= safe_int(x) < 200000) &
-        df['severity'].apply(lambda x: 0 <= safe_float(x) <= 1.5 if not pd.isna(x) else True) &
-        df['confidence'].apply(lambda x: 0 <= safe_float(x) <= 1.01 if not pd.isna(x) else True)
+    # Build filter conditions ONLY for columns that exist
+    conditions = [
+        df['rateIdx'].apply(lambda x: is_valid_rateidx(x)),
+        df['lastSnr'].apply(lambda x: -10 < safe_float(x) < 60)
     ]
     
+    # Add optional column checks
+    if 'phyRate' in df.columns:
+        conditions.append(df['phyRate'].apply(lambda x: safe_int(x) >= 1000000 and safe_int(x) <= 54000000))
+    
+    if 'shortSuccRatio' in df.columns:
+        conditions.append(df['shortSuccRatio'].apply(lambda x: 0 <= safe_float(x) <= 1.01 if not pd.isna(x) else True))
+    
+    if 'medSuccRatio' in df.columns:
+        conditions.append(df['medSuccRatio'].apply(lambda x: 0 <= safe_float(x) <= 1.01 if not pd.isna(x) else True))
+    
+    if 'severity' in df.columns:
+        conditions.append(df['severity'].apply(lambda x: 0 <= safe_float(x) <= 1.5 if not pd.isna(x) else True))
+    
+    if 'confidence' in df.columns:
+        conditions.append(df['confidence'].apply(lambda x: 0 <= safe_float(x) <= 1.01 if not pd.isna(x) else True))
+    
+    # Combine all conditions
+    combined_condition = conditions[0]
+    for condition in conditions[1:]:
+        combined_condition &= condition
+    
+    df_filtered = df[combined_condition]
+    
     logger.info(f"FIXED: Kept {len(df_filtered)} out of {before} rows ({len(df_filtered)/before*100:.1f}% retained)")
+    logger.info(f"Note: consecSuccess/consecFailure already removed by File 2 (temporal leakage)")
+    
     return df_filtered
 
 # ================== FEATURE REMOVAL ==================
