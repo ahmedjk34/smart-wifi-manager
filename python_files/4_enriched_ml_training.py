@@ -626,34 +626,56 @@ def train_and_evaluate_model(X_train_scaled, y_train, X_val_scaled, y_val,
 # ================== PER-SCENARIO EVALUATION ==================
 def evaluate_per_scenario(model, scaler, df, test_scenarios, target_label, logger):
     """
-    FIXED: Issue #23 - Per-scenario performance metrics
+    FIXED: Issue #23 - Per-scenario performance metrics (FAST VECTORIZED VERSION)
     """
     logger.info(f"\n{'='*60}")
     logger.info(f"PER-SCENARIO EVALUATION (Issue #23)")
     logger.info(f"{'='*60}")
     
-    test_df = df[df['scenario_file'].isin(test_scenarios)]
+    # FIXED: Pre-filter test data ONCE (not in loop)
+    test_df = df[df['scenario_file'].isin(test_scenarios)].copy()
+    
+    if len(test_df) == 0:
+        logger.warning("⚠️ No test data found!")
+        return {}
+    
+    # Remove NaN targets
+    test_df = test_df[test_df[target_label].notna()]
+    
+    # FIXED: Extract and scale features ONCE
+    X_test_all = test_df[SAFE_FEATURES].fillna(0)
+    y_test_all = test_df[target_label].astype(int)
+    X_test_scaled = scaler.transform(X_test_all)
+    
+    # FIXED: Predict for ALL samples at once (vectorized)
+    y_pred_all = model.predict(X_test_scaled)
+    
+    # Add predictions to dataframe
+    test_df['pred'] = y_pred_all
+    test_df['correct'] = (test_df['pred'] == y_test_all).astype(int)
+    
+    # FIXED: Compute per-scenario accuracy using groupby (FAST!)
+    scenario_stats = test_df.groupby('scenario_file').agg({
+        'correct': ['sum', 'count']
+    })
     
     scenario_results = {}
-    
     for scenario in test_scenarios:
-        scenario_data = test_df[test_df['scenario_file'] == scenario]
-        
-        if len(scenario_data) == 0:
+        if scenario not in scenario_stats.index:
             continue
         
-        X_scenario = scenario_data[SAFE_FEATURES].fillna(0)
-        y_scenario = scenario_data[target_label].astype(int)
-        
-        X_scenario_scaled = scaler.transform(X_scenario)
-        y_pred_scenario = model.predict(X_scenario_scaled)
-        
-        accuracy = accuracy_score(y_scenario, y_pred_scenario)
+        correct = scenario_stats.loc[scenario, ('correct', 'sum')]
+        total = scenario_stats.loc[scenario, ('correct', 'count')]
+        accuracy = correct / total if total > 0 else 0.0
         
         scenario_results[scenario] = {
-            'samples': len(scenario_data),
+            'samples': int(total),
             'accuracy': float(accuracy)
         }
+    
+    if not scenario_results:
+        logger.warning("⚠️ No scenario results computed!")
+        return {}
     
     # Sort by accuracy (worst first)
     sorted_scenarios = sorted(scenario_results.items(), key=lambda x: x[1]['accuracy'])
@@ -666,10 +688,12 @@ def evaluate_per_scenario(model, scaler, df, test_scenarios, target_label, logge
     for scenario, metrics in sorted_scenarios[-5:]:
         logger.info(f"   {scenario}: {metrics['accuracy']:.3f} ({metrics['samples']} samples)")
     
-    avg_accuracy = np.mean([m['accuracy'] for m in scenario_results.values()])
-    std_accuracy = np.std([m['accuracy'] for m in scenario_results.values()])
+    accuracies = [m['accuracy'] for m in scenario_results.values()]
+    avg_accuracy = np.mean(accuracies)
+    std_accuracy = np.std(accuracies)
     
     logger.info(f"\n📊 Average per-scenario accuracy: {avg_accuracy:.3f} ± {std_accuracy:.3f}")
+    logger.info(f"✅ Evaluated {len(scenario_results)} scenarios in {len(test_df):,} samples")
     
     return scenario_results
 
