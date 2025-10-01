@@ -266,78 +266,87 @@ def classify_network_context(row) -> str:
 # ORACLE LABEL CREATION
 # ----------------------------------------
 def create_context_specific_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
-    """FIXED: Less deterministic oracle generation to reduce SNR correlation"""
-    snr = safe_float(row.get('lastSnr', 0))
-    success_ratio = safe_float(row.get('shortSuccRatio', 1))
-    consec_failures = safe_int(row.get('consecFailure', 0))
-    consec_success = safe_int(row.get('consecSuccess', 0))
-    
-    # ADD RANDOMNESS to break perfect correlation
-    noise = np.random.uniform(-0.3, 0.3)  # ±0.3 rate randomness
-    
-    labels = {}
-    
-    if context == 'emergency_recovery':
-        # Base rate on SUCCESS RATIO more than SNR
-        if success_ratio < 0.3:
-            base_rate = 0
-        elif success_ratio < 0.6:
-            base_rate = 1
+        """
+        V3.1 FIXED: Pattern-based oracle with minimal SNR dependence
+        """
+        # Core signals
+        short_succ = safe_float(row.get('shortSuccRatio', 1))
+        med_succ = safe_float(row.get('medSuccRatio', 1))
+        consec_fail = safe_int(row.get('consecFailure', 0))
+        consec_succ = safe_int(row.get('consecSuccess', 0))
+        packet_loss = safe_float(row.get('packetLossRate', 0))
+        snr_var = safe_float(row.get('snrVariance', 0))
+        
+        # Strategy-specific noise (different biases)
+        cons_noise = np.random.uniform(-0.8, 0.3)  # Cautious bias
+        bal_noise = np.random.uniform(-0.5, 0.5)   # Neutral
+        agg_noise = np.random.uniform(-0.3, 0.8)   # Aggressive bias
+        
+        if context == "emergency_recovery":
+            if consec_fail >= 5 or short_succ < 0.25:
+                cons, bal, agg = 0, 0, 1
+            elif short_succ < 0.6:
+                cons, bal, agg = 0, 1, 2
+            else:
+                cons, bal, agg = 1, 2, 3
+                
+        elif context == "poor_unstable":
+            if consec_fail >= 4:
+                cons = max(0, current_rate - 2)
+                bal = max(0, current_rate - 1)
+                agg = current_rate
+            elif short_succ > 0.7 and med_succ > 0.65:
+                # FIXED: No SNR, use success patterns
+                cons = current_rate
+                bal = min(7, current_rate + 1)
+                agg = min(7, current_rate + 2)
+            else:
+                cons, bal, agg = 0, 1, 2
+                
+        elif context == "marginal_conditions":
+            if consec_succ >= 6 and short_succ > 0.7 and packet_loss < 0.1:
+                cons, bal, agg = 3, 4, 5
+            elif short_succ > 0.5:
+                cons, bal, agg = 2, 3, 4
+            else:
+                cons, bal, agg = 1, 2, 3
+                
+        elif context in ["good_stable", "good_unstable"]:
+            if short_succ > 0.9 and consec_succ >= 5:
+                cons = current_rate
+                bal = min(7, current_rate + 1)
+                agg = min(7, current_rate + 2)
+            elif short_succ < 0.6 or consec_fail >= 3:
+                cons = max(0, current_rate - 2)
+                bal = max(0, current_rate - 1)
+                agg = current_rate
+            else:
+                cons = max(0, current_rate - 1)
+                bal = current_rate
+                agg = min(7, current_rate + 1)
+                
+        elif context == "excellent_stable":
+            if consec_succ >= 10 and packet_loss < 0.05:
+                cons = current_rate
+                bal = min(7, current_rate + 2)
+                agg = min(7, current_rate + 3)  # FIXED: Not hardcoded 7
+            else:
+                cons = max(0, current_rate - 1)
+                bal = min(7, current_rate + 1)
+                agg = min(7, current_rate + 2)
         else:
-            base_rate = 2
+            cons = max(0, current_rate - 1)
+            bal = current_rate
+            agg = min(7, current_rate + 1)
         
-        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
-        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
-        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 2 + noise)))
+        # Apply strategy-specific noise
+        labels = {
+            "oracle_conservative": int(np.clip(cons + cons_noise, 0, 7)),
+            "oracle_balanced": int(np.clip(bal + bal_noise, 0, 7)),
+            "oracle_aggressive": int(np.clip(agg + agg_noise, 0, 7)),
+        }
         
-    elif context == 'poor_unstable':
-        # Use SUCCESS RATIO primarily, SNR secondarily
-        if success_ratio > 0.8:
-            base_rate = 3 + int(snr / 10)  # Reduced SNR influence
-        elif success_ratio > 0.6:
-            base_rate = 2 + int(snr / 15)  # Even less SNR influence
-        else:
-            base_rate = 1
-            
-        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
-        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
-        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 2 + noise)))
-        
-    elif context == 'marginal_conditions':
-        # Balance success ratio and consecutive patterns
-        if consec_success > 5 and success_ratio > 0.7:
-            base_rate = 4
-        elif success_ratio > 0.5:
-            base_rate = 3
-        else:
-            base_rate = 2
-            
-        labels['oracle_conservative'] = max(0, min(7, int(base_rate - 1 + noise)))
-        labels['oracle_balanced'] = max(0, min(7, int(base_rate + noise)))
-        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 1 + noise)))
-        
-    elif context in ['good_stable', 'good_unstable']:
-        # Use current rate as baseline, adjust by success
-        adjustment = 1 if success_ratio > 0.9 else 0 if success_ratio > 0.7 else -1
-        base_rate = max(0, min(7, current_rate + adjustment))
-        
-        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
-        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
-        labels['oracle_aggressive'] = max(0, min(7, int(base_rate + 2 + noise)))
-        
-    elif context == 'excellent_stable':
-        # Allow higher rates but with some randomness
-        base_rate = min(6, current_rate + 2)
-        
-        labels['oracle_conservative'] = max(0, min(7, int(base_rate + noise)))
-        labels['oracle_balanced'] = max(0, min(7, int(base_rate + 1 + noise)))
-        labels['oracle_aggressive'] = 7  # Always max for aggressive in excellent conditions
-    
-    # Ensure all labels are valid
-    for key in labels:
-        labels[key] = max(0, min(7, labels[key]))
-    
-    return labels
+        return labels
 
 def get_emergency_safe_rate(snr: float, success_ratio: float) -> int:
     if success_ratio < 0.3 or snr < 8:
