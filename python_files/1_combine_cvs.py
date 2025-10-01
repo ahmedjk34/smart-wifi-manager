@@ -130,22 +130,24 @@ def clean_dataframe(df: pd.DataFrame, fname: str, all_columns: List[str]) -> pd.
     
     return df
 
-def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0.1):
+def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0.1, max_samples_per_file: int = 3000):
     """Process with random sampling to reduce data size"""
     file_info = get_file_info(log_dir)
     
-    print(f"\n=== SAMPLING MODE (taking {sample_ratio*100}% of data) ===")
+    print(f"\n=== SAMPLING MODE (10% of data for files >5K, max {max_samples_per_file:,} rows) ===")
     
     dfs = []
     for fname, row_count, col_count, file_cols in file_info:
         fpath = os.path.join(log_dir, fname)
         
         try:
-            if row_count > 5000:  # Only sample large files
-                sample_size = max(int(row_count * sample_ratio), 100)  # At least 100 rows
-                df = pd.read_csv(fpath, low_memory=False).sample(n=min(sample_size, row_count))
-                print(f"Sampled {len(df):,} rows from {fname}")
+            if row_count > 5000:
+                # Sample 10% of large files, capped at max_samples_per_file
+                sample_size = min(int(row_count * sample_ratio), max_samples_per_file)
+                df = pd.read_csv(fpath, low_memory=False).sample(n=sample_size)
+                print(f"Sampled {len(df):,} rows from {fname} (10% of {row_count:,})")
             else:
+                # Load all rows for files with 5K or fewer rows
                 df = pd.read_csv(fpath, low_memory=False)
                 print(f"Loaded all {len(df):,} rows from {fname}")
             
@@ -173,8 +175,10 @@ def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0
             combined_df = pd.concat(non_empty_dfs, ignore_index=True, sort=False)
         else:
             combined_df = pd.DataFrame()
-        combined_df.to_csv(output_csv.replace('.csv', '_sampled.csv'), index=False)
         print(f"✓ Saved sampled data: {len(combined_df):,} rows")
+
+        combined_df.to_csv(output_csv, index=False)
+        print(f"✓ Output written to: {output_csv}")
 
 # Main execution
 if __name__ == "__main__":
@@ -182,9 +186,12 @@ if __name__ == "__main__":
         print(f"Error: Directory '{LOG_DIR}' does not exist.")
         exit(1)
     
+    if os.path.exists(OUTPUT_CSV):
+        os.remove(OUTPUT_CSV)
+    
     print("Choose processing method:")
     print("1. Chunk processing (memory efficient)")
-    print("2. Sampling (10% of data)")
+    print("2. Sampling (10% of data, max 5K rows per file)")
     print("3. File info only")
     
     choice = input("Enter choice (1-3): ").strip()
@@ -192,7 +199,7 @@ if __name__ == "__main__":
     if choice == "1":
         process_files_in_chunks(LOG_DIR, OUTPUT_CSV, chunk_size=5000)
     elif choice == "2":
-        process_with_sampling(LOG_DIR, OUTPUT_CSV, sample_ratio=0.1)
+        process_with_sampling(LOG_DIR, OUTPUT_CSV, sample_ratio=0.1, max_samples_per_file=10000)
     elif choice == "3":
         get_file_info(LOG_DIR)
     else:
