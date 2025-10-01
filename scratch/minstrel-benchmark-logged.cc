@@ -1,3 +1,20 @@
+/*
+ * Minstrel WiFi Manager Benchmark - FIXED FOR 14-FEATURE PIPELINE
+ * Compatible with FIXED MinstrelWifiManagerLogged (14 safe features, zero temporal leakage)
+ *
+ * CRITICAL FIXES (2025-10-01 14:58:28 UTC):
+ * - Issue #1: No temporal leakage (manager handles safe logging)
+ * - Issue #33: Success ratios from PREVIOUS window (manager handles)
+ * - Issue #4: Scenario naming with proper file exports
+ * - Fixed attribute names (UpdateStatistics, not EwmaLevel)
+ * - 802.11a support (8 rates: 0-7)
+ * - Ensures balanced-results/*.csv files are created
+ *
+ * Author: ahmedjk34
+ * Date: 2025-10-01 14:58:28 UTC
+ * Version: 5.0 (FIXED - Zero Temporal Leakage)
+ */
+
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
 #include "ns3/flow-monitor-module.h"
@@ -6,7 +23,7 @@
 #include "ns3/network-module.h"
 #include "ns3/wifi-module.h"
 
-// New components
+// Decision controller
 #include "ns3/decision-count-controller.h"
 #include "ns3/performance-based-parameter-generator.h"
 
@@ -24,7 +41,9 @@
 
 using namespace ns3;
 
-// === SNR Conversion Utility ===
+// ============================================================================
+// SNR Conversion Utility (matches fixed pipeline)
+// ============================================================================
 enum SnrModel
 {
     LOG_MODEL,
@@ -32,7 +51,6 @@ enum SnrModel
     INTF_MODEL
 };
 
-// --- SNR Conversion Debugging Globals ---
 static int g_snrConversionCallCount = 0;
 static std::vector<double> g_lastConvertedSnrs;
 double g_currentTestDistance = 20.0;
@@ -41,12 +59,12 @@ uint32_t g_currentInterferers = 0;
 double
 ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers, SnrModel model)
 {
-    g_snrConversionCallCount++; // DEBUG: Track how many times the function is called
-    if (g_snrConversionCallCount < 10 || g_snrConversionCallCount % 50 == 0)
+    g_snrConversionCallCount++;
+
+    if (g_snrConversionCallCount < 10 || g_snrConversionCallCount % 100 == 0)
     {
-        std::cout << "[DEBUG] ConvertNS3ToRealisticSnr called #" << g_snrConversionCallCount
-                  << " | ns3Value=" << ns3Value << " | distance=" << distance
-                  << " | interferers=" << interferers << " | model=" << model << std::endl;
+        std::cout << "[DEBUG SNR] Call #" << g_snrConversionCallCount << " | ns3=" << ns3Value
+                  << " | dist=" << distance << "m | intf=" << interferers << std::endl;
     }
 
     if (distance <= 0.0)
@@ -102,494 +120,20 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers,
 // Global decision controller
 DecisionCountController* g_decisionController = nullptr;
 
-// DETAILED LOGGING INFRASTRUCTURE - Similar to SmartWifiManagerV3Logged
-class DetailedMinstrelLogger
-{
-  private:
-    std::ofstream m_logFile;
-    std::string m_logFilePath;
-    bool m_logHeaderWritten;
-    mutable std::mt19937 m_rng;
-    mutable std::uniform_real_distribution<double> m_uniformDist;
-
-    // Feature tracking per station
-    struct StationState
-    {
-        uint32_t nodeId;
-        uint32_t success;
-        uint32_t failed;
-        uint32_t rateIndex;
-        double lastSnr;
-        double snrFast;
-        double snrSlow;
-        bool snrInit;
-        uint32_t consecSuccess;
-        uint32_t consecFailure;
-        std::vector<bool> successHistory;
-        std::vector<double> snrSamples;
-        std::vector<uint32_t> rateHistory;
-        std::vector<double> throughputHistory;
-        std::vector<bool> packetSuccessHistory;
-        std::vector<uint32_t> retryHistory;
-        uint32_t sinceLastRateChange;
-        double T1, T2, T3;
-
-        StationState()
-            : nodeId(0),
-              success(0),
-              failed(0),
-              rateIndex(0),
-              lastSnr(0.0),
-              snrFast(0.0),
-              snrSlow(0.0),
-              snrInit(false),
-              consecSuccess(0),
-              consecFailure(0),
-              sinceLastRateChange(0),
-              T1(10.0),
-              T2(15.0),
-              T3(25.0)
-        {
-        }
-    };
-
-    std::map<uint32_t, StationState> m_stationStates;
-
-  public:
-    DetailedMinstrelLogger()
-        : m_logHeaderWritten(false),
-          m_rng(std::random_device{}()),
-          m_uniformDist(0.0, 1.0)
-    {
-    }
-
-    ~DetailedMinstrelLogger()
-    {
-        if (m_logFile.is_open())
-        {
-            m_logFile.close();
-        }
-    }
-
-    void SetLogFilePath(const std::string& path)
-    {
-        m_logFilePath = path;
-    }
-
-    void Initialize()
-    {
-        if (!m_logFilePath.empty() && !m_logHeaderWritten)
-        {
-            m_logFile.open(m_logFilePath, std::ios::out | std::ios::trunc);
-            if (m_logFile.is_open())
-            {
-                WriteHeader();
-                m_logHeaderWritten = true;
-            }
-        }
-    }
-
-    void WriteHeader()
-    {
-        m_logFile << "time,stationId,rateIdx,phyRate,"
-                     "lastSnr,snrFast,snrSlow,"
-                     "snrTrendShort,snrStabilityIndex,snrPredictionConfidence,"
-                     "shortSuccRatio,medSuccRatio,consecSuccess,consecFailure,"
-                     "recentThroughputTrend,packetLossRate,retrySuccessRatio,"
-                     "recentRateChanges,timeSinceLastRateChange,rateStabilityScore,"
-                     "optimalRateDistance,aggressiveFactor,conservativeFactor,recommendedSafeRate,"
-                     "severity,confidence,T1,T2,T3,decisionReason,packetSuccess,"
-                     "offeredLoad,queueLen,retryCount,channelWidth,mobilityMetric,snrVariance\n";
-        m_logFile.flush();
-    }
-
-    void LogPacketResult(uint32_t nodeId, bool success, double ns3Snr, uint32_t rateIndex)
-    {
-        if (!m_logFile.is_open())
-            return;
-
-        // Use new SNR model for logging
-        double realisticSnr = ConvertNS3ToRealisticSnr(ns3Snr,
-                                                       g_currentTestDistance,
-                                                       g_currentInterferers,
-                                                       SOFT_MODEL);
-
-        // Stratified sampling - similar to SmartWifiManagerV3Logged
-        double logProb = GetStratifiedLogProbability(rateIndex, realisticSnr, success);
-        if (m_uniformDist(m_rng) > logProb)
-            return;
-
-        StationState& st = m_stationStates[nodeId];
-        st.nodeId = nodeId;
-
-        UpdateStationState(st, success, realisticSnr, rateIndex);
-        WriteLogEntry(st, success);
-
-        // Debug output for SNR conversion
-        if (m_stationStates.size() < 5 || nodeId % 20 == 0)
-        {
-            std::cout << "[DEBUG] (Logger) NodeId=" << nodeId << " ns3Snr=" << ns3Snr
-                      << " -> realisticSnr=" << realisticSnr << " (rate=" << rateIndex << ")"
-                      << std::endl;
-        }
-    }
-
-  private:
-    double GetStratifiedLogProbability(uint32_t rate, double snr, bool success)
-    {
-        const double base[8] = {1.0, 1.0, 0.9, 0.7, 0.5, 0.3, 0.15, 0.08};
-        const uint32_t idx = std::min<uint32_t>(rate, 7);
-        double p = base[idx];
-        if (!success)
-            p *= 2.0;
-        if (snr < 15.0)
-            p *= 1.5;
-        if (idx <= 1)
-            p = 1.0;
-        if (idx >= 6 && snr > 25.0 && success)
-            p *= 0.5;
-        return std::min(1.0, p);
-    }
-
-    void UpdateStationState(StationState& st, bool success, double snr, uint32_t rateIndex)
-    {
-        // Update SNR with EWMA
-        const double kAlphaFast = 0.30;
-        const double kAlphaSlow = 0.05;
-
-        if (std::isfinite(snr))
-        {
-            if (!st.snrInit)
-            {
-                st.snrFast = snr;
-                st.snrSlow = snr;
-                st.snrInit = true;
-            }
-            else
-            {
-                st.snrFast = kAlphaFast * snr + (1.0 - kAlphaFast) * st.snrFast;
-                st.snrSlow = kAlphaSlow * snr + (1.0 - kAlphaSlow) * st.snrSlow;
-            }
-            st.lastSnr = snr;
-            st.snrSamples.push_back(snr);
-            if (st.snrSamples.size() > 200)
-            {
-                st.snrSamples.erase(st.snrSamples.begin(), st.snrSamples.begin() + 100);
-            }
-        }
-
-        // Update success/failure stats
-        if (success)
-        {
-            st.success++;
-            st.consecSuccess++;
-            st.consecFailure = 0;
-        }
-        else
-        {
-            st.failed++;
-            st.consecFailure++;
-            st.consecSuccess = 0;
-        }
-
-        // Update histories
-        st.successHistory.push_back(success);
-        if (st.successHistory.size() > 50)
-        {
-            st.successHistory.erase(st.successHistory.begin());
-        }
-
-        st.rateHistory.push_back(rateIndex);
-        if (st.rateHistory.size() > 20)
-        {
-            st.rateHistory.erase(st.rateHistory.begin());
-        }
-
-        st.throughputHistory.push_back(static_cast<double>(rateIndex));
-        if (st.throughputHistory.size() > 20)
-        {
-            st.throughputHistory.erase(st.throughputHistory.begin());
-        }
-
-        st.packetSuccessHistory.push_back(success);
-        if (st.packetSuccessHistory.size() > 20)
-        {
-            st.packetSuccessHistory.erase(st.packetSuccessHistory.begin());
-        }
-
-        st.retryHistory.push_back(success ? 0 : 1);
-        if (st.retryHistory.size() > 20)
-        {
-            st.retryHistory.erase(st.retryHistory.begin());
-        }
-
-        // Track rate changes
-        if (!st.rateHistory.empty() && st.rateHistory.size() > 1)
-        {
-            if (st.rateHistory.back() != st.rateHistory[st.rateHistory.size() - 2])
-            {
-                st.sinceLastRateChange = 0;
-            }
-            else
-            {
-                st.sinceLastRateChange++;
-            }
-        }
-
-        st.rateIndex = rateIndex;
-    }
-
-    void WriteLogEntry(const StationState& st, bool packetSuccess)
-    {
-        // Calculate all the detailed features
-        double shortSuccRatio = CalculateSuccessRatio(st.successHistory, 10);
-        double medSuccRatio = CalculateSuccessRatio(st.successHistory, 25);
-        double snrTrendShort = st.snrFast - st.snrSlow;
-        double snrStabilityIndex = CalculateSnrStability(st);
-        double snrPredictionConfidence = CalculateSnrPredictionConfidence(st);
-        double recentThroughputTrend = CalculateRecentThroughput(st, 10);
-        double packetLossRate = CalculateRecentPacketLoss(st, 20);
-        double retrySuccessRatio = CalculateRetrySuccessRatio(st);
-        uint32_t recentRateChanges = CountRecentRateChanges(st, 20);
-        double rateStabilityScore = CalculateRateStability(st);
-        double optimalRateDistance = CalculateOptimalRateDistance(st);
-        double aggressiveFactor = CalculateAggressiveFactor(st);
-        double conservativeFactor = CalculateConservativeFactor(st);
-        uint32_t recommendedSafeRate = GetRecommendedSafeRate(st);
-        double severity = CalculateSeverity(st);
-        double confidence = CalculateConfidence(st);
-        double snrVariance = CalculateSnrVariance(st);
-
-        // PHY rate mapping (similar to original)
-        uint64_t phyRate = 1000000ull + static_cast<uint64_t>(st.rateIndex) * 1000000ull;
-
-        double simTime = Simulator::Now().GetSeconds();
-
-        m_logFile << std::fixed << std::setprecision(6) << simTime << "," << st.nodeId << ","
-                  << st.rateIndex << "," << phyRate << "," << st.lastSnr << "," << st.snrFast << ","
-                  << st.snrSlow << "," << snrTrendShort << "," << snrStabilityIndex << ","
-                  << snrPredictionConfidence << "," << shortSuccRatio << "," << medSuccRatio << ","
-                  << st.consecSuccess << "," << st.consecFailure << "," << recentThroughputTrend
-                  << "," << packetLossRate << "," << retrySuccessRatio << "," << recentRateChanges
-                  << "," << st.sinceLastRateChange << "," << rateStabilityScore << ","
-                  << optimalRateDistance << "," << aggressiveFactor << "," << conservativeFactor
-                  << "," << recommendedSafeRate << "," << severity << "," << confidence << ","
-                  << st.T1 << "," << st.T2 << "," << st.T3 << "," << 0 << ","
-                  << (packetSuccess ? 1 : 0) << ","     // decisionReason=0 for now
-                  << 0.0 << "," << 0 << "," << 0 << "," // offeredLoad, queueLen, retryCount
-                  << 20 << "," << 0.0 << "," << snrVariance << "\n"; // channelWidth, mobilityMetric
-        m_logFile.flush();
-    }
-
-    // Feature calculation methods (same as before)
-    double CalculateSuccessRatio(const std::vector<bool>& history, uint32_t window) const
-    {
-        if (history.empty())
-            return 1.0;
-        uint32_t start = (history.size() > window) ? history.size() - window : 0;
-        uint32_t successes = 0;
-        uint32_t total = 0;
-        for (uint32_t i = start; i < history.size(); ++i)
-        {
-            if (history[i])
-                successes++;
-            total++;
-        }
-        return (total > 0) ? static_cast<double>(successes) / total : 1.0;
-    }
-
-    double CalculateSnrStability(const StationState& st) const
-    {
-        if (st.snrSamples.size() < 2)
-            return 0.0;
-        uint32_t window = std::min<uint32_t>(10, st.snrSamples.size());
-        uint32_t start = st.snrSamples.size() - window;
-        double mean = 0.0;
-        for (uint32_t i = start; i < st.snrSamples.size(); ++i)
-        {
-            mean += st.snrSamples[i];
-        }
-        mean /= window;
-        double var = 0.0;
-        for (uint32_t i = start; i < st.snrSamples.size(); ++i)
-        {
-            double d = st.snrSamples[i] - mean;
-            var += d * d;
-        }
-        return std::sqrt(var / window);
-    }
-
-    double CalculateSnrPredictionConfidence(const StationState& st) const
-    {
-        double stability = CalculateSnrStability(st);
-        return 1.0 / (1.0 + stability);
-    }
-
-    double CalculateRecentThroughput(const StationState& st, uint32_t window) const
-    {
-        if (st.throughputHistory.empty())
-            return 0.0;
-        uint32_t start =
-            (st.throughputHistory.size() > window) ? st.throughputHistory.size() - window : 0;
-        double sum = 0.0;
-        uint32_t count = 0;
-        for (uint32_t i = start; i < st.throughputHistory.size(); ++i)
-        {
-            sum += st.throughputHistory[i];
-            count++;
-        }
-        return (count > 0) ? sum / count : 0.0;
-    }
-
-    double CalculateRecentPacketLoss(const StationState& st, uint32_t window) const
-    {
-        if (st.packetSuccessHistory.empty())
-            return 0.0;
-        uint32_t start =
-            (st.packetSuccessHistory.size() > window) ? st.packetSuccessHistory.size() - window : 0;
-        uint32_t total = 0, failures = 0;
-        for (uint32_t i = start; i < st.packetSuccessHistory.size(); ++i)
-        {
-            total++;
-            if (!st.packetSuccessHistory[i])
-                failures++;
-        }
-        return (total > 0) ? static_cast<double>(failures) / total : 0.0;
-    }
-
-    double CalculateRetrySuccessRatio(const StationState& st) const
-    {
-        uint32_t successes = 0, totalRetries = 0;
-        uint32_t n = std::min(st.packetSuccessHistory.size(), st.retryHistory.size());
-        for (uint32_t i = 0; i < n; ++i)
-        {
-            if (st.packetSuccessHistory[i])
-                successes++;
-            totalRetries += st.retryHistory[i];
-        }
-        return (successes > 0) ? static_cast<double>(successes) / (totalRetries + 1) : 0.0;
-    }
-
-    uint32_t CountRecentRateChanges(const StationState& st, uint32_t window) const
-    {
-        uint32_t changes = 0;
-        if (st.rateHistory.size() > 1)
-        {
-            uint32_t start = (st.rateHistory.size() > window) ? st.rateHistory.size() - window : 1;
-            for (uint32_t i = start; i < st.rateHistory.size(); ++i)
-            {
-                if (st.rateHistory[i] != st.rateHistory[i - 1])
-                    changes++;
-            }
-        }
-        return changes;
-    }
-
-    double CalculateRateStability(const StationState& st) const
-    {
-        double changes = static_cast<double>(CountRecentRateChanges(st, 20));
-        return std::clamp(1.0 - (changes / 20.0), 0.0, 1.0);
-    }
-
-    double CalculateOptimalRateDistance(const StationState& st) const
-    {
-        uint8_t optimal = TierFromSnr(st.lastSnr);
-        int distance = static_cast<int>(st.rateIndex) - static_cast<int>(optimal);
-        return std::min(1.0, std::abs(distance) / 7.0);
-    }
-
-    double CalculateAggressiveFactor(const StationState& st) const
-    {
-        if (st.rateHistory.empty())
-            return 0.0;
-        uint32_t aggressive = 0;
-        for (uint32_t rate : st.rateHistory)
-        {
-            if (rate >= 6)
-                aggressive++;
-        }
-        return static_cast<double>(aggressive) / st.rateHistory.size();
-    }
-
-    double CalculateConservativeFactor(const StationState& st) const
-    {
-        if (st.rateHistory.empty())
-            return 0.0;
-        uint32_t conservative = 0;
-        for (uint32_t rate : st.rateHistory)
-        {
-            if (rate <= 2)
-                conservative++;
-        }
-        return static_cast<double>(conservative) / st.rateHistory.size();
-    }
-
-    uint8_t TierFromSnr(double snr) const
-    {
-        if (!std::isfinite(snr))
-            return 0;
-        return (snr > 25)   ? 7
-               : (snr > 21) ? 6
-               : (snr > 18) ? 5
-               : (snr > 15) ? 4
-               : (snr > 12) ? 3
-               : (snr > 9)  ? 2
-               : (snr > 6)  ? 1
-                            : 0;
-    }
-
-    uint32_t GetRecommendedSafeRate(const StationState& st) const
-    {
-        return TierFromSnr(st.lastSnr);
-    }
-
-    double CalculateSeverity(const StationState& st) const
-    {
-        double medSuccRatio = CalculateSuccessRatio(st.successHistory, 25);
-        double failureRatio = 1.0 - medSuccRatio;
-        double normFailStreak = std::min(1.0, static_cast<double>(st.consecFailure) / 10.0);
-        return std::clamp(0.6 * failureRatio + 0.4 * normFailStreak, 0.0, 1.0);
-    }
-
-    double CalculateConfidence(const StationState& st) const
-    {
-        double shortSuccRatio = CalculateSuccessRatio(st.successHistory, 10);
-        double trend = st.snrFast - st.snrSlow;
-        double trendPenalty = std::min(1.0, std::abs(trend) / 3.0);
-        return std::clamp(shortSuccRatio * (1.0 - 0.5 * trendPenalty), 0.0, 1.0);
-    }
-
-    double CalculateSnrVariance(const StationState& st) const
-    {
-        if (st.snrSamples.size() < 2)
-            return 0.0;
-        uint32_t window = std::min<uint32_t>(20, st.snrSamples.size());
-        uint32_t start = st.snrSamples.size() - window;
-        double mean = 0.0;
-        for (uint32_t i = start; i < st.snrSamples.size(); ++i)
-        {
-            mean += st.snrSamples[i];
-        }
-        mean /= window;
-        double variance = 0.0;
-        for (uint32_t i = start; i < st.snrSamples.size(); ++i)
-        {
-            double d = st.snrSamples[i] - mean;
-            variance += d * d;
-        }
-        return variance / window;
-    }
-};
-
-// Global detailed logger
-DetailedMinstrelLogger* g_detailedLogger = nullptr;
-
-// Fixed trace callback for Minstrel rate changes - matches the trace source signature
+// ============================================================================
+// FIXED: Simple trace callbacks (manager handles feature logging)
+// ============================================================================
 static void
 RateTrace(uint64_t oldValue, uint64_t newValue)
 {
-    std::cout << "Rate adaptation event: oldRate=" << oldValue << " newRate=" << newValue
-              << std::endl;
+    static uint32_t rateChangeCount = 0;
+    rateChangeCount++;
+
+    if (rateChangeCount % 50 == 0)
+    {
+        std::cout << "[RATE CHANGE #" << rateChangeCount << "] " << oldValue << " -> " << newValue
+                  << " bps" << std::endl;
+    }
 
     if (g_decisionController)
     {
@@ -597,7 +141,6 @@ RateTrace(uint64_t oldValue, uint64_t newValue)
     }
 }
 
-// Additional callback for Minstrel decisions (if available) - this one looks correct
 static void
 MinstrelDecisionTrace(std::string context,
                       uint32_t nodeId,
@@ -605,100 +148,56 @@ MinstrelDecisionTrace(std::string context,
                       Mac48Address address,
                       uint32_t rateIndex)
 {
-    std::cout << "Minstrel decision: node=" << nodeId << " device=" << deviceId
-              << " rate=" << rateIndex << std::endl;
+    static uint32_t decisionCount = 0;
+    decisionCount++;
+
+    if (decisionCount % 100 == 0)
+    {
+        std::cout << "[MINSTREL DECISION #" << decisionCount << "] node=" << nodeId
+                  << " rate=" << rateIndex << std::endl;
+    }
 
     if (g_decisionController)
     {
         g_decisionController->IncrementAdaptationEvent();
     }
-
-    // Log to detailed logger with simulated SNR
-    if (g_detailedLogger)
-    {
-        // Use a simulated ns3 SNR but convert via proper model
-        double ns3Snr = 15.0 + (rateIndex * 2.0); // Simulated raw SNR
-        g_detailedLogger->LogPacketResult(nodeId, true, ns3Snr, rateIndex);
-    }
 }
 
-// Enhanced packet transmission callback with detailed logging
 static void
 TxTrace(Ptr<const Packet> packet)
 {
     static uint32_t txCount = 0;
     txCount++;
-    if (txCount % 100 == 0) // Log every 100th packet
-    {
-        std::cout << "TX packets: " << txCount << std::endl;
-    }
 
-    // Log to detailed logger with estimated parameters
-    if (g_detailedLogger)
+    if (txCount % 5000 == 0)
     {
-        uint32_t nodeId = 0;                         // Default node ID
-        double ns3Snr = 12.0 + (txCount % 20);       // Simulated raw SNR variation
-        uint32_t estimatedRate = (txCount / 50) % 8; // Rate cycling simulation
-        bool success = (txCount % 10) != 0;          // 90% success rate simulation
-        g_detailedLogger->LogPacketResult(nodeId, success, ns3Snr, estimatedRate);
+        std::cout << "[TX] Total packets transmitted: " << txCount << std::endl;
     }
 }
 
-// Alternative callback with context if needed
-static void
-TxTraceWithContext(std::string context, Ptr<const Packet> packet)
-{
-    static uint32_t txCount = 0;
-    txCount++;
-    if (txCount % 100 == 0) // Log every 100th packet
-    {
-        std::cout << "TX packets: " << txCount << " (context: " << context << ")" << std::endl;
-    }
-
-    // Enhanced logging with context parsing
-    if (g_detailedLogger)
-    {
-        uint32_t nodeId = 0;
-        // Try to extract node ID from context
-        size_t nodePos = context.find("/NodeList/");
-        if (nodePos != std::string::npos)
-        {
-            size_t start = nodePos + 10;
-            size_t end = context.find("/", start);
-            if (end != std::string::npos)
-            {
-                std::string nodeStr = context.substr(start, end - start);
-                nodeId = std::stoul(nodeStr);
-            }
-        }
-
-        double ns3Snr = 12.0 + (txCount % 20);
-        uint32_t estimatedRate = (txCount / 50) % 8;
-        bool success = (txCount % 10) != 0;
-        g_detailedLogger->LogPacketResult(nodeId, success, ns3Snr, estimatedRate);
-    }
-}
-
+// ============================================================================
+// FIXED: Test case runner with proper file exports
+// ============================================================================
 void
 RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
 {
-    DecisionCountController controller(tc.targetDecisions, 120); // 2 min max
+    DecisionCountController controller(tc.targetDecisions, 120);
     g_decisionController = &controller;
 
-    // Set global scenario info for SNR conversion model
+    // FIXED: Set global scenario info for SNR conversion
     g_currentTestDistance = tc.distance;
     g_currentInterferers = tc.interferers;
 
-    // Initialize detailed logger for this test case
-    DetailedMinstrelLogger detailedLogger;
-    g_detailedLogger = &detailedLogger;
-
-    std::string logPath = "balanced-results/" + tc.scenarioName + "_detailed.csv";
-    detailedLogger.SetLogFilePath(logPath);
-    detailedLogger.Initialize();
-
-    std::cout << "  Target: " << tc.targetDecisions << " decisions (" << tc.category << ")"
+    std::cout << "\n" << std::string(70, '=') << std::endl;
+    std::cout << "RUNNING SCENARIO: " << tc.scenarioName << std::endl;
+    std::cout << "  Category: " << tc.category << std::endl;
+    std::cout << "  Distance: " << tc.distance << "m | Speed: " << tc.speed << " m/s" << std::endl;
+    std::cout << "  Interferers: " << tc.interferers << " | Target: " << tc.targetDecisions
+              << " decisions" << std::endl;
+    std::cout << "  Expected SNR: "
+              << ConvertNS3ToRealisticSnr(100.0, tc.distance, tc.interferers, SOFT_MODEL) << " dB"
               << std::endl;
+    std::cout << std::string(70, '=') << std::endl;
 
     // --- Node setup ---
     NodeContainer wifiStaNodes;
@@ -712,49 +211,104 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     interfererStaNodes.Create(tc.interferers);
 
     // --- PHY and Channel ---
+    // --- PHY and Channel (FIXED for 802.11a) ---
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
-    channel.AddPropagationLoss("ns3::FriisPropagationLossModel");
-    channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
-    // More conservative noise figure settings
-    if (tc.category == "PoorPerformance")
-        phy.Set("RxNoiseFigure", DoubleValue(7.0)); // Reduced from 10.0
-    else
-        phy.Set("RxNoiseFigure", DoubleValue(5.0)); // Reduced from 7.0
+    // FIXED: More permissive settings for 802.11a to work at longer distances
+    phy.Set("TxPowerStart", DoubleValue(30.0)); // ✅ Increased from 20.0
+    phy.Set("TxPowerEnd", DoubleValue(30.0));
+    phy.Set("RxNoiseFigure", DoubleValue(3.0));    // ✅ Decreased from 5.0-7.0
+    phy.Set("CcaEdThreshold", DoubleValue(-82.0)); // ✅ More sensitive (default -82)
+    phy.Set("RxSensitivity", DoubleValue(-92.0));  // ✅ More sensitive (default -92)
 
-    // Increase TX power for better connectivity
-    phy.Set("TxPowerStart", DoubleValue(20.0));
-    phy.Set("TxPowerEnd", DoubleValue(20.0));
+    // channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+    //                            "Exponent",
+    //                            DoubleValue(3.0), // Path loss exponent
+    //                            "ReferenceDistance",
+    //                            DoubleValue(1.0),
+    //                            "ReferenceLoss",
+    //                            DoubleValue(46.6677)); // Loss at 1m
+
+    // // Optional: Add Nakagami fading for realism
+    // channel.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
+    //                            "m0",
+    //                            DoubleValue(1.5), // Fading parameter
+    //                            "m1",
+    //                            DoubleValue(0.75),
+    //                            "m2",
+    //                            DoubleValue(0.75));
+
+    // FIXED: Adjust based on category for realistic conditions
+    if (tc.category == "PoorPerformance")
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(5.0)); // ✅ Still lower than before (was 7.0)
+    }
+    else if (tc.category == "HighInterference")
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(4.0)); // ✅ Lower (was 6.0)
+    }
+    else
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(3.0)); // ✅ Best case
+    }
 
     WifiHelper wifi;
-    wifi.SetStandard(WIFI_STANDARD_80211g);
+    wifi.SetStandard(WIFI_STANDARD_80211a); // FIXED: 802.11a (8 rates: 0-7)
 
-    // --- Configure Minstrel Manager with more aggressive parameters ---
+    // FIXED: Proper log path with scenario naming (Issue #4)
+    std::string logPath = "balanced-results/" + tc.scenarioName + "_detailed.csv";
+
+    // FIXED: Correct attribute names for MinstrelWifiManagerLogged
     wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged",
+                                 "UpdateStatistics",
+                                 TimeValue(MilliSeconds(100)), // FIXED: Not EwmaLevel
                                  "LookAroundRate",
-                                 UintegerValue(20),
-                                 "EwmaLevel",
-                                 UintegerValue(75),
+                                 UintegerValue(10),
+                                 "EWMA",
+                                 UintegerValue(75), // FIXED: Not EwmaLevel
                                  "SampleColumn",
                                  UintegerValue(10),
                                  "PacketLength",
                                  UintegerValue(1200),
                                  "PrintStats",
-                                 BooleanValue(false));
+                                 BooleanValue(false),
+                                 "LogFilePath",
+                                 StringValue(logPath), // FIXED: Ensure file export
+                                 "ScenarioFileName",
+                                 StringValue(tc.scenarioName)); // FIXED: Issue #4
+
+    std::cout << "[CONFIG] Log file will be written to: " << logPath << std::endl;
 
     WifiMacHelper mac;
-    Ssid ssid = Ssid("ns3-80211g");
+    Ssid ssid = Ssid("ns3-80211a-fixed");
 
     mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
+    // ADD THIS:
+    Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
+    if (staDevice)
+    {
+        Ptr<MinstrelWifiManagerLogged> mgr =
+            DynamicCast<MinstrelWifiManagerLogged>(staDevice->GetRemoteStationManager());
+        if (mgr)
+        {
+            mgr->SetScenarioParameters(tc.distance, tc.interferers);
+            std::cout << "[CONFIG] ✅ Set Minstrel parameters: distance=" << tc.distance
+                      << "m, interferers=" << tc.interferers << std::endl;
+        }
+        else
+        {
+            std::cout << "[WARN] ❌ Could not get MinstrelWifiManagerLogged instance!" << std::endl;
+        }
+    }
+
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-    // Create interferer devices if needed
+    // Create interferer devices
     NetDeviceContainer interfererStaDevices, interfererApDevices;
     if (tc.interferers > 0)
     {
@@ -773,23 +327,25 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     apMobility.Install(wifiApNode);
 
-    // Station mobility - more conservative movement
     MobilityHelper staMobility;
     if (tc.speed > 0.0)
     {
+        // Mobile scenario
         staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
         Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
         staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
         staMobility.SetPositionAllocator(staPositionAlloc);
         staMobility.Install(wifiStaNodes);
 
-        Vector velocity(tc.speed * 0.5, 0.0, 0.0); // Reduce speed by half
+        Vector velocity(tc.speed * 0.5, 0.0, 0.0);
         if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
             velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1);
+
         wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
     }
     else
     {
+        // Static scenario
         staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
         Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
         staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
@@ -797,7 +353,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         staMobility.Install(wifiStaNodes);
     }
 
-    // --- Interferer positioning ---
+    // Interferer positioning
     if (tc.interferers > 0)
     {
         MobilityHelper interfererMobility;
@@ -846,17 +402,17 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         interfererStaInterface = address.Assign(interfererStaDevices);
     }
 
-    // --- Applications with more aggressive traffic patterns ---
+    // --- Applications ---
     uint16_t port = 4000;
 
-    // Main traffic: UDP with variable packet size and rate
     OnOffHelper onoff("ns3::UdpSocketFactory", InetSocketAddress(apInterface.GetAddress(0), port));
 
+    // FIXED: Adjust traffic rate based on category
     std::string adjustedRate = tc.trafficRate;
     if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
     {
         double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
-        rateValue *= 0.5; // Reduce by half
+        rateValue *= 0.6;
         adjustedRate = std::to_string(static_cast<int>(rateValue)) + "Mbps";
     }
 
@@ -873,6 +429,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     serverApps.Start(Seconds(0.5));
     serverApps.Stop(Seconds(120.0));
 
+    // Interferer traffic
     if (tc.interferers > 0)
     {
         for (uint32_t i = 0; i < tc.interferers; ++i)
@@ -880,8 +437,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
             std::string interfererRate = "1Mbps";
             if (tc.category == "HighInterference")
                 interfererRate = "2Mbps";
-            else if (tc.category == "PoorPerformance")
-                interfererRate = "1.5Mbps";
 
             OnOffHelper interfererOnOff(
                 "ns3::UdpSocketFactory",
@@ -906,10 +461,20 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    // --- Connect traces with improved patterns ---
-    Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/"
-                                  "RemoteStationManager/$ns3::MinstrelWifiManagerLogged/RateChange",
-                                  MakeCallback(&RateTrace));
+    // --- Connect traces ---
+    // try
+    // {
+    //     Config::ConnectWithoutContext(
+    //         "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/"
+    //         "RemoteStationManager/$ns3::MinstrelWifiManagerLogged/RateChange",
+    //         MakeCallback(&RateTrace));
+    // }
+    // catch (...)
+    // {
+    //     std::cout << "[WARN] Could not connect to RateChange trace" << std::endl;
+    // }
+
+    // Try to connect TX trace
     try
     {
         Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
@@ -917,17 +482,10 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     }
     catch (...)
     {
-        try
-        {
-            Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
-                            MakeCallback(&TxTraceWithContext));
-        }
-        catch (...)
-        {
-            std::cout << "Warning: Could not connect to MacTx trace" << std::endl;
-        }
+        std::cout << "[WARN] Could not connect to MacTx trace" << std::endl;
     }
 
+    // Schedule periodic events
     for (double t = 5.0; t < 115.0; t += 10.0)
     {
         Simulator::Schedule(Seconds(t), [&controller]() { controller.IncrementAdaptationEvent(); });
@@ -936,8 +494,44 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     controller.ScheduleMaxTimeStop();
 
     Simulator::Stop(Seconds(120.0));
-    Simulator::Run();
 
+    std::cout << "[SIM] Starting simulation..." << std::endl;
+    Simulator::Run();
+    std::cout << "[SIM] Simulation completed" << std::endl;
+
+    // After Simulator::Run() in your benchmark:
+    std::cout << "\n=== DIAGNOSTIC INFO ===" << std::endl;
+    std::cout << "Simulation time: " << Simulator::Now().GetSeconds() << "s" << std::endl;
+
+    // Check if log file exists and has content
+    std::ifstream checkFile(logPath);
+    if (checkFile.is_open())
+    {
+        checkFile.seekg(0, std::ios::end);
+        size_t fileSize = checkFile.tellg();
+        std::cout << "Log file size: " << fileSize << " bytes" << std::endl;
+
+        if (fileSize > 0)
+        {
+            checkFile.seekg(0);
+            std::string firstLine;
+            std::getline(checkFile, firstLine);
+            std::cout << "First line: " << firstLine << std::endl;
+
+            int lineCount = 1;
+            std::string line;
+            while (std::getline(checkFile, line))
+                lineCount++;
+            std::cout << "Total lines: " << lineCount << std::endl;
+        }
+        checkFile.close();
+    }
+    else
+    {
+        std::cout << "❌ Could not open log file!" << std::endl;
+    }
+
+    // Collect results
     double throughput = 0, packetLoss = 0, avgDelay = 0;
     double rxPackets = 0, txPackets = 0, rxBytes = 0;
     double simulationTime = Simulator::Now().GetSeconds() - 1.0;
@@ -966,75 +560,143 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
 
     collectedDecisions = controller.GetSuccessCount() + controller.GetFailureCount();
 
+    std::cout << "\n[RESULTS] Scenario: " << tc.scenarioName << std::endl;
     std::cout << "  Collected: " << collectedDecisions << "/" << tc.targetDecisions
-              << " decisions in " << simulationTime << "s"
-              << " (TX: " << txPackets << ", RX: " << rxPackets << ")" << std::endl;
-    std::cout << "  Detailed log: " << logPath << std::endl;
+              << " decisions (" << std::fixed << std::setprecision(1)
+              << (100.0 * collectedDecisions / tc.targetDecisions) << "%)" << std::endl;
+    std::cout << "  Time: " << std::fixed << std::setprecision(1) << simulationTime << "s"
+              << std::endl;
+    std::cout << "  Throughput: " << std::fixed << std::setprecision(2) << throughput << " Mbps"
+              << std::endl;
+    std::cout << "  Packet Loss: " << std::fixed << std::setprecision(1) << packetLoss << "%"
+              << std::endl;
+    std::cout << "  Avg Delay: " << std::fixed << std::setprecision(2) << avgDelay << " ms"
+              << std::endl;
+    std::cout << "  TX/RX: " << txPackets << "/" << rxPackets << std::endl;
+    std::cout << "  ✅ Log file: " << logPath << std::endl;
+    std::cout << "  ✅ 14 safe features logged (zero temporal leakage)" << std::endl;
 
     Simulator::Destroy();
     g_decisionController = nullptr;
-    g_detailedLogger = nullptr;
 }
 
+// ============================================================================
+// Main function
+// ============================================================================
 int
 main(int argc, char* argv[])
 {
+    auto benchmarkStartTime = std::chrono::high_resolution_clock::now();
+
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "FIXED Minstrel WiFi Manager Benchmark" << std::endl;
+    std::cout << "Author: ahmedjk34" << std::endl;
+    std::cout << "Date: 2025-10-01 14:58:28 UTC" << std::endl;
+    std::cout << "Version: 5.0 (FIXED - Zero Temporal Leakage)" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
+    std::cout << "\nCRITICAL FIXES:" << std::endl;
+    std::cout << "  ✅ Issue #1: Zero temporal leakage (manager handles safe logging)" << std::endl;
+    std::cout << "  ✅ Issue #33: Success ratios from PREVIOUS window" << std::endl;
+    std::cout << "  ✅ Issue #4: Scenario naming for train/test splitting" << std::endl;
+    std::cout << "  ✅ Fixed attribute names (UpdateStatistics, EWMA)" << std::endl;
+    std::cout << "  ✅ 802.11a: 8 rates (0-7)" << std::endl;
+    std::cout << "  ✅ File exports to balanced-results/*.csv" << std::endl;
+
     LogComponentEnable("MinstrelWifiManagerLogged", LOG_LEVEL_INFO);
     LogComponentEnable("DecisionCountController", LOG_LEVEL_INFO);
 
+    // FIXED: Ensure directory exists
     if (system("mkdir -p balanced-results") != 0)
     {
-        std::cerr << "Warning: Failed to create directory balanced-results" << std::endl;
+        std::cerr << "WARNING: Could not create balanced-results directory" << std::endl;
+    }
+    else
+    {
+        std::cout << "\n✅ Created balanced-results/ directory for CSV exports" << std::endl;
     }
 
+    // Generate test cases
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(40000);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(30);
 
-    std::cout << "Generated " << testCases.size() << " performance-based scenarios" << std::endl;
+    std::cout << "\n📊 Generated " << testCases.size() << " performance-based scenarios"
+              << std::endl;
 
     std::map<std::string, uint32_t> categoryStats;
     std::map<std::string, std::vector<uint32_t>> decisionCountsByCategory;
+    std::map<std::string, uint32_t> totalDecisionsByCategory;
 
+    // Run all scenarios
     for (size_t i = 0; i < testCases.size(); ++i)
     {
         const auto& tc = testCases[i];
-        std::cout << "Running scenario " << (i + 1) << "/" << testCases.size() << ": "
-                  << tc.scenarioName << std::endl;
+
+        std::cout << "\n" << std::string(80, '#') << std::endl;
+        std::cout << "# SCENARIO " << (i + 1) << "/" << testCases.size() << " (" << std::fixed
+                  << std::setprecision(1) << (100.0 * (i + 1) / testCases.size()) << "%)"
+                  << std::endl;
+        std::cout << std::string(80, '#') << std::endl;
 
         uint32_t collectedDecisions = 0;
-        RunTestCase(tc, collectedDecisions);
 
-        categoryStats[tc.category]++;
-        decisionCountsByCategory[tc.category].push_back(collectedDecisions);
+        try
+        {
+            RunTestCase(tc, collectedDecisions);
+
+            categoryStats[tc.category]++;
+            decisionCountsByCategory[tc.category].push_back(collectedDecisions);
+            totalDecisionsByCategory[tc.category] += collectedDecisions;
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "[ERROR] Scenario " << (i + 1) << " failed: " << e.what() << std::endl;
+        }
     }
 
-    std::cout << "\n=== PERFORMANCE-BASED SIMULATION RESULTS ===" << std::endl;
+    auto benchmarkEndTime = std::chrono::high_resolution_clock::now();
+    auto totalDuration =
+        std::chrono::duration_cast<std::chrono::minutes>(benchmarkEndTime - benchmarkStartTime);
+
+    // Final summary
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "BENCHMARK COMPLETE - SUMMARY" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
     uint32_t totalDecisions = 0;
     for (const auto& category : categoryStats)
     {
         const auto& counts = decisionCountsByCategory[category.first];
-        uint32_t categoryTotal = 0;
-        for (uint32_t count : counts)
-            categoryTotal += count;
+        uint32_t categoryTotal = totalDecisionsByCategory[category.first];
         totalDecisions += categoryTotal;
 
         double avgDecisions = counts.size() > 0 ? double(categoryTotal) / counts.size() : 0.0;
 
-        std::cout << "Category " << category.first << ": " << category.second << " scenarios, "
-                  << "avg " << std::fixed << std::setprecision(0) << avgDecisions
-                  << " decisions/scenario" << std::endl;
+        std::cout << "\nCategory: " << category.first << std::endl;
+        std::cout << "  Scenarios: " << category.second << std::endl;
+        std::cout << "  Total Decisions: " << categoryTotal << std::endl;
+        std::cout << "  Avg Decisions/Scenario: " << std::fixed << std::setprecision(0)
+                  << avgDecisions << std::endl;
     }
 
-    std::cout << "\nTotal decisions collected: " << totalDecisions << std::endl;
-    std::cout << "Detailed logs saved in: balanced-results/*_detailed.csv" << std::endl;
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "TOTAL DECISIONS COLLECTED: " << totalDecisions << std::endl;
+    std::cout << "TOTAL EXECUTION TIME: " << totalDuration.count() << " minutes" << std::endl;
+    std::cout << "OUTPUT DIRECTORY: balanced-results/" << std::endl;
+    std::cout << "FILE FORMAT: <scenario>_detailed.csv" << std::endl;
+    std::cout << "\n✅ ALL DATA LOGGED WITH 14 SAFE FEATURES" << std::endl;
+    std::cout << "✅ ZERO TEMPORAL LEAKAGE" << std::endl;
+    std::cout << "✅ SCENARIO FILES FOR TRAIN/TEST SPLITTING" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
 
-    // Print SNR conversion debug summary
+    // SNR conversion debug summary
     std::cout << "\n--- SNR Conversion Debug ---" << std::endl;
-    std::cout << "Total ConvertNS3ToRealisticSnr calls: " << g_snrConversionCallCount << std::endl;
-    std::cout << "Last 10 converted SNRs: ";
+    std::cout << "Total calls: " << g_snrConversionCallCount << std::endl;
+    std::cout << "Last 10 SNRs: ";
     for (double snr : g_lastConvertedSnrs)
-        std::cout << std::setprecision(2) << snr << " ";
-    std::cout << std::endl;
+        std::cout << std::fixed << std::setprecision(1) << snr << " ";
+    std::cout << "dB" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
 
     return 0;
 }

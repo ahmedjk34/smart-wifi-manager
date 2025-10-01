@@ -53,6 +53,7 @@ class PerformanceBasedParameterGenerator
     ScenarioParams GenerateEdgeStressScenario(uint32_t index);
     ScenarioParams GenerateRandomChaosScenario(uint32_t index);
     ScenarioParams GenerateExcellentPerformanceScenario(uint32_t index);
+    ScenarioParams GenerateForceHighRateScenario(uint32_t index);
 
     // Utility
     double CalculateDistanceForSnr(double targetSnr, uint32_t interferers);

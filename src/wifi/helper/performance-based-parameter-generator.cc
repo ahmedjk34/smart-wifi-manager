@@ -13,23 +13,29 @@ PerformanceBasedParameterGenerator::GenerateStratifiedScenarios(uint32_t totalSc
 {
     std::vector<ScenarioParams> scenarios;
 
-    uint32_t catPoor = std::round(totalScenarios * 0.30);       // Poor: 30%
-    uint32_t catMedium = std::round(totalScenarios * 0.35);     // Medium: 35%
-    uint32_t catHighInt = std::round(totalScenarios * 0.15);    // High interference: 15%
-    uint32_t catGood = std::round(totalScenarios * 0.07);       // Good: 7%
-    uint32_t catExcellent = std::round(totalScenarios * 0.05);  // Excellent: 5%
-    uint32_t catNearIdeal = std::round(totalScenarios * 0.03);  // NearIdeal: 3%
-    uint32_t catExtreme = std::round(totalScenarios * 0.03);    // Extreme: 3%
-    uint32_t catEdgeStress = std::round(totalScenarios * 0.02); // EdgeStress: 2%
+    // Redistribute based on your target class distribution analysis
+    // Focus on balancing the underrepresented high-rate classes
+    uint32_t catPoor = std::round(totalScenarios * 0.25);          // Reduced from 30% to 25%
+    uint32_t catMedium = std::round(totalScenarios * 0.25);        // Reduced from 35% to 25%
+    uint32_t catHighInt = std::round(totalScenarios * 0.15);       // Keep 15%
+    uint32_t catGood = std::round(totalScenarios * 0.12);          // Increased from 7% to 12%
+    uint32_t catExcellent = std::round(totalScenarios * 0.10);     // Increased from 5% to 10%
+    uint32_t catNearIdeal = std::round(totalScenarios * 0.03);     // Keep 3%
+    uint32_t catExtreme = std::round(totalScenarios * 0.05);       // Increased from 3% to 5%
+    uint32_t catEdgeStress = std::round(totalScenarios * 0.03);    // Increased from 2% to 3%
+    uint32_t catForceHighRate = std::round(totalScenarios * 0.02); // NEW: 2% for high rates
 
-    // Rebalance to ensure total = totalScenarios (add/subtract from largest group)
+    // Rebalance to ensure total = totalScenarios
     uint32_t sum = catPoor + catMedium + catHighInt + catGood + catExcellent + catNearIdeal +
-                   catExtreme + catEdgeStress;
-    if (sum < totalScenarios)
-        catMedium += (totalScenarios - sum); // add shortfall to the largest group
-    else if (sum > totalScenarios)
-        catMedium -= (sum - totalScenarios); // remove excess from the largest group
+                   catExtreme + catEdgeStress + catForceHighRate;
 
+    // Adjust the largest group to match total
+    if (sum < totalScenarios)
+        catMedium += (totalScenarios - sum);
+    else if (sum > totalScenarios)
+        catMedium -= (sum - totalScenarios);
+
+    // Generate scenarios with the new distribution
     for (uint32_t i = 0; i < catPoor; ++i)
         scenarios.push_back(GeneratePoorPerformanceScenario(i));
     for (uint32_t i = 0; i < catMedium; ++i)
@@ -46,6 +52,13 @@ PerformanceBasedParameterGenerator::GenerateStratifiedScenarios(uint32_t totalSc
         scenarios.push_back(GenerateExtremeScenario(i));
     for (uint32_t i = 0; i < catEdgeStress; ++i)
         scenarios.push_back(GenerateEdgeStressScenario(i));
+    for (uint32_t i = 0; i < catForceHighRate; ++i) // NEW: Include high-rate scenarios
+        scenarios.push_back(GenerateForceHighRateScenario(i));
+
+    // Add some random chaos scenarios for diversity (5% of total)
+    uint32_t chaosScenarios = std::round(totalScenarios * 0.05);
+    for (uint32_t i = 0; i < chaosScenarios; ++i)
+        scenarios.push_back(GenerateRandomChaosScenario(i));
 
     return scenarios;
 }
@@ -443,6 +456,37 @@ PerformanceBasedParameterGenerator::CalculateDistanceForSnr(double targetSnr, ui
 
     // Clamp to reasonable ranges for ns-3
     return std::clamp(distance, 1.0, 80.0);
+}
+
+ScenarioParams
+PerformanceBasedParameterGenerator::GenerateForceHighRateScenario(uint32_t index)
+{
+    ScenarioParams params;
+    params.category = "ForceHighRate";
+    params.targetDecisions = 400 + (index % 300); // 400-700 decisions
+
+    // Perfect conditions for high rates
+    params.targetSnrMin = 38.0;
+    params.targetSnrMax = 45.0;
+
+    double targetSnr =
+        params.targetSnrMin + (params.targetSnrMax - params.targetSnrMin) * ((index % 5) / 5.0);
+    params.distance = 0.5 + (index % 3) * 0.5; // 0.5-2.0m (very close)
+
+    params.speed = 0.0;       // Stationary
+    params.interferers = 0;   // No interference
+    params.packetSize = 1500; // Maximum MTU
+
+    // Very high traffic to force aggressive rate selection
+    std::vector<std::string> trafficRates = {"54Mbps", "60Mbps", "65Mbps"};
+    params.trafficRate = trafficRates[index % trafficRates.size()];
+
+    std::ostringstream name;
+    name << "ForceHighRate_" << std::setw(3) << std::setfill('0') << index << "_snr" << std::fixed
+         << std::setprecision(1) << targetSnr << "_" << params.trafficRate;
+    params.scenarioName = name.str();
+
+    return params;
 }
 
 } // namespace ns3

@@ -1,23 +1,32 @@
 """
-Ultimate ML Model Training Pipeline with Class Weights (Random Forest, Large CSV-Compatible, RAM-Efficient)
-Trains and outputs models using Phase 4 Step 3 naming/style with CLASS WEIGHTS instead of downsampling.
+Ultimate ML Model Training Pipeline - FIXED VERSION
+Trains Random Forest models using optimized hyperparameters from Step 3c
+
+CRITICAL FIXES (2025-10-01):
+- Issue #4: Scenario-aware train/test split (no random mixing)
+- Issue #12: Raises error if scenario_file missing (no silent fallback)
+- Issue #34: Feature scaling done AFTER splitting (no test set leakage)
+- Issue #35: Distribution comparison between train/test
+- Issue #36: Class weights computed AFTER splitting (only on train set)
+- Issue #37: Stratified scenario split (ensures all classes in each split)
+- Issue #40: Sample weights for temporal importance (recent packets weighted higher)
+- Issue #21: Trains all oracle models in one run (automated)
+- Issue #22: Feature importance analysis with leakage detection
+- Issue #23: Per-scenario performance metrics
+- Issue #25: Checkpoint recovery (skip already trained models)
+- Issue #20: Loads optimized hyperparameters from File 3c
 
 Features:
-- BULLETPROOF class preservation - guarantees all classes survive processing
-- Optional chunked CSV loading and row limiting (configurable)
-- CONFIGURABLE TARGET LABELS - train on any available label (rateIdx, oracle labels, etc.)
-- Handles all new features, context labels, and oracle label nuances
-- USES CLASS WEIGHTS for imbalanced data instead of aggressive downsampling
-- Step-by-step logging and documentation
-- Stratified splits and feature scaling
-- Model saving and top feature reporting
-- FIXED: Removed data leakage features for realistic performance
+- Scenario-aware splitting (prevents temporal leakage)
+- Optimized hyperparameters from GridSearchCV
+- Temporal sample weighting
+- Per-scenario evaluation
+- Checkpoint recovery
+- Comprehensive logging
 
 Author: ahmedjk34
-Date: 2025-09-22
-BULLETPROOF VERSION: Absolutely preserves all classes, configurable sampling, proper debugging
-FIXED VERSION: Removed phyRate and other leaky features for realistic 85-95% accuracy
-CONFIGURABLE VERSION: Choose any target label for training
+Date: 2025-10-01
+Pipeline Stage: Step 4 - Model Training (FIXED)
 """
 
 import pandas as pd
@@ -26,648 +35,856 @@ import logging
 import time
 import sys
 import json
+import numpy as np
 from pathlib import Path
 from datetime import datetime
-from sklearn.model_selection import train_test_split, cross_val_score
+from typing import Dict, List, Tuple, Any
+from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
-from tqdm import tqdm
+from sklearn.utils.class_weight import compute_class_weight
+from collections import Counter
 import warnings
-import numpy as np
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
-# ================== CONFIGURABLE SETTINGS ==================
-CSV_FILE = "smart-v3-ml-enriched.csv"   # <--- DO NOT CHANGE
+# ================== CONFIGURATION ==================
+BASE_DIR = Path(__file__).parent
+PARENT_DIR = BASE_DIR.parent
+CSV_FILE = PARENT_DIR / "smart-v3-ml-enriched.csv"
+HYPERPARAMS_FILE = BASE_DIR / "hyperparameter_results" / "hyperparameter_tuning_results.json"
+CLASS_WEIGHTS_FILE = BASE_DIR / "model_artifacts" / "class_weights.json"
+OUTPUT_DIR = BASE_DIR / "trained_models"
+LOG_DIR = BASE_DIR / "logs"
 
-# 🎯 TARGET LABEL SELECTION - CHOOSE YOUR TARGET!
-# Available options based on your data:
-# - "rateIdx" (original - mostly classes 0,1,5)
-# - "oracle_conservative" (classes 0-7, but different distribution)
-# - "oracle_balanced" (classes 0-7, more balanced) 
-# - "oracle_aggressive" (classes 0-7, aggressive strategy)
+# FIXED: Issue #14 - Global random seed
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
 
-TARGET_LABEL = "oracle_balanced"  # <--- CHANGE THIS TO EXPERIMENT!
+# Target labels to train
+TARGET_LABELS = ["oracle_conservative", "oracle_balanced", "oracle_aggressive"]
 
-# You currently train on ONE label at a time (not multiple simultaneously)
-# This is the standard approach for classification tasks
-
-# ROW LIMITING CONTROLS (Set ENABLE_ROW_LIMITING=False to use full dataset)
-ENABLE_ROW_LIMITING = False              # <--- Set to True to enable sampling/chunking
-MAX_ROWS = 500_000                       # Only used if ENABLE_ROW_LIMITING=True
-CHUNKSIZE = 250_000                      # Only used if ENABLE_ROW_LIMITING=True
-
-# FIXED FEATURE COLUMNS - REMOVED DATA LEAKAGE FEATURES
-# FIXED: GUARANTEED SAFE FEATURES - ZERO DATA LEAKAGE
-FEATURE_COLS = [
-    # SNR features (7 features)
+# FIXED: Issue #1 - SAFE features only (no temporal leakage)
+SAFE_FEATURES = [
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    
-    # Performance features (6 features) 
-    "shortSuccRatio", "medSuccRatio", "consecSuccess", "consecFailure",
-    "packetLossRate", "retrySuccessRatio",
-    
-    # Rate adaptation features (3 features)
-    "recentRateChanges", "timeSinceLastRateChange", "rateStabilityScore",
-    
-    # Network assessment features (3 features)
-    "severity", "confidence", "packetSuccess", 
-    
-    # Network configuration features (2 features - KEEP queueLen for now)
-    "channelWidth", "mobilityMetric"
-    
-    # REMOVED ALL LEAKY FEATURES:
-    # "phyRate" - LEAKY: Perfect correlation with rateIdx
-    # "optimalRateDistance" - LEAKY: 8 unique values = 8 rate classes  
-    # "recentThroughputTrend" - LEAKY: High correlation (0.853)
-    # "conservativeFactor" - LEAKY: Inverse correlation (-0.809)
-    # "aggressiveFactor" - LEAKY: Inverse of conservative
-    # "recommendedSafeRate" - LEAKY: Direct target hint
-    # "T1", "T2", "T3" - USELESS: Always constant
-    # "decisionReason" - USELESS: Always 0
-    # "offeredLoad" - USELESS: Always 0 in your data
-    # "queueLen" - USELESS: Always 0 in your data  
-    # "retryCount" - USELESS: Always 0 in your data
-
-    # Note: queueLen still in dataset but mostly zeros - could remove later
-
+    "shortSuccRatio", "medSuccRatio",
+    "packetLossRate",
+    "channelWidth", "mobilityMetric",
+    "severity", "confidence"
 ]
 
-# OLD: FEATURE_COLS had 18 features
-# NEW: After removing leaky features, we have 21 features
+# Train/Val/Test split ratios
+TEST_SIZE = 0.2      # 20% for final test
+VAL_SIZE = 0.2       # 20% of remaining (16% of total)
+# Final: 64% train, 16% val, 20% test
 
-# Update assertion
-assert len(FEATURE_COLS) == 21, f"Expected 20 safe features, got {len(FEATURE_COLS)}"
-
-
-
-CONTEXT_LABEL = "network_context"
-USER = "ahmedjk34"
-
-# Dynamic file names based on target label
-SCALER_FILE = f"step3_scaler_{TARGET_LABEL}_FIXED.joblib"
-MODEL_FILE = f"step3_rf_{TARGET_LABEL}_model_FIXED.joblib"
-DOC_FILE = f"step3_{TARGET_LABEL}_training_results.txt"
-CLASS_WEIGHTS_FILE = "python_files/model_artifacts/class_weights.json"
-
-# ================== AVAILABLE TARGET LABELS INFO ==================
-TARGET_LABEL_INFO = {
-    "rateIdx": {
-        "description": "Original rate index (mostly classes 0,1,5)",
-        "expected_classes": 8,
-        "class_range": range(8),
-        "typical_distribution": "Imbalanced: 49% class 0, 25% each class 1&5, <1% others"
-    },
-    "oracle_conservative": {
-        "description": "Conservative oracle strategy (prefers lower rates)",
-        "expected_classes": 8,
-        "class_range": range(8),
-        "typical_distribution": "More balanced across all classes"
-    },
-    "oracle_balanced": {
-        "description": "Balanced oracle strategy (middle ground)",
-        "expected_classes": 8,
-        "class_range": range(8),
-        "typical_distribution": "Well-distributed across classes"
-    },
-    "oracle_aggressive": {
-        "description": "Aggressive oracle strategy (prefers higher rates)",
-        "expected_classes": 8,
-        "class_range": range(8),
-        "typical_distribution": "Heavily weighted toward higher rate classes"
-    }
+# FIXED: Issue #17 - Realistic performance thresholds (no more leakage)
+PERFORMANCE_THRESHOLDS = {
+    'excellent': 0.75,   # >75% is excellent for WiFi without leakage
+    'good': 0.65,        # 65-75% is good
+    'acceptable': 0.55,  # 55-65% is acceptable
+    # <55% needs investigation
 }
 
-def setup_logging():
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+USER = "ahmedjk34"
+
+# ================== LOGGING SETUP ==================
+def setup_logging(target_label: str):
+    """Setup comprehensive logging for specific target"""
+    LOG_DIR.mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"training_{TARGET_LABEL}_{timestamp}.log"
+    log_file = LOG_DIR / f"training_{target_label}_{timestamp}.log"
+    
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[logging.FileHandler(log_file, encoding="utf-8"), logging.StreamHandler(sys.stdout)]
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout)
+        ]
     )
+    
     logger = logging.getLogger(__name__)
-    logger.info("="*60)
-    logger.info(f"CONFIGURABLE ML TRAINING PIPELINE - TARGET: {TARGET_LABEL}")
-    logger.info("="*60)
-    logger.info(f"🎯 Target Label: {TARGET_LABEL}")
-    if TARGET_LABEL in TARGET_LABEL_INFO:
-        info = TARGET_LABEL_INFO[TARGET_LABEL]
-        logger.info(f"📊 Description: {info['description']}")
-        logger.info(f"📈 Expected: {info['typical_distribution']}")
-    logger.info(f"🔧 Row limiting: {'ENABLED' if ENABLE_ROW_LIMITING else 'DISABLED'}")
-    logger.info(f"🚨 FIXED: Removed 19 leaky/useless features for realistic accuracy")
-    logger.info(f"📊 Using {len(FEATURE_COLS)} SAFE features only (REMOVED 19 LEAKY/USELESS features)")
-    if ENABLE_ROW_LIMITING:
-        logger.info(f"📊 Max rows: {MAX_ROWS:,}, Chunk size: {CHUNKSIZE:,}")
-    else:
-        logger.info("📊 Using FULL dataset (no row limits)")
+    logger.info("="*80)
+    logger.info(f"ML MODEL TRAINING PIPELINE - FIXED VERSION")
+    logger.info("="*80)
+    logger.info(f"🎯 Target Label: {target_label}")
+    logger.info(f"👤 Author: {USER}")
+    logger.info(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"🔧 Random Seed: {RANDOM_SEED}")
+    logger.info(f"🛡️ Safe Features: {len(SAFE_FEATURES)} (no temporal leakage)")
+    logger.info(f"💻 Device: CPU (no GPU required)")
+    logger.info("="*80)
+    logger.info("FIXES APPLIED:")
+    logger.info("  - Issue #4: Scenario-aware splitting")
+    logger.info("  - Issue #12: No silent fallback to random split")
+    logger.info("  - Issue #34: Scaling after splitting")
+    logger.info("  - Issue #35: Train/test distribution comparison")
+    logger.info("  - Issue #36: Class weights from train set only")
+    logger.info("  - Issue #37: Stratified scenario split")
+    logger.info("  - Issue #40: Temporal sample weighting")
+    logger.info("  - Issue #20: Optimized hyperparameters from 3c")
+    logger.info("="*80)
+    
     return logger
 
-def discover_available_labels(df, logger):
-    """Discover and display all available target labels in the dataset."""
-    logger.info("🔍 Discovering available target labels in dataset...")
+# ================== LOAD HYPERPARAMETERS ==================
+def load_optimized_hyperparameters(target_label: str, logger) -> Dict:
+    """
+    FIXED: Auto-detect hyperparameter JSON file (supports any name)
+    Handles ultra_fast, quick, full, or custom names
+    """
+    logger.info(f"📂 Looking for hyperparameter files in: {HYPERPARAMS_FILE.parent}")
     
-    potential_labels = ["rateIdx", "oracle_conservative", "oracle_balanced", "oracle_aggressive"]
-    available_labels = []
+    # FIXED: Find ALL JSON files in hyperparameter_results directory
+    hyperparams_dir = BASE_DIR / "hyperparameter_results"
     
-    for label in potential_labels:
-        if label in df.columns:
-            label_dist = df[label].value_counts().sort_index()
-            unique_classes = len(label_dist)
-            total_samples = len(df[label].dropna())
-            
-            available_labels.append(label)
-            logger.info(f"📊 {label}: {unique_classes} classes, {total_samples:,} samples")
-            
-            # Show top 5 most common classes
-            top_classes = label_dist.head(5)
-            for class_val, count in top_classes.items():
-                pct = (count / total_samples) * 100
-                logger.info(f"    Class {class_val}: {count:,} samples ({pct:.1f}%)")
+    if not hyperparams_dir.exists():
+        logger.warning(f"⚠️ Hyperparameter directory not found: {hyperparams_dir}")
+        logger.warning(f"   Please run Step 3c (hyperparameter tuning) first")
+        logger.warning(f"   Falling back to default parameters...")
+        return get_default_hyperparameters()
     
-    logger.info(f"✅ Found {len(available_labels)} available target labels: {available_labels}")
+    # Find all JSON files
+    json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*.json"))
     
-    if TARGET_LABEL not in available_labels:
-        logger.error(f"❌ Selected target '{TARGET_LABEL}' not found in dataset!")
-        logger.error(f"Available options: {available_labels}")
-        return None
+    if len(json_files) == 0:
+        logger.warning(f"⚠️ No hyperparameter JSON files found!")
+        logger.warning(f"   Expected pattern: hyperparameter_tuning_*.json")
+        logger.warning(f"   Please run Step 3c first")
+        return get_default_hyperparameters()
     
-    return available_labels
-
-def load_class_weights(filepath, target_label, logger):
-    """Load pre-computed class weights for handling imbalanced data."""
-    logger.info(f"📊 Loading class weights from {filepath} for target '{target_label}'...")
+    if len(json_files) > 1:
+        logger.error(f"❌ Multiple hyperparameter files found:")
+        for f in json_files:
+            logger.error(f"   - {f.name}")
+        logger.error(f"   Please keep only ONE file (delete others or move to backup)")
+        logger.error(f"   Recommended: hyperparameter_tuning_ultra_fast.json (most recent)")
+        sys.exit(1)
+    
+    # Use the single JSON file found
+    hyperparam_file = json_files[0]
+    logger.info(f"✅ Found hyperparameter file: {hyperparam_file.name}")
+    
     try:
-        with open(filepath, 'r') as f:
-            all_weights = json.load(f)
+        with open(hyperparam_file, 'r') as f:
+            all_hyperparams = json.load(f)
         
-        if target_label not in all_weights:
-            logger.warning(f"⚠️ No class weights found for {target_label}, will compute balanced weights")
-            return None
+        if target_label not in all_hyperparams:
+            logger.warning(f"⚠️ No hyperparameters found for {target_label}")
+            logger.warning(f"   Available targets: {list(all_hyperparams.keys())}")
+            return get_default_hyperparameters()
         
-        weights = all_weights[target_label]
-        # Convert string keys to integers
-        weights = {int(k): float(v) for k, v in weights.items()}
+        # Extract best parameters
+        target_results = all_hyperparams[target_label]
+        best_params = target_results['best_params']
+        best_score = target_results.get('best_score', 0.0)
         
-        logger.info(f"✅ Loaded class weights for {target_label}:")
-        for class_val, weight in sorted(weights.items()):
-            logger.info(f"  Class {class_val}: {weight:.3f}")
+        logger.info(f"✅ Loaded optimized hyperparameters for {target_label}")
+        logger.info(f"   CV Score: {best_score:.4f} ({best_score*100:.1f}%)")
+        logger.info(f"   Parameters:")
+        for param, value in best_params.items():
+            logger.info(f"     {param}: {value}")
         
-        print(f"Class weights for {target_label}:")
-        for class_val, weight in sorted(weights.items()):
-            print(f"  {class_val}: {weight:.3f}")
+        best_params['source'] = f'optimized_{hyperparam_file.stem}'
+        return best_params
         
-        return weights
-    except FileNotFoundError:
-        logger.warning(f"⚠️ Class weights file not found: {filepath}")
-        logger.info("Will compute balanced class weights automatically")
-        return None
     except Exception as e:
-        logger.error(f"❌ Error loading class weights: {e}")
-        return None
+        logger.error(f"❌ Failed to load hyperparameters: {str(e)}")
+        logger.warning(f"   Falling back to default parameters...")
+        return get_default_hyperparameters()
 
-def compute_class_weights_if_needed(y, target_label, logger):
-    """Compute balanced class weights if not available from file."""
-    from sklearn.utils.class_weight import compute_class_weight
+def get_default_hyperparameters() -> Dict:
+    """Return default hyperparameters as fallback"""
+    return {
+        'n_estimators': 100,
+        'max_depth': 15,
+        'min_samples_split': 5,
+        'min_samples_leaf': 2,
+        'max_features': 'sqrt',
+        'class_weight': 'balanced',
+        'source': 'default_fallback'
+    }
+
+
+# ================== SCENARIO-AWARE SPLITTING ==================
+def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger) -> Tuple:
+    """
+    FIXED: Issue #4, #12, #37 - Scenario-aware stratified train/val/test split
+    EMERGENCY FIX: Handle scenarios with missing target data
     
-    logger.info(f"🔄 Computing balanced class weights for {target_label}...")
+    Ensures:
+    - Entire scenarios in train OR val OR test (no mixing)
+    - Stratification by dominant class per scenario
+    - All classes present in each split (if possible)
+    - Raises error if scenario_file missing (no silent fallback)
+    - Handles scenarios with no valid target data
+    """
+    logger.info(f"\n{'='*60}")
+    logger.info(f"SCENARIO-AWARE STRATIFIED SPLIT")
+    logger.info(f"{'='*60}")
     
-    classes = np.unique(y)
-    class_weights = compute_class_weight('balanced', classes=classes, y=y)
-    weight_dict = dict(zip(classes, class_weights))
+    # FIXED: Issue #12 - Raise error if scenario_file missing
+    if 'scenario_file' not in df.columns:
+        logger.error("❌ CRITICAL: 'scenario_file' column is MISSING!")
+        logger.error("   This would cause random train/test split (temporal leakage)")
+        logger.error("   Cannot proceed without scenario information")
+        raise ValueError("scenario_file column is required for temporal leak prevention")
     
-    logger.info(f"✅ Computed balanced class weights:")
-    for class_val, weight in sorted(weight_dict.items()):
-        logger.info(f"  Class {class_val}: {weight:.3f}")
+    # Get unique scenarios
+    scenarios = df['scenario_file'].unique()
+    n_scenarios = len(scenarios)
+    logger.info(f"📊 Total scenarios: {n_scenarios}")
+    
+    if n_scenarios < 10:
+        logger.warning(f"⚠️ WARNING: Only {n_scenarios} scenarios (need 10+ for good split)")
+    
+    # EMERGENCY FIX: Compute dominant class per scenario with robust error handling
+    scenario_classes = {}
+    empty_scenarios = []
+    
+    for scenario in scenarios:
+        scenario_data = df[df['scenario_file'] == scenario]
+        
+        # Check if scenario has any valid target data
+        valid_targets = scenario_data[target_label].dropna()
+        
+        if len(valid_targets) == 0:
+            logger.warning(f"⚠️ Scenario '{scenario}' has NO valid {target_label} data - SKIPPING")
+            empty_scenarios.append(scenario)
+            continue
+        
+        # Try mode first
+        mode_result = valid_targets.mode()
+        
+        if len(mode_result) == 0:
+            # No clear mode - use value_counts
+            value_counts = valid_targets.value_counts()
+            if len(value_counts) == 0:
+                logger.warning(f"⚠️ Scenario '{scenario}' has no countable values - SKIPPING")
+                empty_scenarios.append(scenario)
+                continue
+            dominant_class = value_counts.index[0]
+        else:
+            dominant_class = mode_result.iloc[0]
+        
+        scenario_classes[scenario] = dominant_class
+    
+    # Report empty scenarios
+    if empty_scenarios:
+        logger.warning(f"⚠️ Skipped {len(empty_scenarios)} empty scenarios:")
+        for sc in empty_scenarios[:5]:
+            logger.warning(f"   - {sc}")
+        if len(empty_scenarios) > 5:
+            logger.warning(f"   ... and {len(empty_scenarios) - 5} more")
+    
+    # Use only valid scenarios
+    valid_scenarios = list(scenario_classes.keys())
+    n_valid = len(valid_scenarios)
+    
+    logger.info(f"📊 Valid scenarios with data: {n_valid}/{n_scenarios}")
+    
+    if n_valid < 10:
+        logger.error(f"❌ CRITICAL: Only {n_valid} valid scenarios (need 10+)")
+        logger.error(f"   Cannot perform reliable train/test split")
+        logger.error(f"   Please run more simulation scenarios")
+        raise ValueError(f"Insufficient valid scenarios: {n_valid} (need 10+)")
+    
+    # Group scenarios by dominant class
+    class_scenarios = {}
+    for scenario, cls in scenario_classes.items():
+        if cls not in class_scenarios:
+            class_scenarios[cls] = []
+        class_scenarios[cls].append(scenario)
+    
+    logger.info(f"📊 Scenarios grouped by dominant class:")
+    for cls, scens in sorted(class_scenarios.items()):
+        logger.info(f"   Class {cls}: {len(scens)} scenarios")
+    
+    # FIXED: Issue #37 - Stratified split ensuring all classes represented
+    n_test = max(1, int(n_valid * TEST_SIZE))
+    n_val = max(1, int(n_valid * VAL_SIZE))
+    
+    test_scenarios = []
+    val_scenarios = []
+    train_scenarios = []
+    
+    # For each class, split its scenarios proportionally
+    rng = np.random.RandomState(RANDOM_SEED)
+    
+    for cls, scens in class_scenarios.items():
+        if len(scens) == 0:
+            continue
+        
+        # Shuffle scenarios for this class
+        scens_copy = scens.copy()
+        rng.shuffle(scens_copy)
+        
+        # Calculate split sizes for this class
+        n_class_test = max(1, int(len(scens_copy) * TEST_SIZE))
+        n_class_val = max(1, int(len(scens_copy) * VAL_SIZE))
+        
+        # Ensure we don't exceed available scenarios
+        n_class_test = min(n_class_test, len(scens_copy))
+        n_class_val = min(n_class_val, len(scens_copy) - n_class_test)
+        
+        test_scenarios.extend(scens_copy[:n_class_test])
+        val_scenarios.extend(scens_copy[n_class_test:n_class_test + n_class_val])
+        train_scenarios.extend(scens_copy[n_class_test + n_class_val:])
+    
+    logger.info(f"\n📊 Scenario split:")
+    logger.info(f"   Train: {len(train_scenarios)} scenarios")
+    logger.info(f"   Val:   {len(val_scenarios)} scenarios")
+    logger.info(f"   Test:  {len(test_scenarios)} scenarios")
+    
+    # Split data by scenarios (only use valid scenarios)
+    train_df = df[df['scenario_file'].isin(train_scenarios)]
+    val_df = df[df['scenario_file'].isin(val_scenarios)]
+    test_df = df[df['scenario_file'].isin(test_scenarios)]
+    
+    # Remove rows with missing target
+    train_df = train_df[train_df[target_label].notna()]
+    val_df = val_df[val_df[target_label].notna()]
+    test_df = test_df[test_df[target_label].notna()]
+    
+    logger.info(f"\n📊 Sample split (after removing NaN targets):")
+    logger.info(f"   Train: {len(train_df):,} samples ({len(train_df)/len(df)*100:.1f}%)")
+    logger.info(f"   Val:   {len(val_df):,} samples ({len(val_df)/len(df)*100:.1f}%)")
+    logger.info(f"   Test:  {len(test_df):,} samples ({len(test_df)/len(df)*100:.1f}%)")
+    
+    # Verify all splits have samples
+    if len(train_df) == 0:
+        raise ValueError("Training set is empty!")
+    if len(val_df) == 0:
+        raise ValueError("Validation set is empty!")
+    if len(test_df) == 0:
+        raise ValueError("Test set is empty!")
+    
+    # Verify all splits have all classes
+    for split_name, split_df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
+        split_classes = sorted(split_df[target_label].unique())
+        missing_classes = [c for c in range(8) if c not in split_classes]
+        
+        if missing_classes:
+            logger.warning(f"⚠️ {split_name} split missing classes: {missing_classes}")
+        else:
+            logger.info(f"✅ {split_name} split has all 8 classes")
+    
+    # Extract features and labels
+    X_train = train_df[SAFE_FEATURES].fillna(0)
+    y_train = train_df[target_label].astype(int)
+    
+    X_val = val_df[SAFE_FEATURES].fillna(0)
+    y_val = val_df[target_label].astype(int)
+    
+    X_test = test_df[SAFE_FEATURES].fillna(0)
+    y_test = test_df[target_label].astype(int)
+    
+    # FIXED: Issue #35 - Compare feature distributions between train/test
+    logger.info(f"\n📊 Feature distribution comparison (train vs test):")
+    for feature in SAFE_FEATURES[:5]:  # Show first 5 to avoid spam
+        train_mean = X_train[feature].mean()
+        test_mean = X_test[feature].mean()
+        train_std = X_train[feature].std()
+        
+        if train_std > 0:
+            diff_in_stds = abs(train_mean - test_mean) / train_std
+            
+            if diff_in_stds > 0.5:
+                logger.warning(f"⚠️ {feature}: train/test differ by {diff_in_stds:.2f} std devs")
+            else:
+                logger.info(f"✅ {feature}: distributions similar ({diff_in_stds:.2f} std devs)")
+    
+    logger.info(f"   ... and {len(SAFE_FEATURES) - 5} more features")
+    
+    # Store scenario info for later use
+    train_scenarios_list = train_df['scenario_file'].values
+    val_scenarios_list = val_df['scenario_file'].values
+    test_scenarios_list = test_df['scenario_file'].values
+    
+    return (X_train, X_val, X_test, y_train, y_val, y_test, 
+            train_scenarios_list, val_scenarios_list, test_scenarios_list)
+
+
+# ================== FEATURE SCALING ==================
+def scale_features_after_split(X_train, X_val, X_test, logger):
+    """
+    FIXED: Issue #34 - Scale features AFTER splitting (no test set leakage)
+    """
+    logger.info(f"\n🔧 Scaling features (AFTER splitting - Issue #34 fix)...")
+    
+    # Fit scaler ONLY on training data
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    
+    logger.info(f"   Scaler fit on training data only (no test leakage)")
+    logger.info(f"   Feature means: {scaler.mean_[:3].round(3)}... (showing first 3)")
+    logger.info(f"   Feature stds: {scaler.scale_[:3].round(3)}... (showing first 3)")
+    
+    # Transform validation and test using training statistics
+    X_val_scaled = scaler.transform(X_val)
+    X_test_scaled = scaler.transform(X_test)
+    
+    logger.info(f"✅ Features scaled using training statistics only")
+    
+    return X_train_scaled, X_val_scaled, X_test_scaled, scaler
+
+# ================== CLASS WEIGHTS ==================
+def compute_class_weights_from_train(y_train, target_label, logger):
+    """
+    FIXED: Issue #36 - Compute class weights AFTER splitting (only from train set)
+    FIXED: Issue #6 - Cap weights at 50.0
+    """
+    logger.info(f"\n🔢 Computing class weights from TRAIN SET ONLY (Issue #36 fix)...")
+    
+    unique_classes = np.unique(y_train)
+    class_weights = compute_class_weight('balanced', classes=unique_classes, y=y_train)
+    
+    # FIXED: Issue #6 - Cap extreme weights
+    class_weights = np.minimum(class_weights, 50.0)
+    
+    weight_dict = dict(zip(unique_classes, class_weights))
+    
+    logger.info(f"   Class weights (capped at 50.0):")
+    class_counts = Counter(y_train)
+    for class_val in sorted(unique_classes):
+        count = class_counts[class_val]
+        weight = weight_dict[class_val]
+        pct = (count / len(y_train)) * 100
+        logger.info(f"     Class {class_val}: {count:,} samples ({pct:.1f}%) -> weight: {weight:.2f}")
     
     return weight_dict
 
-def debug_class_loss(df_before, df_after, label, step_name, logger, expected_classes=8):
-    """Debug function to track exactly what happens to each class during processing."""
-    before_dist = df_before[label].value_counts().sort_index()
-    after_dist = df_after[label].value_counts().sort_index()
+# ================== TEMPORAL SAMPLE WEIGHTS ==================
+def compute_temporal_sample_weights(y_train, train_scenarios, logger):
+    """
+    FIXED: Issue #40 - Weight recent packets higher than old packets
     
-    logger.info(f"🔍 DEBUG: Class changes during {step_name}:")
-    for class_val in range(expected_classes):
-        before_count = before_dist.get(class_val, 0)
-        after_count = after_dist.get(class_val, 0)
-        change = after_count - before_count
+    Within each scenario, later packets get higher weight (more recent = more relevant)
+    """
+    logger.info(f"\n⏱️ Computing temporal sample weights (Issue #40)...")
+    
+    sample_weights = np.ones(len(y_train))
+    
+    unique_scenarios = np.unique(train_scenarios)
+    
+    for scenario in unique_scenarios:
+        scenario_mask = train_scenarios == scenario
+        scenario_indices = np.where(scenario_mask)[0]
+        n_samples = len(scenario_indices)
         
-        if change < 0:
-            logger.error(f"  ❌ Class {class_val}: {before_count} → {after_count} (LOST {abs(change)} samples!)")
-        elif change == 0:
-            logger.info(f"  ✅ Class {class_val}: {before_count} → {after_count} (unchanged)")
-        else:
-            logger.info(f"  ➕ Class {class_val}: {before_count} → {after_count} (gained {change})")
+        if n_samples > 1:
+            # Linear weight: first sample = 0.5, last sample = 1.5
+            # This gives recent packets 3x weight of old packets
+            weights = np.linspace(0.5, 1.5, n_samples)
+            sample_weights[scenario_indices] = weights
+    
+    logger.info(f"   Sample weights range: [{sample_weights.min():.2f}, {sample_weights.max():.2f}]")
+    logger.info(f"   Recent packets weighted up to 3x higher than old packets")
+    
+    return sample_weights
 
-def bulletproof_load_dataset(filepath, feature_cols, label, logger, context_label):
+# ================== MODEL TRAINING ==================
+def train_and_evaluate_model(X_train_scaled, y_train, X_val_scaled, y_val, 
+                              X_test_scaled, y_test, hyperparams, class_weights,
+                              sample_weights, target_label, logger):
     """
-    BULLETPROOF dataset loading that GUARANTEES all classes survive.
-    Now works with any target label (rateIdx, oracle labels, etc.)
+    Train and evaluate Random Forest model with all fixes applied
     """
-    logger.info(f"📂 Loading dataset with BULLETPROOF class preservation for target '{label}'...")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"TRAINING MODEL: {target_label}")
+    logger.info(f"{'='*60}")
     
-    # STEP 1: Load complete dataset
-    if ENABLE_ROW_LIMITING:
-        logger.info(f"🔧 Row limiting ENABLED - will process in chunks of {CHUNKSIZE:,}")
-        chunk_list = []
-        total_rows_seen = 0
-        
-        for chunk_num, chunk in enumerate(pd.read_csv(filepath, chunksize=CHUNKSIZE, low_memory=False)):
-            total_rows_seen += len(chunk)
-            chunk_list.append(chunk)
-            logger.info(f"📥 Loaded chunk {chunk_num + 1}: {len(chunk):,} rows (total: {total_rows_seen:,})")
-            
-            if len(pd.concat(chunk_list)) >= MAX_ROWS:
-                logger.info(f"🛑 Reached target of {MAX_ROWS:,} rows, stopping chunk loading")
-                break
-        
-        df = pd.concat(chunk_list, ignore_index=True)
-        if len(df) > MAX_ROWS:
-            logger.info(f"📉 Trimming from {len(df):,} to {MAX_ROWS:,} rows")
-            df = df.head(MAX_ROWS)
+    # Create model with optimized hyperparameters
+    model = RandomForestClassifier(
+        n_estimators=hyperparams['n_estimators'],
+        max_depth=hyperparams['max_depth'],
+        min_samples_split=hyperparams['min_samples_split'],
+        min_samples_leaf=hyperparams['min_samples_leaf'],
+        max_features=hyperparams['max_features'],
+        class_weight=class_weights,  # Use computed weights
+        random_state=RANDOM_SEED,
+        n_jobs=-1,  # CPU parallelization
+        verbose=0
+    )
+    
+    logger.info(f"📊 Model configuration:")
+    logger.info(f"   n_estimators: {hyperparams['n_estimators']}")
+    logger.info(f"   max_depth: {hyperparams['max_depth']}")
+    logger.info(f"   min_samples_split: {hyperparams['min_samples_split']}")
+    logger.info(f"   min_samples_leaf: {hyperparams['min_samples_leaf']}")
+    logger.info(f"   max_features: {hyperparams['max_features']}")
+    logger.info(f"   class_weight: custom (computed from train set)")
+    logger.info(f"   sample_weight: temporal (recent packets weighted higher)")
+    logger.info(f"   Hyperparameters source: {hyperparams['source']}")
+    
+    # Train model
+    logger.info(f"\n🚀 Training model on {len(X_train_scaled):,} samples...")
+    start_time = time.time()
+    
+    # FIXED: Issue #40 - Use temporal sample weights
+    model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+    
+    training_time = time.time() - start_time
+    logger.info(f"✅ Training completed in {training_time:.2f} seconds")
+    
+    # Validation evaluation
+    logger.info(f"\n📊 Evaluating on validation set...")
+    y_val_pred = model.predict(X_val_scaled)
+    val_acc = accuracy_score(y_val, y_val_pred)
+    
+    logger.info(f"🎯 Validation Accuracy: {val_acc:.4f} ({val_acc*100:.1f}%)")
+    
+    # Test evaluation
+    logger.info(f"\n🧪 Evaluating on test set...")
+    y_test_pred = model.predict(X_test_scaled)
+    test_acc = accuracy_score(y_test, y_test_pred)
+    
+    logger.info(f"🎯 Test Accuracy: {test_acc:.4f} ({test_acc*100:.1f}%)")
+    
+    # FIXED: Issue #17 - Realistic performance assessment
+    if test_acc >= PERFORMANCE_THRESHOLDS['excellent']:
+        logger.info(f"🏆 EXCELLENT performance: {test_acc*100:.1f}% (no data leakage)")
+    elif test_acc >= PERFORMANCE_THRESHOLDS['good']:
+        logger.info(f"✅ GOOD performance: {test_acc*100:.1f}%")
+    elif test_acc >= PERFORMANCE_THRESHOLDS['acceptable']:
+        logger.info(f"📊 ACCEPTABLE performance: {test_acc*100:.1f}%")
     else:
-        logger.info(f"📥 Loading FULL dataset (row limiting DISABLED)")
-        df = pd.read_csv(filepath, low_memory=False)
+        logger.warning(f"⚠️ NEEDS IMPROVEMENT: {test_acc*100:.1f}%")
     
-    logger.info(f"📊 Initial dataset: {len(df):,} rows, {len(df.columns)} columns")
+    # Cross-validation on combined data (for comparison)
+    logger.info(f"\n🔄 Cross-validation check (5-fold)...")
+    X_all = np.concatenate([X_train_scaled, X_val_scaled, X_test_scaled])
+    y_all = np.concatenate([y_train, y_val, y_test])
     
-    # STEP 1.5: Discover available labels
-    available_labels = discover_available_labels(df, logger)
-    if available_labels is None:
-        return None, None
+    cv_scores = cross_val_score(model, X_all, y_all, cv=5, scoring='accuracy')
+    cv_mean = cv_scores.mean()
+    cv_std = cv_scores.std()
     
-    # STEP 2: Show ORIGINAL class distribution for selected target
-    if label in df.columns:
-        original_dist = df[label].value_counts().sort_index()
-        logger.info(f"🎯 ORIGINAL class distribution for '{label}':")
-        for class_val, count in original_dist.items():
-            pct = (count / len(df)) * 100
-            logger.info(f"  Class {class_val}: {count:,} samples ({pct:.1f}%)")
-        
-        # Determine expected classes dynamically
-        actual_classes = set(original_dist.index)
-        expected_classes = max(actual_classes) + 1 if actual_classes else 8
-        missing_classes = set(range(expected_classes)) - actual_classes
-        
-        if missing_classes:
-            logger.warning(f"⚠️ MISSING CLASSES IN ORIGINAL DATA: {missing_classes}")
-            logger.info(f"📊 Will proceed with available {len(actual_classes)} classes")
-        else:
-            logger.info(f"✅ All {expected_classes} rate classes present in original data")
+    logger.info(f"📊 5-Fold CV: {cv_mean:.4f} ± {cv_std:.4f}")
+    logger.info(f"   Fold scores: {[f'{s:.3f}' for s in cv_scores]}")
     
-    # STEP 3: Validate features exist
-    available_features = [col for col in feature_cols if col in df.columns]
-    missing_features = [col for col in feature_cols if col not in df.columns]
+    # Confusion matrices
+    val_cm = confusion_matrix(y_val, y_val_pred)
+    test_cm = confusion_matrix(y_test, y_test_pred)
     
-    if missing_features:
-        logger.warning(f"⚠️ Missing features (will exclude): {missing_features}")
-    logger.info(f"✅ Using {len(available_features)} available features out of {len(feature_cols)} requested")
+    logger.info(f"\n📈 Validation Confusion Matrix:")
+    logger.info(f"\n{val_cm}")
     
-    # Log removed leaky features
-    removed_leaky_features = [
-        "phyRate", "optimalRateDistance", "recentThroughputTrend", 
-        "conservativeFactor", "aggressiveFactor", "recommendedSafeRate"
-    ]
-    logger.info(f"🚨 LEAKY FEATURES REMOVED: {removed_leaky_features}")
-    logger.info(f"🛡️ SAFE FEATURES USED: {available_features}")
+    logger.info(f"\n📈 Test Confusion Matrix:")
+    logger.info(f"\n{test_cm}")
     
-    # STEP 4: BULLETPROOF cleaning - only remove completely invalid rows
-    logger.info("🧹 Starting BULLETPROOF cleaning (minimal intervention)...")
-    df_before_cleaning = df.copy()
+    # Detailed classification report
+    logger.info(f"\n📊 Detailed Classification Report (Test Set):")
+    test_report = classification_report(y_test, y_test_pred, zero_division=0)
+    logger.info(f"\n{test_report}")
     
-    initial_rows = len(df)
+    # FIXED: Issue #22 - Feature importance analysis with leakage detection
+    logger.info(f"\n🔍 Feature Importance Analysis (Issue #22):")
+    feature_importances = model.feature_importances_
+    importance_dict = dict(zip(SAFE_FEATURES, feature_importances))
+    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
     
-    # Remove rows missing the target label (absolute requirement)
-    df_step1 = df.dropna(subset=[label])
-    logger.info(f"📊 After removing rows missing target label: {len(df_step1):,} rows ({len(df_step1)/initial_rows*100:.1f}% retained)")
-    debug_class_loss(df_before_cleaning, df_step1, label, "target label cleaning", logger, expected_classes)
+    logger.info(f"   Top 10 most important features:")
+    for rank, (feat, importance) in enumerate(sorted_features[:10], 1):
+        logger.info(f"     #{rank:2d}. {feat:25s}: {importance:.4f}")
     
-    # Remove rows missing ALL features (completely useless)
-    df_step2 = df_step1.dropna(subset=available_features, how='all')
-    logger.info(f"📊 After removing rows missing ALL features: {len(df_step2):,} rows ({len(df_step2)/initial_rows*100:.1f}% retained)")
-    debug_class_loss(df_step1, df_step2, label, "all-features cleaning", logger, expected_classes)
+    # Check if suspicious features rank too high
+    suspicious_high_importance = []
+    for rank, (feat, importance) in enumerate(sorted_features[:3], 1):
+        if 'consecSuccess' in feat or 'consecFailure' in feat or 'retry' in feat.lower():
+            suspicious_high_importance.append(feat)
+            logger.warning(f"⚠️ SUSPICIOUS: Temporal feature '{feat}' ranks #{rank}!")
     
-    # Final result
-    df_clean = df_step2
-    logger.info(f"📊 FINAL after bulletproof cleaning: {len(df_clean):,} rows ({len(df_clean)/initial_rows*100:.1f}% retained)")
+    if suspicious_high_importance:
+        logger.error(f"🚨 POTENTIAL LEAKAGE: Top features include temporal: {suspicious_high_importance}")
+    else:
+        logger.info(f"✅ No suspicious features in top 3 (leakage check passed)")
     
-    # STEP 5: VERIFY classes survived cleaning
-    if label in df_clean.columns:
-        final_dist = df_clean[label].value_counts().sort_index()
-        logger.info(f"🎯 FINAL class distribution for '{label}' after cleaning:")
-        for class_val, count in final_dist.items():
-            pct = (count / len(df_clean)) * 100
-            logger.info(f"  Class {class_val}: {count:,} samples ({pct:.1f}%)")
-        
-        # Check if we have enough samples for stratification
-        min_samples = final_dist.min()
-        if min_samples < 3:
-            logger.error(f"❌ Smallest class has only {min_samples} samples - need at least 3 for stratified splitting")
-            return None, None
-        else:
-            logger.info(f"✅ BULLETPROOF SUCCESS: All classes have sufficient samples for training!")
+    # Prepare results dictionary
+    results = {
+        'target_label': target_label,
+        'hyperparameters': hyperparams,
+        'training_time_seconds': training_time,
+        'validation_accuracy': float(val_acc),
+        'test_accuracy': float(test_acc),
+        'cv_mean': float(cv_mean),
+        'cv_std': float(cv_std),
+        'confusion_matrix_test': test_cm.tolist(),
+        'feature_importances': {feat: float(imp) for feat, imp in importance_dict.items()},
+        'top_5_features': [(feat, float(imp)) for feat, imp in sorted_features[:5]],
+        'timestamp': datetime.now().isoformat(),
+        'random_seed': RANDOM_SEED
+    }
     
-    return df_clean, available_features
+    return model, results
 
-def perform_train_split_fixed(X, y, logger, expected_classes=8):
-    """FIXED: Proper train/validation/test split with comprehensive verification."""
-    logger.info("🔄 Performing stratified train/validation/test split...")
-    try:
-        # Check class distribution before splitting
-        class_counts = pd.Series(y).value_counts().sort_index()
-        logger.info(f"📊 Class counts before splitting:")
-        for class_val, count in class_counts.items():
-            logger.info(f"  Class {class_val}: {count} samples")
+# ================== PER-SCENARIO EVALUATION ==================
+def evaluate_per_scenario(model, scaler, df, test_scenarios, target_label, logger):
+    """
+    FIXED: Issue #23 - Per-scenario performance metrics (FAST VECTORIZED VERSION)
+    """
+    logger.info(f"\n{'='*60}")
+    logger.info(f"PER-SCENARIO EVALUATION (Issue #23)")
+    logger.info(f"{'='*60}")
+    
+    # FIXED: Pre-filter test data ONCE (not in loop)
+    test_df = df[df['scenario_file'].isin(test_scenarios)].copy()
+    
+    if len(test_df) == 0:
+        logger.warning("⚠️ No test data found!")
+        return {}
+    
+    # Remove NaN targets
+    test_df = test_df[test_df[target_label].notna()]
+    
+    # FIXED: Extract and scale features ONCE
+    X_test_all = test_df[SAFE_FEATURES].fillna(0)
+    y_test_all = test_df[target_label].astype(int)
+    X_test_scaled = scaler.transform(X_test_all)
+    
+    # FIXED: Predict for ALL samples at once (vectorized)
+    y_pred_all = model.predict(X_test_scaled)
+    
+    # Add predictions to dataframe
+    test_df['pred'] = y_pred_all
+    test_df['correct'] = (test_df['pred'] == y_test_all).astype(int)
+    
+    # FIXED: Compute per-scenario accuracy using groupby (FAST!)
+    scenario_stats = test_df.groupby('scenario_file').agg({
+        'correct': ['sum', 'count']
+    })
+    
+    scenario_results = {}
+    for scenario in test_scenarios:
+        if scenario not in scenario_stats.index:
+            continue
         
-        # Verify we have enough samples of each class for stratified split
-        min_class_count = class_counts.min()
-        actual_classes = len(class_counts)
-        logger.info(f"📊 Found {actual_classes} classes, smallest has {min_class_count} samples")
+        correct = scenario_stats.loc[scenario, ('correct', 'sum')]
+        total = scenario_stats.loc[scenario, ('correct', 'count')]
+        accuracy = correct / total if total > 0 else 0.0
         
-        if min_class_count < 3:
-            logger.error(f"❌ Smallest class has only {min_class_count} samples - need at least 3 for stratification")
-            raise ValueError(f"Not enough samples in smallest class ({min_class_count}) for stratified split")
-        
-        # First split: 80% temp, 20% test
-        X_temp, X_test, y_temp, y_test = train_test_split(
-            X, y, test_size=0.2, stratify=y, random_state=42)
-        
-        # Second split: 75% train, 25% val (of the temp 80%)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_temp, y_temp, test_size=0.25, stratify=y_temp, random_state=42)
-        
-        logger.info(f"✅ Data split completed successfully")
-        logger.info(f"📈 Training set: {X_train.shape[0]} samples ({X_train.shape[0]/len(X)*100:.1f}%)")
-        logger.info(f"📊 Validation set: {X_val.shape[0]} samples ({X_val.shape[0]/len(X)*100:.1f}%)")
-        logger.info(f"🧪 Test set: {X_test.shape[0]} samples ({X_test.shape[0]/len(X)*100:.1f}%)")
-        
-        # Verify all splits have adequate class representation
-        for split_name, y_split in [("Train", y_train), ("Val", y_val), ("Test", y_test)]:
-            split_classes = sorted(pd.Series(y_split).unique())
-            logger.info(f"  {split_name} classes: {split_classes}")
-        
-        return X_train, X_val, X_test, y_train, y_val, y_test
-    except Exception as e:
-        logger.error(f"❌ Data splitting failed: {str(e)}")
-        raise
+        scenario_results[scenario] = {
+            'samples': int(total),
+            'accuracy': float(accuracy)
+        }
+    
+    if not scenario_results:
+        logger.warning("⚠️ No scenario results computed!")
+        return {}
+    
+    # Sort by accuracy (worst first)
+    sorted_scenarios = sorted(scenario_results.items(), key=lambda x: x[1]['accuracy'])
+    
+    logger.info(f"\n📊 Worst 5 scenarios:")
+    for scenario, metrics in sorted_scenarios[:5]:
+        logger.info(f"   {scenario}: {metrics['accuracy']:.3f} ({metrics['samples']} samples)")
+    
+    logger.info(f"\n📊 Best 5 scenarios:")
+    for scenario, metrics in sorted_scenarios[-5:]:
+        logger.info(f"   {scenario}: {metrics['accuracy']:.3f} ({metrics['samples']} samples)")
+    
+    accuracies = [m['accuracy'] for m in scenario_results.values()]
+    avg_accuracy = np.mean(accuracies)
+    std_accuracy = np.std(accuracies)
+    
+    logger.info(f"\n📊 Average per-scenario accuracy: {avg_accuracy:.3f} ± {std_accuracy:.3f}")
+    logger.info(f"✅ Evaluated {len(scenario_results)} scenarios in {len(test_df):,} samples")
+    
+    return scenario_results
 
-def scale_features(X_train, X_val, X_test, logger):
-    """Scale features using StandardScaler."""
-    logger.info("🔧 Scaling features...")
-    try:
-        scaler = StandardScaler()
-        with tqdm(total=3, desc="Scaling datasets", unit="dataset") as pbar:
-            X_train_scaled = scaler.fit_transform(X_train)
-            pbar.update(1); pbar.set_postfix({"current": "train"})
-            X_val_scaled = scaler.transform(X_val)
-            pbar.update(1); pbar.set_postfix({"current": "validation"})
-            X_test_scaled = scaler.transform(X_test)
-            pbar.update(1); pbar.set_postfix({"current": "test"})
+# ================== SAVE MODEL AND RESULTS ==================
+def save_model_and_results(model, scaler, results, scenario_results, target_label, logger):
+    """Save trained model, scaler, and results"""
+    logger.info(f"\n💾 Saving model and results...")
+    
+    # Save model
+    model_file = OUTPUT_DIR / f"step4_rf_{target_label}_FIXED.joblib"
+    joblib.dump(model, model_file)
+    logger.info(f"   Model saved: {model_file}")
+    
+    # Save scaler
+    scaler_file = OUTPUT_DIR / f"step4_scaler_{target_label}_FIXED.joblib"
+    joblib.dump(scaler, scaler_file)
+    logger.info(f"   Scaler saved: {scaler_file}")
+    
+    # Save results as JSON
+    results_file = OUTPUT_DIR / f"step4_results_{target_label}.json"
+    full_results = {
+        'training_results': results,
+        'per_scenario_results': scenario_results
+    }
+    
+    with open(results_file, 'w') as f:
+        json.dump(full_results, f, indent=2)
+    logger.info(f"   Results saved: {results_file}")
+    
+    # Save human-readable summary
+    summary_file = OUTPUT_DIR / f"step4_summary_{target_label}.txt"
+    with open(summary_file, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write(f"MODEL TRAINING SUMMARY - {target_label}\n")
+        f.write("="*80 + "\n")
+        f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Author: {USER}\n")
+        f.write(f"Random Seed: {RANDOM_SEED}\n\n")
         
-        joblib.dump(scaler, SCALER_FILE)
-        logger.info(f"✅ Features scaled and scaler saved to {SCALER_FILE}")
-        return X_train_scaled, X_val_scaled, X_test_scaled, scaler
-    except Exception as e:
-        logger.error(f"❌ Feature scaling failed: {str(e)}")
-        raise
+        f.write("PERFORMANCE:\n")
+        f.write(f"  Validation Accuracy: {results['validation_accuracy']:.4f} ({results['validation_accuracy']*100:.1f}%)\n")
+        f.write(f"  Test Accuracy: {results['test_accuracy']:.4f} ({results['test_accuracy']*100:.1f}%)\n")
+        f.write(f"  Cross-Validation: {results['cv_mean']:.4f} ± {results['cv_std']:.4f}\n")
+        f.write(f"  Training Time: {results['training_time_seconds']:.2f}s\n\n")
+        
+        f.write("HYPERPARAMETERS:\n")
+        for param, value in results['hyperparameters'].items():
+            f.write(f"  {param}: {value}\n")
+        f.write("\n")
+        
+        f.write("TOP 5 FEATURES:\n")
+        for rank, (feat, imp) in enumerate(results['top_5_features'], 1):
+            f.write(f"  #{rank}. {feat}: {imp:.4f}\n")
+        f.write("\n")
+        
+        f.write("FILES GENERATED:\n")
+        f.write(f"  - {model_file.name}\n")
+        f.write(f"  - {scaler_file.name}\n")
+        f.write(f"  - {results_file.name}\n")
+        f.write(f"  - {summary_file.name}\n")
+    
+    logger.info(f"   Summary saved: {summary_file}")
+    logger.info(f"✅ All outputs saved successfully")
 
-def train_and_eval(model, X_train, y_train, X_val, y_val, X_test, y_test, label_name, logger, available_features, class_weights=None):
-    """Train and evaluate the Random Forest model with class weights."""
-    model_name = f"RF - {label_name}"
-    if class_weights:
-        model_name += " (WITH CLASS WEIGHTS)"
-    logger.info(f"\n{'='*20} TRAINING {model_name} {'='*20}")
-    try:
-        # Set class weights if provided
-        if class_weights:
-            model.set_params(class_weight=class_weights)
-            logger.info(f"🔢 Using class weights for {len(class_weights)} classes")
-            # Show which classes get the most attention
-            sorted_weights = sorted(class_weights.items(), key=lambda x: x[1], reverse=True)
-            logger.info("🔝 Classes by weight (highest attention first):")
-            for class_val, weight in sorted_weights:
-                logger.info(f"  Class {class_val}: {weight:.1f}x attention")
-        else:
-            logger.info("⚖️ Training with sklearn's balanced class weights")
-            model.set_params(class_weight='balanced')
+# ================== CHECKPOINT CHECKING ==================
+def check_if_already_trained(target_label: str, logger) -> bool:
+    """
+    FIXED: Issue #25 - Check if model already trained (checkpoint recovery)
+    """
+    model_file = OUTPUT_DIR / f"step4_rf_{target_label}_FIXED.joblib"
+    scaler_file = OUTPUT_DIR / f"step4_scaler_{target_label}_FIXED.joblib"
+    
+    if model_file.exists() and scaler_file.exists():
+        logger.info(f"✅ Found existing trained model for {target_label}")
+        logger.info(f"   Model: {model_file}")
+        logger.info(f"   Scaler: {scaler_file}")
         
-        start_time = time.time()
-        logger.info(f"🚀 Starting training for {model_name}...")
-        logger.info(f"📊 Training on {len(X_train):,} samples with {X_train.shape[1]} features")
-        
-        # Train with progress bar
-        with tqdm(total=100, desc=f"Training RF", unit="%") as pbar:
-            model.fit(X_train, y_train)
-            pbar.update(100)
-        training_time = time.time() - start_time
-        logger.info(f"✅ Training completed in {training_time:.2f} seconds")
-        
-        # Evaluation on validation set
-        logger.info(f"📊 Evaluating on validation set...")
-        y_val_pred = model.predict(X_val)
-        val_acc = accuracy_score(y_val, y_val_pred)
-        logger.info(f"🎯 Validation Accuracy: {val_acc:.4f} ({val_acc*100:.1f}%)")
-        
-        # Evaluation on test set
-        logger.info(f"🧪 Evaluating on test set...")
-        y_test_pred = model.predict(X_test)
-        test_acc = accuracy_score(y_test, y_test_pred)
-        logger.info(f"🎯 Test Accuracy: {test_acc:.4f} ({test_acc*100:.1f}%)")
-        
-        # Cross-validation reality check
-        logger.info("🔄 Cross-validation reality check...")
-        X_all = np.concatenate([X_train, X_val, X_test])
-        y_all = np.concatenate([y_train, y_val, y_test])
-        
-        cv_scores = cross_val_score(model, X_all, y_all, cv=5, scoring='accuracy')
-        cv_mean = cv_scores.mean()
-        cv_std = cv_scores.std()
-        
-        logger.info(f"📊 5-Fold CV: {cv_mean:.4f} ± {cv_std:.4f}")
-        logger.info(f"📊 CV Scores: {[f'{score:.3f}' for score in cv_scores]}")
-        
-        # Reality assessment
-        if cv_mean > 0.98:
-            logger.warning(f"⚠️ CV accuracy {cv_mean:.1%} very high - check for issues")
-        elif cv_mean > 0.85:
-            logger.info(f"✅ Excellent CV performance: {cv_mean:.1%}")
-        elif cv_mean > 0.70:
-            logger.info(f"✅ Good CV performance: {cv_mean:.1%}")
-        else:
-            logger.info(f"📊 CV performance: {cv_mean:.1%} (room for improvement)")
-        
-        # Detailed per-class analysis
-        unique_classes = sorted(pd.Series(y_val).unique())
-        val_report = classification_report(y_val, y_val_pred, output_dict=True, zero_division=0)
-        logger.info("📊 Per-class validation performance:")
-        for class_id in unique_classes:
-            if str(class_id) in val_report:
-                metrics = val_report[str(class_id)]
-                support = int(metrics['support'])
-                logger.info(f"  Class {class_id}: Precision={metrics['precision']:.3f}, "
-                           f"Recall={metrics['recall']:.3f}, F1={metrics['f1-score']:.3f}, Support={support}")
-        
-        # Confusion matrices
-        val_cm = confusion_matrix(y_val, y_val_pred)
-        test_cm = confusion_matrix(y_test, y_test_pred)
-        logger.info(f"📈 Validation Confusion Matrix:\n{val_cm}")
-        logger.info(f"📈 Test Confusion Matrix:\n{test_cm}")
-        
-        # Save model
-        joblib.dump(model, MODEL_FILE)
-        logger.info(f"💾 Model saved to {MODEL_FILE}")
-        
-        # Feature importance analysis
-        if hasattr(model, 'feature_importances_'):
-            importance_dict = dict(zip(available_features, model.feature_importances_))
-            top_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)[:10]
-            logger.info(f"🔝 Top 10 most important features:")
-            for rank, (feat, importance) in enumerate(top_features, 1):
-                logger.info(f"  #{rank:2d}. {feat}: {importance:.4f}")
-        
-        logger.info(f"{'='*60}")
-        return val_acc, test_acc, training_time, cv_mean
-    except Exception as e:
-        logger.error(f"❌ Training/evaluation failed for {model_name}: {str(e)}")
-        raise
+        response = input(f"\n   Skip training for {target_label}? (y/n): ").strip().lower()
+        if response == 'y':
+            logger.info(f"   Skipping {target_label} (using checkpoint)")
+            return True
+    
+    return False
 
-def save_comprehensive_documentation(results, feature_cols, total_time, logger, label_name, used_class_weights=False):
-    """Save comprehensive documentation of the training process and results."""
-    logger.info("📝 Saving comprehensive documentation...")
-    try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(DOC_FILE, "w", encoding="utf-8") as f:
-            f.write("="*60 + "\n")
-            f.write(f"CONFIGURABLE ML MODEL TRAINING RESULTS - TARGET: {label_name}\n")
-            f.write("="*60 + "\n")
-            f.write(f"Timestamp: {timestamp}\n")
-            f.write(f"User: {USER}\n")
-            f.write(f"Target Label: {label_name}\n")
-            f.write(f"Total Pipeline Runtime: {total_time:.2f} seconds ({total_time/60:.2f} minutes)\n\n")
-            
-            f.write("DATASET CONFIGURATION:\n")
-            f.write(f"- Source File: {CSV_FILE}\n")
-            f.write(f"- Target Label: {label_name}\n")
-            if label_name in TARGET_LABEL_INFO:
-                f.write(f"- Label Description: {TARGET_LABEL_INFO[label_name]['description']}\n")
-            f.write(f"- Row Limiting: {'ENABLED' if ENABLE_ROW_LIMITING else 'DISABLED'}\n")
-            f.write(f"- Used class weights for imbalanced data: {used_class_weights}\n\n")
-            
-            f.write("MODELS TRAINED:\n")
-            val_acc, test_acc, train_time, cv_mean = results[0]
-            f.write(f"1. RandomForestClassifier ({label_name})\n")
-            f.write(f"   Validation Accuracy: {val_acc:.4f} ({val_acc*100:.1f}%)\n")
-            f.write(f"   Test Accuracy: {test_acc:.4f} ({test_acc*100:.1f}%)\n")
-            f.write(f"   Cross-Validation: {cv_mean:.4f} ({cv_mean*100:.1f}%)\n")
-            f.write(f"   Training Time: {train_time:.2f}s\n\n")
-            
-            f.write("CONFIGURATION:\n")
-            f.write(f"- Algorithm: Random Forest Classifier\n")
-            f.write(f"- Features ({len(feature_cols)}): {', '.join(feature_cols)}\n")
-            f.write("- Split: 60/20/20 stratified (train/val/test)\n")
-            f.write("- Random State: 42\n\n")
-            
-            f.write("FILES GENERATED:\n")
-            f.write(f"- {SCALER_FILE} (StandardScaler)\n")
-            f.write(f"- {MODEL_FILE} (Random Forest for {label_name})\n")
-            f.write(f"- {DOC_FILE} (this file)\n")
-        
-        logger.info(f"✅ Documentation saved to {DOC_FILE}")
-    except Exception as e:
-        logger.error(f"❌ Documentation saving failed: {str(e)}")
-        raise
-
+# ================== MAIN PIPELINE ==================
 def main():
-    """Main training pipeline with configurable target labels."""
-    logger = setup_logging()
+    """Main training pipeline - trains all oracle models"""
+    print("="*80)
+    print("ML MODEL TRAINING PIPELINE - FIXED VERSION")
+    print("="*80)
+    print(f"Author: {USER}")
+    print(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Device: CPU")
+    print("="*80)
+    
+    # Load data once
+    print(f"\n📂 Loading data from: {CSV_FILE}")
+    
+    if not CSV_FILE.exists():
+        print(f"❌ Input file not found: {CSV_FILE}")
+        return False
+    
+    df = pd.read_csv(CSV_FILE)
+    print(f"✅ Loaded {len(df):,} rows, {len(df.columns)} columns")
+    
+    # Track results for all models
+    all_results = {}
     pipeline_start = time.time()
     
-    try:
-        logger.info(f"🎯 Training model for target label: {TARGET_LABEL}")
+    # Train each target
+    for target_idx, target_label in enumerate(TARGET_LABELS, 1):
+        print(f"\n{'#'*80}")
+        print(f"# MODEL {target_idx}/{len(TARGET_LABELS)}: {target_label}")
+        print(f"{'#'*80}")
         
-        # STEP 0: LOAD CLASS WEIGHTS
-        class_weights = load_class_weights(CLASS_WEIGHTS_FILE, TARGET_LABEL, logger)
+        # Setup logging for this target
+        logger = setup_logging(target_label)
         
-        # STEP 1: BULLETPROOF DATASET LOADING
-        df, available_features = bulletproof_load_dataset(
-            CSV_FILE, FEATURE_COLS, TARGET_LABEL, logger, CONTEXT_LABEL
-        )
-        
-        if df is None:
-            logger.error("❌ Dataset loading failed")
-            return False
-        
-        # Prepare features and target
-        X = df[available_features]
-        y = df[TARGET_LABEL].astype(int)
-        
-        # Compute class weights if not loaded from file
-        if class_weights is None:
-            class_weights = compute_class_weights_if_needed(y, TARGET_LABEL, logger)
-        
-        logger.info(f"🔢 Final training data: X={X.shape}, y={y.shape}")
-        logger.info(f"💾 Estimated memory usage: ~{X.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-        
-        # STEP 2: STRATIFIED DATA SPLITTING
-        X_train, X_val, X_test, y_train, y_val, y_test = perform_train_split_fixed(X, y, logger)
-        
-        # STEP 3: FEATURE SCALING
-        X_train_scaled, X_val_scaled, X_test_scaled, scaler = scale_features(X_train, X_val, X_test, logger)
-        
-        # STEP 4: MODEL TRAINING WITH CLASS WEIGHTS
-        results = []
-        rf_model = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=15,
-            random_state=42,
-            n_jobs=-1,
-            verbose=0
-        )
-        
-        model_results = train_and_eval(
-            rf_model, X_train_scaled, y_train, X_val_scaled, y_val, 
-            X_test_scaled, y_test, TARGET_LABEL, logger, available_features, 
-            class_weights=class_weights
-        )
-        results.append(model_results)
-        
-        # STEP 5: SAVE COMPREHENSIVE DOCUMENTATION
-        total_time = time.time() - pipeline_start
-        save_comprehensive_documentation(
-            results, available_features, total_time, logger, TARGET_LABEL, 
-            used_class_weights=(class_weights is not None)
-        )
-        
-        # SUCCESS!
-        val_acc, test_acc, train_time, cv_mean = model_results
-        logger.info("🎉 CONFIGURABLE TRAINING COMPLETED SUCCESSFULLY!")
-        logger.info(f"🏆 Final Results for {TARGET_LABEL}: Val={val_acc:.1%}, Test={test_acc:.1%}, CV={cv_mean:.1%}")
-        
-        # Performance assessment
-        if cv_mean > 0.90:
-            logger.info("✅ EXCELLENT PERFORMANCE: >90% accuracy!")
-        elif cv_mean > 0.75:
-            logger.info("✅ GOOD PERFORMANCE: >75% accuracy!")
-        else:
-            logger.info("📊 MODERATE PERFORMANCE: Room for improvement")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Pipeline failed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-    finally:
-        if 'pipeline_start' in locals():
-            final_time = time.time() - pipeline_start
-            logger.info(f"\n⏱️  Total execution time: {final_time:.2f} seconds")
+        try:
+            # FIXED: Issue #25 - Check checkpoint
+            if check_if_already_trained(target_label, logger):
+                continue
+            
+            # Load optimized hyperparameters
+            hyperparams = load_optimized_hyperparameters(target_label, logger)
+            
+            # Scenario-aware split
+            split_result = scenario_aware_stratified_split(df, target_label, logger)
+            (X_train, X_val, X_test, y_train, y_val, y_test,
+             train_scenarios, val_scenarios, test_scenarios) = split_result
+            
+            # Scale features AFTER splitting
+            X_train_scaled, X_val_scaled, X_test_scaled, scaler = scale_features_after_split(
+                X_train, X_val, X_test, logger
+            )
+            
+            # Compute class weights from train set only
+            class_weights = compute_class_weights_from_train(y_train, target_label, logger)
+            
+            # Compute temporal sample weights
+            sample_weights = compute_temporal_sample_weights(y_train, train_scenarios, logger)
+            
+            # Train and evaluate
+            model, results = train_and_evaluate_model(
+                X_train_scaled, y_train, X_val_scaled, y_val,
+                X_test_scaled, y_test, hyperparams, class_weights,
+                sample_weights, target_label, logger
+            )
+            
+            # Per-scenario evaluation
+            scenario_results = evaluate_per_scenario(
+                model, scaler, df, test_scenarios, target_label, logger
+            )
+            
+            # Save everything
+            save_model_and_results(model, scaler, results, scenario_results, target_label, logger)
+            
+            # Store results
+            all_results[target_label] = results
+            
+            logger.info(f"\n✅ Completed training for {target_label}")
+            print(f"\n✅ {target_label}: Test Accuracy = {results['test_accuracy']*100:.1f}%")
+            
+        except Exception as e:
+            logger.error(f"❌ Training failed for {target_label}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            continue
+    
+    # Final summary
+    total_time = time.time() - pipeline_start
+    
+    print(f"\n{'='*80}")
+    print(f"TRAINING COMPLETE FOR ALL MODELS")
+    print(f"{'='*80}")
+    print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+    print(f"Models trained: {len(all_results)}/{len(TARGET_LABELS)}")
+    
+    if all_results:
+        print(f"\n📊 Final Results Summary:")
+        for target, results in all_results.items():
+            print(f"\n{target}:")
+            print(f"  Validation: {results['validation_accuracy']*100:.1f}%")
+            print(f"  Test: {results['test_accuracy']*100:.1f}%")
+            print(f"  CV: {results['cv_mean']*100:.1f}% ± {results['cv_std']*100:.1f}%")
+            print(f"  Time: {results['training_time_seconds']:.1f}s")
+    
+    print(f"\n📁 Models saved to: {OUTPUT_DIR}")
+    print(f"✅ Training pipeline completed successfully!")
+    
+    return True
 
 if __name__ == "__main__":
     success = main()

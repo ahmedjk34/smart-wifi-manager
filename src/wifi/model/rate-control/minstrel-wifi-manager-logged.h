@@ -16,11 +16,33 @@
  *
  * Authors: Duy Nguyen <duy@soe.ucsc.edu>
  *          Matías Richart <mrichart@fing.edu.uy>
+ *          ahmedjk34 <https://github.com/ahmedjk34> (2025-10-01 Fixed)
  *
- * MinstrelWifiManagerLogged - Phase 1: Enhanced Data Collection & Feature Engineering
- * - Feedback-oriented features added to logger
- * - Stratified probabilistic logging implemented
- * - All new code marked with PHASE1 NEW CODE comments
+ * MinstrelWifiManagerLogged - FIXED VERSION (2025-10-01 15:13:30 UTC)
+ *
+ * CRITICAL FIXES APPLIED:
+ * - Issue #1: Removed ALL 7 temporal leakage features
+ * - Issue #33: Success ratios from PREVIOUS window (not current packet)
+ * - Issue #4: Added scenario_file for proper train/test splitting
+ * - 14 safe features: pre-decision state only, no outcome-based features
+ * - Realistic accuracy: 65-75% (not 95%+ fake accuracy)
+ *
+ * REMOVED FEATURES (Temporal Leakage - Issue #1):
+ * ❌ consecSuccess      (outcome of CURRENT rate choice)
+ * ❌ consecFailure      (outcome of CURRENT rate choice)
+ * ❌ retrySuccessRatio  (derived from retry outcomes)
+ * ❌ timeSinceLastRateChange (rate performance history)
+ * ❌ rateStabilityScore (rate change history)
+ * ❌ recentRateChanges  (rate adaptation history)
+ * ❌ packetSuccess      (literal packet outcome)
+ *
+ * KEPT FEATURES (Safe - Pre-Decision State) - 14 Total:
+ * ✓ SNR features (7): lastSnr, snrFast, snrSlow, snrTrendShort,
+ *                     snrStabilityIndex, snrPredictionConfidence, snrVariance
+ * ✓ Success ratios (2): shortSuccRatio, medSuccRatio (from PREVIOUS window)
+ * ✓ Loss rate (1): packetLossRate (from PREVIOUS window)
+ * ✓ Network state (2): channelWidth, mobilityMetric
+ * ✓ Assessment (2): severity, confidence (from previous window)
  */
 
 #ifndef MINSTREL_WIFI_MANAGER_LOGGED_H
@@ -44,129 +66,148 @@ namespace ns3
 class UniformRandomVariable;
 
 /**
- * A struct to contain all information related to a data rate for logged Minstrel
+ * A struct to contain all information related to a data rate for Minstrel
  */
 struct RateInfoLogged
 {
-    /**
-     * Perfect transmission time calculation, or frame calculation
-     * Given a bit rate and a packet length n bytes
-     */
-    Time perfectTxTime;
+    Time perfectTxTime;          ///< Perfect transmission time
+    uint32_t retryCount;         ///< Retry limit
+    uint32_t adjustedRetryCount; ///< Adjusted retry limit
+    uint32_t numRateAttempt;     ///< Number of attempts
+    uint32_t numRateSuccess;     ///< Number of successes
+    uint32_t prob;               ///< Success probability
+    uint32_t ewmaProb;           ///< EWMA probability
+    uint32_t throughput;         ///< Throughput in bps
 
-    uint32_t retryCount;         ///< retry limit
-    uint32_t adjustedRetryCount; ///< adjust the retry limit for this rate
-    uint32_t numRateAttempt;     ///< how many number of attempts so far
-    uint32_t numRateSuccess;     ///< number of successful packets
-    uint32_t prob;               ///< (# packets success)/(# total packets)
-    /**
-     * EWMA calculation
-     * ewma_prob =[prob *(100 - ewma_level) + (ewma_prob_old * ewma_level)]/100
-     */
-    uint32_t ewmaProb;
-    uint32_t throughput; ///< throughput of a rate in bps
+    uint32_t prevNumRateAttempt; ///< Previous attempts
+    uint32_t prevNumRateSuccess; ///< Previous successes
+    uint64_t successHist;        ///< Success history
+    uint64_t attemptHist;        ///< Attempt history
 
-    uint32_t prevNumRateAttempt; //!< Number of transmission attempts with previous rate.
-    uint32_t prevNumRateSuccess; //!< Number of successful frames transmitted with previous rate.
-    uint64_t successHist;        //!< Aggregate of all transmission successes.
-    uint64_t attemptHist;        //!< Aggregate of all transmission attempts.
-
-    uint8_t numSamplesSkipped; //!< number of samples skipped
-    int sampleLimit;           //!< sample limit
+    uint8_t numSamplesSkipped; ///< Samples skipped
+    int sampleLimit;           ///< Sample limit
 };
 
-/**
- * Data structure for a Minstrel Rate table
- * A vector of a struct RateInfoLogged
- */
 typedef std::vector<RateInfoLogged> MinstrelRateLogged;
-/**
- * Data structure for a Sample Rate table
- * A vector of a vector uint8_t
- */
 typedef std::vector<std::vector<uint8_t>> SampleRateLogged;
 
 /**
- * \brief hold per-remote-station state for Minstrel Wifi manager.
+ * \brief Per-remote-station state for Minstrel with SAFE feature tracking
  *
- * This struct extends from WifiRemoteStation struct to hold additional
- * information required by the Minstrel Wifi manager
+ * FIXED (2025-10-01): Only safe, pre-decision features tracked
+ * - Issue #1: No temporal leakage features
+ * - Issue #33: Success from PREVIOUS window
  */
 struct MinstrelWifiRemoteStationLogged : public WifiRemoteStation
 {
-    Time m_nextStatsUpdate; ///< 10 times every second
+    // Core Minstrel state (unchanged)
+    Time m_nextStatsUpdate;
+    uint8_t m_col;
+    uint8_t m_index;
+    uint16_t m_maxTpRate;
+    uint16_t m_maxTpRate2;
+    uint16_t m_maxProbRate;
+    uint8_t m_nModes;
+    int m_totalPacketsCount;
+    int m_samplePacketsCount;
+    int m_numSamplesDeferred;
+    bool m_isSampling;
+    uint16_t m_sampleRate;
+    bool m_sampleDeferred;
+    uint32_t m_shortRetry;
+    uint32_t m_longRetry;
+    uint32_t m_retry;
+    uint16_t m_txrate;
+    bool m_initialized;
+    MinstrelRateLogged m_minstrelTable;
+    SampleRateLogged m_sampleTable;
+    std::ofstream m_statsFile;
+    Ptr<Node> m_node;
 
-    /**
-     * To keep track of the current position in the our random sample table
-     * going row by row from 1st column until the 10th column(Minstrel defines 10)
-     * then we wrap back to the row 1 column 1.
-     * note: there are many other ways to do this.
-     */
-    uint8_t m_col;                      ///< column index
-    uint8_t m_index;                    ///< vector index
-    uint16_t m_maxTpRate;               ///< the current throughput rate in bps
-    uint16_t m_maxTpRate2;              ///< second highest throughput rate in bps
-    uint16_t m_maxProbRate;             ///< rate with highest probability of success in bps
-    uint8_t m_nModes;                   ///< number of modes supported
-    int m_totalPacketsCount;            ///< total number of packets as of now
-    int m_samplePacketsCount;           ///< how many packets we have sample so far
-    int m_numSamplesDeferred;           ///< number samples deferred
-    bool m_isSampling;                  ///< a flag to indicate we are currently sampling
-    uint16_t m_sampleRate;              ///< current sample rate in bps
-    bool m_sampleDeferred;              ///< a flag to indicate sample rate is on the second stage
-    uint32_t m_shortRetry;              ///< short retries such as control packets
-    uint32_t m_longRetry;               ///< long retries such as data packets
-    uint32_t m_retry;                   ///< total retries short + long
-    uint16_t m_txrate;                  ///< current transmit rate in bps
-    bool m_initialized;                 ///< for initializing tables
-    MinstrelRateLogged m_minstrelTable; ///< minstrel table (using logged version)
-    SampleRateLogged m_sampleTable;     ///< sample table (using logged version)
-    std::ofstream m_statsFile;          ///< stats file
-    Ptr<Node> m_node;                   ///< node reference for station ID
+    // ========================================================================
+    // FIXED: SAFE FEATURES ONLY (14 features, zero temporal leakage)
+    // ========================================================================
 
-    // PHASE1 NEW CODE: Feedback-oriented feature buffers
-    std::vector<uint8_t> m_rateHistory;       // Recent rates for adaptation dynamics
-    std::vector<double> m_throughputHistory;  // Recent throughput (Mbps or rate index as proxy)
-    std::vector<uint32_t> m_retryHistory;     // Recent retry counts
-    std::vector<bool> m_packetSuccessHistory; // Recent packet success/failure
+    // SNR features (7 features - SAFE: measured before decision)
+    double m_lastSnr;                ///< Last measured SNR (dB) [-30 to +45]
+    double m_fastEwmaSnr;            ///< Fast EWMA SNR (alpha=0.30)
+    double m_slowEwmaSnr;            ///< Slow EWMA SNR (alpha=0.05)
+    std::deque<double> m_snrHistory; ///< Rolling SNR history (max 20 samples)
 
-    // PHASE1 NEW CODE: SNR-related state
-    double m_lastSnr{0.0};
-    std::deque<double> m_snrHistory;  // rolling SNR values
-    std::vector<double> m_snrSamples; // raw SNR samples for quantile stats
-    double m_fastEwmaSnr{0.0};        // fast EWMA of SNR
-    double m_slowEwmaSnr{0.0};        // slow EWMA of SNR
+    // FIXED: Issue #33 - PREVIOUS window tracking (SAFE)
+    // These represent COMPLETED transmission windows, not current packet outcomes
+    std::deque<bool> m_previousShortWindow; ///< Previous short window (10 packets)
+    std::deque<bool> m_previousMedWindow;   ///< Previous medium window (25 packets)
+    uint32_t m_previousWindowSuccess;       ///< Success count from previous window
+    uint32_t m_previousWindowTotal;         ///< Total packets in previous window
+    uint32_t m_previousWindowLosses;        ///< Losses in previous window
 
-    // PHASE1 NEW CODE: Additional logging state
-    uint32_t m_sinceLastRateChange{0};
-    uint32_t m_consecSuccess{0};
-    uint32_t m_consecFailure{0};
+    // FIXED: Issue #33 - CURRENT window (NOT logged - becomes previous later)
+    std::deque<bool> m_currentShortWindow; ///< Current window (becomes previous)
+    std::deque<bool> m_currentMedWindow;   ///< Current window (becomes previous)
+    uint32_t m_currentWindowPackets;       ///< Packet count in current window
 
-    // Default constructor
-    MinstrelWifiRemoteStationLogged() = default;
+    // Station ID for logging
+    uint32_t m_stationId; ///< Unique station identifier
 
-    // Virtual destructor to match base class
+    // Constructor with proper initialization
+    MinstrelWifiRemoteStationLogged()
+        : m_nextStatsUpdate(Seconds(0)),
+          m_col(0),
+          m_index(0),
+          m_maxTpRate(0),
+          m_maxTpRate2(0),
+          m_maxProbRate(0),
+          m_nModes(0),
+          m_totalPacketsCount(0),
+          m_samplePacketsCount(0),
+          m_numSamplesDeferred(0),
+          m_isSampling(false),
+          m_sampleRate(0),
+          m_sampleDeferred(false),
+          m_shortRetry(0),
+          m_longRetry(0),
+          m_retry(0),
+          m_txrate(0),
+          m_initialized(false),
+          m_lastSnr(0.0),
+          m_fastEwmaSnr(0.0),
+          m_slowEwmaSnr(0.0),
+          m_previousWindowSuccess(0),
+          m_previousWindowTotal(0),
+          m_previousWindowLosses(0),
+          m_currentWindowPackets(0),
+          m_stationId(0)
+    {
+    }
+
     ~MinstrelWifiRemoteStationLogged() override = default;
 };
 
 /**
- * \brief Implementation of Minstrel Rate Control Algorithm with Logging
+ * \brief Minstrel Rate Control Algorithm with SAFE Feature Logging
  * \ingroup wifi
  *
- * This is a logged version of MinstrelWifiManager that preserves the exact
- * algorithm logic while adding comprehensive data collection and feature
- * engineering capabilities for analysis and machine learning.
+ * FIXED VERSION (2025-10-01 15:13:30 UTC):
+ * - 14 safe features (zero temporal leakage)
+ * - Success ratios from PREVIOUS window (Issue #33)
+ * - Scenario file for train/test splitting (Issue #4)
+ * - Realistic accuracy expectations: 65-75%
  *
- * The core Minstrel algorithm remains unchanged - this version only adds
- * stratified logging, feedback-oriented features, and trace sources.
+ * The core Minstrel algorithm is UNCHANGED. This version only logs
+ * SAFE features that are known BEFORE the rate decision.
+ *
+ * CSV Output Format (14 features + metadata):
+ * time,stationId,rateIdx,phyRate,
+ * lastSnr,snrFast,snrSlow,snrTrendShort,snrStabilityIndex,snrPredictionConfidence,snrVariance,
+ * shortSuccRatio,medSuccRatio,packetLossRate,
+ * channelWidth,mobilityMetric,
+ * severity,confidence,
+ * scenario_file
  */
 class MinstrelWifiManagerLogged : public WifiRemoteStationManager
 {
   public:
-    /**
-     * \brief Get the type ID.
-     * \return the object TypeId
-     */
     static TypeId GetTypeId();
     MinstrelWifiManagerLogged();
     ~MinstrelWifiManagerLogged() override;
@@ -179,79 +220,27 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     TracedCallback<std::string, bool> m_packetResultTrace;
     TracedCallback<uint64_t, uint64_t> m_rateChange;
 
-    /**
-     * Update the rate.
-     *
-     * \param station the station object
-     */
+    // Core Minstrel methods (unchanged)
     void UpdateRate(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Update the Minstrel Table.
-     *
-     * \param station the station object
-     */
     void UpdateStats(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Find a rate to use from Minstrel Table.
-     *
-     * \param station the station object
-     * \returns the rate in bps
-     */
     uint16_t FindRate(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Get data transmit vector.
-     *
-     * \param station the station object
-     * \returns WifiTxVector
-     */
     WifiTxVector GetDataTxVector(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Get RTS transmit vector.
-     *
-     * \param station the station object
-     * \returns WifiTxVector
-     */
     WifiTxVector GetRtsTxVector(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Get the number of retries.
-     *
-     * \param station the station object
-     * \returns the number of retries
-     */
     uint32_t CountRetries(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Update packet counters.
-     *
-     * \param station the station object
-     */
     void UpdatePacketCounters(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Update the number of retries and reset accordingly.
-     *
-     * \param station the station object
-     */
     void UpdateRetry(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Check for initializations.
-     *
-     * \param station the station object
-     */
     void CheckInit(MinstrelWifiRemoteStationLogged* station);
+    void InitSampleTable(MinstrelWifiRemoteStationLogged* station);
+
+    void SetScenarioParameters(double distance, uint32_t interferers);
 
     /**
-     * Initialize Sample Table.
+     * FIXED: Issue #33 - Update window state
+     * Moves current window to previous window when full
      *
      * \param station the station object
      */
-    void InitSampleTable(MinstrelWifiRemoteStationLogged* station);
+    void UpdateWindowState(MinstrelWifiRemoteStationLogged* station);
 
   protected:
     void DoInitialize() override;
@@ -284,144 +273,134 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
         return static_cast<MinstrelWifiRemoteStationLogged*>(st);
     }
 
-    /**
-     * Estimate the TxTime of a packet with a given mode.
-     *
-     * \param mode Wi-Fi mode
-     * \returns the transmission time
-     */
     Time GetCalcTxTime(WifiMode mode) const;
-    /**
-     * Add transmission time for the given mode to an internal list.
-     *
-     * \param mode Wi-Fi mode
-     * \param t transmission time
-     */
     void AddCalcTxTime(WifiMode mode, Time t);
-
-    /**
-     * Initialize Minstrel Table.
-     *
-     * \param station the station object
-     */
     void RateInit(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Get the next sample from Sample Table.
-     *
-     * \param station the station object
-     * \returns the next sample
-     */
     uint16_t GetNextSample(MinstrelWifiRemoteStationLogged* station);
-
-    /**
-     * Estimate the time to transmit the given packet with the given number of retries.
-     * This function is "roughly" the function "calc_usecs_unicast_packet" in minstrel.c
-     * in the madwifi implementation.
-     *
-     * The basic idea is that, we try to estimate the "average" time used to transmit the
-     * packet for the given number of retries while also accounting for the 802.11 congestion
-     * window change. The original code in the madwifi seems to estimate the number of backoff
-     * slots as the half of the current CW size.
-     *
-     * There are four main parts:
-     *  - wait for DIFS (sense idle channel)
-     *  - Ack timeouts
-     *  - Data transmission
-     *  - backoffs according to CW
-     *
-     * \param dataTransmissionTime the data transmission time
-     * \param shortRetries short retries
-     * \param longRetries long retries
-     * \returns the unicast packet time
-     */
     Time CalculateTimeUnicastPacket(Time dataTransmissionTime,
                                     uint32_t shortRetries,
                                     uint32_t longRetries);
-
-    /**
-     * Print Sample Table.
-     *
-     * \param station the station object
-     */
     void PrintSampleTable(MinstrelWifiRemoteStationLogged* station) const;
-
-    /**
-     * Print Minstrel Table.
-     *
-     * \param station the station object
-     */
     void PrintTable(MinstrelWifiRemoteStationLogged* station);
 
-    // PHASE1 NEW CODE: Stratified logging and feature engineering
-    std::mt19937 m_rng;
-    std::uniform_real_distribution<double> m_uniformDist;
-    double GetStratifiedLogProbability(uint8_t rate, double snr, bool success);
-    double GetRandomValue();
-
-    // PHASE1 NEW CODE: Feedback-oriented helpers
-    uint32_t CountRecentRateChanges(MinstrelWifiRemoteStationLogged* st, uint32_t window);
-    double CalculateRateStability(MinstrelWifiRemoteStationLogged* st);
-    double CalculateRecentThroughput(MinstrelWifiRemoteStationLogged* st, uint32_t window);
-    double CalculateRecentPacketLoss(MinstrelWifiRemoteStationLogged* st, uint32_t window);
-    double CalculateRetrySuccessRatio(MinstrelWifiRemoteStationLogged* st);
-    double CalculateOptimalRateDistance(MinstrelWifiRemoteStationLogged* st);
-    double CalculateAggressiveFactor(MinstrelWifiRemoteStationLogged* st);
-    double CalculateConservativeFactor(MinstrelWifiRemoteStationLogged* st);
-    uint8_t GetRecommendedSafeRate(MinstrelWifiRemoteStationLogged* st);
-    double CalculateSnrStability(MinstrelWifiRemoteStationLogged* st);
-    double CalculateSnrPredictionConfidence(MinstrelWifiRemoteStationLogged* st);
-    uint8_t TierFromSnr(MinstrelWifiRemoteStationLogged* st, double snr) const;
-
-    void LogDecision(MinstrelWifiRemoteStationLogged* st, int decisionReason, bool packetSuccess);
+    // ========================================================================
+    // FIXED: Safe feature calculation methods (Issue #1, #33)
+    // ========================================================================
 
     /**
-     * typedef for a vector of a pair of Time, WifiMode.
-     * Essentially a map from WifiMode to its corresponding transmission time
-     * to transmit a reference packet.
+     * Calculate SNR stability index (0-10 scale)
+     * SAFE: Uses historical SNR measurements only
      */
+    double CalculateSnrStability(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * Calculate SNR prediction confidence (0-1)
+     * SAFE: Based on SNR variance
+     */
+    double CalculateSnrPredictionConfidence(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * Calculate SNR variance
+     * SAFE: Historical measurements
+     */
+    double CalculateSnrVariance(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * FIXED: Issue #33 - Success ratios from PREVIOUS window
+     * These are SAFE because they use COMPLETED transmission window data
+     */
+    double CalculatePreviousShortSuccessRatio(MinstrelWifiRemoteStationLogged* st) const;
+    double CalculatePreviousMedSuccessRatio(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * FIXED: Issue #33 - Packet loss from PREVIOUS window
+     * SAFE: Uses completed window data
+     */
+    double CalculatePreviousPacketLoss(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * Calculate severity (network condition assessment)
+     * SAFE: Based on previous window performance
+     */
+    double CalculateSeverity(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * Calculate confidence in assessment
+     * SAFE: Based on SNR stability and previous window success
+     */
+    double CalculateConfidence(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * Calculate mobility metric (0-1)
+     * SAFE: Based on SNR variance
+     */
+    double CalculateMobilityMetric(MinstrelWifiRemoteStationLogged* st) const;
+
+    /**
+     * Get SNR tier for rate mapping
+     * SAFE: Uses current SNR measurement
+     */
+    uint8_t TierFromSnr(double snr) const;
+
+    /**
+     * Stratified logging probability (for balanced dataset)
+     */
+    double GetStratifiedLogProbability(uint8_t rate, double snr, bool success) const;
+
+    /**
+     * Random value generator for stratified sampling
+     */
+    double GetRandomValue();
+
+    /**
+     * FIXED: Safe logging function - logs only 14 pre-decision features
+     * Called AFTER packet transmission to update windows, but logs
+     * features that were available BEFORE the decision was made
+     *
+     * \param st station state
+     * \param currentRateIdx current rate index (0-7 for 802.11a)
+     * \param success whether packet succeeded (for window tracking only)
+     */
+    void LogSafeFeatures(MinstrelWifiRemoteStationLogged* st, uint8_t currentRateIdx, bool success);
+
+    /**
+     * Write CSV header with 14 safe features + metadata
+     */
+    void WriteLogHeader();
+
+    // Core Minstrel parameters
     typedef std::map<WifiMode, Time> TxTime;
+    TxTime m_calcTxTime;
+    Time m_updateStats;
+    uint8_t m_lookAroundRate;
+    uint8_t m_ewmaLevel;
+    uint8_t m_sampleCol;
+    uint32_t m_pktLen;
+    bool m_printStats;
+    bool m_printSamples;
 
-    TxTime m_calcTxTime;      ///< to hold all the calculated TxTime for all modes
-    Time m_updateStats;       ///< how frequent do we calculate the stats
-    uint8_t m_lookAroundRate; ///< the % to try other rates than our current rate
-    uint8_t m_ewmaLevel;      ///< exponential weighted moving average
-    uint8_t m_sampleCol;      ///< number of sample columns
-    uint32_t m_pktLen;        ///< packet length used to calculate mode TxTime
-    bool m_printStats;        ///< whether statistics table should be printed.
-    bool m_printSamples;      ///< whether samples table should be printed.
-
-    /// Provides uniform random variables.
     Ptr<UniformRandomVariable> m_uniformRandomVariable;
 
-    // Logging infrastructure
+    // ========================================================================
+    // FIXED: Logging infrastructure
+    // ========================================================================
     std::ofstream m_logFile;
     std::string m_logFilePath;
+    std::string m_scenarioFileName; ///< FIXED: Issue #4 - Scenario identifier
     bool m_logHeaderWritten;
 
-    // Trace fields for constructor initialization
-    uint64_t m_currentRate;
-    double m_traceConfidence;
-    double m_traceSeverity;
-    double m_traceT1;
-    double m_traceT2;
-    double m_traceT3;
+    // Random number generation for stratified sampling
+    std::mt19937 m_rng;
+    std::uniform_real_distribution<double> m_uniformDist;
 
-    enum DecisionReason
-    {
-        HOLD_STABLE = 0,
-        RAISE_CONFIRMED,
-        BLOCK_LOW_CONF,
-        SOFT_DROP_SEVERITY,
-        HARD_DROP_SEVERITY,
-        SAFETY_SNR_CLAMP,
-        TREND_ACCELERATE_UP,
-        TREND_DECELERATE,
-        RAISE_DYNAMIC_RELAX,
-        MINSTREL_SAMPLE,
-        MINSTREL_MAX_TP,
-        MINSTREL_MAX_PROB
-    };
+    // Window size for previous/current tracking (Issue #33)
+    static constexpr uint32_t WINDOW_SIZE = 50; ///< Packets per window
+
+    // Station ID counter
+    mutable uint32_t m_nextStationId;
+
+    double m_scenarioDistance;      ///< Current scenario distance (meters)
+    uint32_t m_scenarioInterferers; ///< Current scenario interferer count
 };
 
 } // namespace ns3
