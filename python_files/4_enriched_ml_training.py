@@ -63,8 +63,12 @@ RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
 # Target labels to train
-TARGET_LABELS = ["oracle_conservative", "oracle_balanced", "oracle_aggressive"]
-
+TARGET_LABELS = [
+    "rateIdx",                    # Natural ground truth from ns-3 Minstrel HT
+    "oracle_conservative",        # Conservative oracle strategy
+    "oracle_balanced",            # Balanced oracle strategy  
+    "oracle_aggressive"           # Aggressive oracle strategy
+]
 # FIXED: Issue #1 - SAFE features only (no temporal leakage)
 SAFE_FEATURES = [
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
