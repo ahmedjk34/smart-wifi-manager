@@ -135,85 +135,94 @@ def setup_logging(target_label: str):
 # ================== LOAD HYPERPARAMETERS ==================
 def load_optimized_hyperparameters(target_label: str, logger) -> Dict:
     """
-    FIXED: Issue #20 - Load optimized hyperparameters from File 3c
+    FIXED: Auto-detect hyperparameter JSON file (supports any name)
+    Handles ultra_fast, quick, full, or custom names
     """
-    logger.info(f"📂 Loading optimized hyperparameters from: {HYPERPARAMS_FILE}")
+    logger.info(f"📂 Looking for hyperparameter files in: {HYPERPARAMS_FILE.parent}")
     
-    # Check if hyperparameter file exists
-    if not HYPERPARAMS_FILE.exists():
-        logger.warning(f"⚠️ Hyperparameter file not found!")
-        logger.warning(f"   Expected: {HYPERPARAMS_FILE}")
+    # FIXED: Find ALL JSON files in hyperparameter_results directory
+    hyperparams_dir = BASE_DIR / "hyperparameter_results"
+    
+    if not hyperparams_dir.exists():
+        logger.warning(f"⚠️ Hyperparameter directory not found: {hyperparams_dir}")
         logger.warning(f"   Please run Step 3c (hyperparameter tuning) first")
         logger.warning(f"   Falling back to default parameters...")
-        
-        # Default fallback parameters (reasonable but not optimized)
-        return {
-            'n_estimators': 100,
-            'max_depth': 15,
-            'min_samples_split': 2,
-            'min_samples_leaf': 1,
-            'max_features': 'sqrt',
-            'class_weight': 'balanced',
-            'source': 'default_fallback'
-        }
+        return get_default_hyperparameters()
+    
+    # Find all JSON files
+    json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*.json"))
+    
+    if len(json_files) == 0:
+        logger.warning(f"⚠️ No hyperparameter JSON files found!")
+        logger.warning(f"   Expected pattern: hyperparameter_tuning_*.json")
+        logger.warning(f"   Please run Step 3c first")
+        return get_default_hyperparameters()
+    
+    if len(json_files) > 1:
+        logger.error(f"❌ Multiple hyperparameter files found:")
+        for f in json_files:
+            logger.error(f"   - {f.name}")
+        logger.error(f"   Please keep only ONE file (delete others or move to backup)")
+        logger.error(f"   Recommended: hyperparameter_tuning_ultra_fast.json (most recent)")
+        sys.exit(1)
+    
+    # Use the single JSON file found
+    hyperparam_file = json_files[0]
+    logger.info(f"✅ Found hyperparameter file: {hyperparam_file.name}")
     
     try:
-        with open(HYPERPARAMS_FILE, 'r') as f:
+        with open(hyperparam_file, 'r') as f:
             all_hyperparams = json.load(f)
         
         if target_label not in all_hyperparams:
             logger.warning(f"⚠️ No hyperparameters found for {target_label}")
             logger.warning(f"   Available targets: {list(all_hyperparams.keys())}")
-            logger.warning(f"   Using default parameters...")
-            
-            return {
-                'n_estimators': 100,
-                'max_depth': 15,
-                'min_samples_split': 2,
-                'min_samples_leaf': 1,
-                'max_features': 'sqrt',
-                'class_weight': 'balanced',
-                'source': 'default_fallback'
-            }
+            return get_default_hyperparameters()
         
         # Extract best parameters
         target_results = all_hyperparams[target_label]
         best_params = target_results['best_params']
-        best_score = target_results['best_score']
+        best_score = target_results.get('best_score', 0.0)
         
         logger.info(f"✅ Loaded optimized hyperparameters for {target_label}")
-        logger.info(f"   Tuning CV Score: {best_score:.4f} ({best_score*100:.1f}%)")
+        logger.info(f"   CV Score: {best_score:.4f} ({best_score*100:.1f}%)")
         logger.info(f"   Parameters:")
         for param, value in best_params.items():
             logger.info(f"     {param}: {value}")
         
-        best_params['source'] = 'optimized_3c'
+        best_params['source'] = f'optimized_{hyperparam_file.stem}'
         return best_params
         
     except Exception as e:
         logger.error(f"❌ Failed to load hyperparameters: {str(e)}")
         logger.warning(f"   Falling back to default parameters...")
-        
-        return {
-            'n_estimators': 100,
-            'max_depth': 15,
-            'min_samples_split': 2,
-            'min_samples_leaf': 1,
-            'max_features': 'sqrt',
-            'class_weight': 'balanced',
-            'source': 'default_fallback'
-        }
+        return get_default_hyperparameters()
+
+def get_default_hyperparameters() -> Dict:
+    """Return default hyperparameters as fallback"""
+    return {
+        'n_estimators': 100,
+        'max_depth': 15,
+        'min_samples_split': 5,
+        'min_samples_leaf': 2,
+        'max_features': 'sqrt',
+        'class_weight': 'balanced',
+        'source': 'default_fallback'
+    }
+
 
 # ================== SCENARIO-AWARE SPLITTING ==================
 def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger) -> Tuple:
     """
     FIXED: Issue #4, #12, #37 - Scenario-aware stratified train/val/test split
+    EMERGENCY FIX: Handle scenarios with missing target data
     
     Ensures:
     - Entire scenarios in train OR val OR test (no mixing)
     - Stratification by dominant class per scenario
     - All classes present in each split (if possible)
     - Raises error if scenario_file missing (no silent fallback)
+    - Handles scenarios with no valid target data
     """
     logger.info(f"\n{'='*60}")
     logger.info(f"SCENARIO-AWARE STRATIFIED SPLIT")
@@ -234,12 +243,56 @@ def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger)
     if n_scenarios < 10:
         logger.warning(f"⚠️ WARNING: Only {n_scenarios} scenarios (need 10+ for good split)")
     
-    # Compute dominant class per scenario (for stratification)
+    # EMERGENCY FIX: Compute dominant class per scenario with robust error handling
     scenario_classes = {}
+    empty_scenarios = []
+    
     for scenario in scenarios:
         scenario_data = df[df['scenario_file'] == scenario]
-        dominant_class = scenario_data[target_label].mode()[0]
+        
+        # Check if scenario has any valid target data
+        valid_targets = scenario_data[target_label].dropna()
+        
+        if len(valid_targets) == 0:
+            logger.warning(f"⚠️ Scenario '{scenario}' has NO valid {target_label} data - SKIPPING")
+            empty_scenarios.append(scenario)
+            continue
+        
+        # Try mode first
+        mode_result = valid_targets.mode()
+        
+        if len(mode_result) == 0:
+            # No clear mode - use value_counts
+            value_counts = valid_targets.value_counts()
+            if len(value_counts) == 0:
+                logger.warning(f"⚠️ Scenario '{scenario}' has no countable values - SKIPPING")
+                empty_scenarios.append(scenario)
+                continue
+            dominant_class = value_counts.index[0]
+        else:
+            dominant_class = mode_result.iloc[0]
+        
         scenario_classes[scenario] = dominant_class
+    
+    # Report empty scenarios
+    if empty_scenarios:
+        logger.warning(f"⚠️ Skipped {len(empty_scenarios)} empty scenarios:")
+        for sc in empty_scenarios[:5]:
+            logger.warning(f"   - {sc}")
+        if len(empty_scenarios) > 5:
+            logger.warning(f"   ... and {len(empty_scenarios) - 5} more")
+    
+    # Use only valid scenarios
+    valid_scenarios = list(scenario_classes.keys())
+    n_valid = len(valid_scenarios)
+    
+    logger.info(f"📊 Valid scenarios with data: {n_valid}/{n_scenarios}")
+    
+    if n_valid < 10:
+        logger.error(f"❌ CRITICAL: Only {n_valid} valid scenarios (need 10+)")
+        logger.error(f"   Cannot perform reliable train/test split")
+        logger.error(f"   Please run more simulation scenarios")
+        raise ValueError(f"Insufficient valid scenarios: {n_valid} (need 10+)")
     
     # Group scenarios by dominant class
     class_scenarios = {}
@@ -253,8 +306,8 @@ def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger)
         logger.info(f"   Class {cls}: {len(scens)} scenarios")
     
     # FIXED: Issue #37 - Stratified split ensuring all classes represented
-    n_test = max(1, int(n_scenarios * TEST_SIZE))
-    n_val = max(1, int(n_scenarios * VAL_SIZE))
+    n_test = max(1, int(n_valid * TEST_SIZE))
+    n_val = max(1, int(n_valid * VAL_SIZE))
     
     test_scenarios = []
     val_scenarios = []
@@ -264,29 +317,52 @@ def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger)
     rng = np.random.RandomState(RANDOM_SEED)
     
     for cls, scens in class_scenarios.items():
-        rng.shuffle(scens)
+        if len(scens) == 0:
+            continue
         
-        n_class_test = max(1, int(len(scens) * TEST_SIZE))
-        n_class_val = max(1, int(len(scens) * VAL_SIZE))
+        # Shuffle scenarios for this class
+        scens_copy = scens.copy()
+        rng.shuffle(scens_copy)
         
-        test_scenarios.extend(scens[:n_class_test])
-        val_scenarios.extend(scens[n_class_test:n_class_test + n_class_val])
-        train_scenarios.extend(scens[n_class_test + n_class_val:])
+        # Calculate split sizes for this class
+        n_class_test = max(1, int(len(scens_copy) * TEST_SIZE))
+        n_class_val = max(1, int(len(scens_copy) * VAL_SIZE))
+        
+        # Ensure we don't exceed available scenarios
+        n_class_test = min(n_class_test, len(scens_copy))
+        n_class_val = min(n_class_val, len(scens_copy) - n_class_test)
+        
+        test_scenarios.extend(scens_copy[:n_class_test])
+        val_scenarios.extend(scens_copy[n_class_test:n_class_test + n_class_val])
+        train_scenarios.extend(scens_copy[n_class_test + n_class_val:])
     
     logger.info(f"\n📊 Scenario split:")
     logger.info(f"   Train: {len(train_scenarios)} scenarios")
     logger.info(f"   Val:   {len(val_scenarios)} scenarios")
     logger.info(f"   Test:  {len(test_scenarios)} scenarios")
     
-    # Split data by scenarios
+    # Split data by scenarios (only use valid scenarios)
     train_df = df[df['scenario_file'].isin(train_scenarios)]
     val_df = df[df['scenario_file'].isin(val_scenarios)]
     test_df = df[df['scenario_file'].isin(test_scenarios)]
     
-    logger.info(f"\n📊 Sample split:")
+    # Remove rows with missing target
+    train_df = train_df[train_df[target_label].notna()]
+    val_df = val_df[val_df[target_label].notna()]
+    test_df = test_df[test_df[target_label].notna()]
+    
+    logger.info(f"\n📊 Sample split (after removing NaN targets):")
     logger.info(f"   Train: {len(train_df):,} samples ({len(train_df)/len(df)*100:.1f}%)")
     logger.info(f"   Val:   {len(val_df):,} samples ({len(val_df)/len(df)*100:.1f}%)")
     logger.info(f"   Test:  {len(test_df):,} samples ({len(test_df)/len(df)*100:.1f}%)")
+    
+    # Verify all splits have samples
+    if len(train_df) == 0:
+        raise ValueError("Training set is empty!")
+    if len(val_df) == 0:
+        raise ValueError("Validation set is empty!")
+    if len(test_df) == 0:
+        raise ValueError("Test set is empty!")
     
     # Verify all splits have all classes
     for split_name, split_df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
@@ -310,7 +386,7 @@ def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger)
     
     # FIXED: Issue #35 - Compare feature distributions between train/test
     logger.info(f"\n📊 Feature distribution comparison (train vs test):")
-    for feature in SAFE_FEATURES:
+    for feature in SAFE_FEATURES[:5]:  # Show first 5 to avoid spam
         train_mean = X_train[feature].mean()
         test_mean = X_test[feature].mean()
         train_std = X_train[feature].std()
@@ -323,6 +399,8 @@ def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger)
             else:
                 logger.info(f"✅ {feature}: distributions similar ({diff_in_stds:.2f} std devs)")
     
+    logger.info(f"   ... and {len(SAFE_FEATURES) - 5} more features")
+    
     # Store scenario info for later use
     train_scenarios_list = train_df['scenario_file'].values
     val_scenarios_list = val_df['scenario_file'].values
@@ -330,6 +408,7 @@ def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger)
     
     return (X_train, X_val, X_test, y_train, y_val, y_test, 
             train_scenarios_list, val_scenarios_list, test_scenarios_list)
+
 
 # ================== FEATURE SCALING ==================
 def scale_features_after_split(X_train, X_val, X_test, logger):
