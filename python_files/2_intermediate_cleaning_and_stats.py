@@ -10,26 +10,49 @@ Features:
 - Class balancing options
 - Detailed logging and reporting
 - Export cleaned data and statistics
+- FIXED: Early removal of constant/useless features (Issue #28)
+- FIXED: Reproducible random seed (Issue #14)
 
 Author: ahmedjk34
 Date: 2025-09-22
+FIXED: 2025-10-01 (Issues #14, #28)
 """
 
-import os
+
+import warnings
 import sys
 import logging
+
+# CRITICAL: Suppress ALL warnings BEFORE any other imports
+warnings.filterwarnings('ignore')
+warnings.simplefilter('ignore')
+
+# Redirect stderr to devnull to suppress C-level warnings
+import os
+sys.stderr = open(os.devnull, 'w')
+
+# NOW import pandas and numpy
 import pandas as pd
 import numpy as np
+
+# Suppress pandas warnings
+pd.options.mode.chained_assignment = None
+pd.set_option('mode.copy_on_write', True)
+
+# Suppress numpy warnings
+np.seterr(all='ignore')
+
+import sys
+import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
-import warnings
 from scipy import stats
 import json
 
-warnings.filterwarnings('ignore')
+
 
 # ================== CONFIGURATION ==================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,26 +62,43 @@ OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-ml-cleaned.csv")
 STATS_DIR = os.path.join(BASE_DIR, "cleaning_stats")
 LOG_FILE = os.path.join(BASE_DIR, "intermediate_cleaning.log")
 
+# FIXED: Issue #14 - Set random seed for reproducibility
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+
 # WiFi-specific constraints
 VALID_RATE_INDICES = [0, 1, 2, 3, 4, 5, 6, 7]
-VALID_PHY_RATES = [1000000, 2000000, 3000000, 4000000, 5500000, 6000000, 9000000, 11000000, 12000000, 18000000]
+# FIXED: Issue #38 - Complete 802.11g PHY rates
+VALID_PHY_RATES = [
+    1000000, 2000000, 5500000, 6000000, 9000000, 11000000, 12000000, 18000000,
+    24000000, 36000000, 48000000, 54000000  # Complete 802.11g support
+]
 VALID_CHANNEL_WIDTHS = [20, 40, 80, 160]
+
+# FIXED: Issue #28 - Define constant/useless features to remove early
+CONSTANT_USELESS_FEATURES = [
+    'T1', 'T2', 'T3',           # Always constant thresholds
+    'decisionReason',            # Always 0 in data
+    'offeredLoad',               # Always 0 in data
+    'queueLen',                  # Always 0 in data (mostly)
+    'retryCount'                 # Always 0 in data
+]
 
 # Data validation ranges
 VALIDATION_RANGES = {
     'lastSnr': (0, 50),
     'snrFast': (0, 50), 
     'snrSlow': (0, 50),
-    'snrTrendShort': (-20, 20),  # Can be negative (fast - slow)
-    'snrStabilityIndex': (0, 50),  # Standard deviation-like metric
-    'snrPredictionConfidence': (0, 1),  # Probability-like
+    'snrTrendShort': (-20, 20),
+    'snrStabilityIndex': (0, 50),
+    'snrPredictionConfidence': (0, 1),
     'shortSuccRatio': (0, 1),
     'medSuccRatio': (0, 1),
     'consecSuccess': (0, 10000),
     'consecFailure': (0, 100),
-    'recentThroughputTrend': (0, 10),  # Based on your sample
+    'recentThroughputTrend': (0, 10),
     'packetLossRate': (0, 1),
-    'retrySuccessRatio': (0, 100),  # Your sample shows values > 1
+    'retrySuccessRatio': (0, 100),
     'recentRateChanges': (0, 100),
     'timeSinceLastRateChange': (0, 10000),
     'rateStabilityScore': (0, 1),
@@ -68,18 +108,17 @@ VALIDATION_RANGES = {
     'offeredLoad': (0, 1000000),
     'queueLen': (0, 1000),
     'retryCount': (0, 100),
-    'channelWidth': (10, 160),  # WiFi channel widths
+    'channelWidth': (10, 160),
     'mobilityMetric': (0, 1000),
     'snrVariance': (0, 1000),
-    'T1': (0, 100),  # Threshold values
+    'T1': (0, 100),
     'T2': (0, 100),
     'T3': (0, 100),
-    'decisionReason': (0, 10),  # Categorical codes
-    'packetSuccess': (0, 1),  # Binary
+    'decisionReason': (0, 10),
+    'packetSuccess': (0, 1),
 }
 
-ENABLE_CLASS_BALANCING = False  # Set to True to enable class balancing
-
+ENABLE_CLASS_BALANCING = False
 
 # ================== SETUP ==================
 def setup_logging():
@@ -98,6 +137,7 @@ def setup_logging():
     logger.info("INTERMEDIATE ML DATA CLEANING AND STATISTICAL ANALYSIS PIPELINE")
     logger.info(f"Author: ahmedjk34")
     logger.info(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Random Seed: {RANDOM_SEED} (Issue #14 - Reproducibility)")
     logger.info("="*80)
     return logger
 
@@ -128,6 +168,43 @@ def load_and_validate_data(filepath: str, logger) -> pd.DataFrame:
         logger.error(f"❌ Failed to load data: {str(e)}")
         sys.exit(1)
 
+# ================== EARLY FEATURE REMOVAL ==================
+def remove_constant_useless_features(df: pd.DataFrame, logger) -> pd.DataFrame:
+    """
+    FIXED: Issue #28 - Remove constant/useless features early in pipeline
+    These features waste space and confuse feature importance analysis
+    """
+    logger.info("🧹 EARLY REMOVAL: Checking for constant/useless features...")
+    
+    features_to_remove = []
+    
+    for feature in CONSTANT_USELESS_FEATURES:
+        if feature in df.columns:
+            unique_count = df[feature].nunique()
+            
+            if unique_count <= 1:
+                unique_val = df[feature].iloc[0] if len(df) > 0 else None
+                logger.info(f"  ❌ {feature}: CONSTANT (value={unique_val}) - REMOVING")
+                features_to_remove.append(feature)
+            else:
+                # Check if mostly zeros (>99%)
+                if df[feature].dtype in ['int64', 'float64']:
+                    zero_pct = (df[feature] == 0).sum() / len(df) * 100
+                    if zero_pct > 99:
+                        logger.info(f"  ⚠️ {feature}: {zero_pct:.1f}% zeros - REMOVING (useless)")
+                        features_to_remove.append(feature)
+                    else:
+                        logger.info(f"  ℹ️ {feature}: Has {unique_count} unique values, keeping")
+    
+    if features_to_remove:
+        df_clean = df.drop(columns=features_to_remove)
+        logger.info(f"✅ Removed {len(features_to_remove)} constant/useless features: {features_to_remove}")
+        logger.info(f"📊 Dataset shape after removal: {df_clean.shape}")
+        return df_clean
+    else:
+        logger.info("✅ No constant/useless features found to remove")
+        return df
+
 # ================== COMPREHENSIVE STATISTICS ==================
 def generate_comprehensive_statistics(df: pd.DataFrame, stage: str, logger) -> Dict[str, Any]:
     """Generate extensive statistical analysis"""
@@ -136,6 +213,7 @@ def generate_comprehensive_statistics(df: pd.DataFrame, stage: str, logger) -> D
     stats_dict = {
         'stage': stage,
         'timestamp': datetime.now().isoformat(),
+        'random_seed': RANDOM_SEED,  # FIXED: Issue #14 - Log seed
         'basic_info': {},
         'column_info': {},
         'numerical_stats': {},
@@ -273,25 +351,50 @@ def generate_comprehensive_statistics(df: pd.DataFrame, stage: str, logger) -> D
     return stats_dict
 
 def save_statistics(stats_dict: Dict[str, Any], stage: str, stats_dir: str, logger):
-    """Save statistics to multiple formats"""
+    """Save statistics to multiple formats with robust numpy type conversion"""
     logger.info(f"💾 Saving statistics for {stage} stage...")
+    
+    # FIXED: Recursive numpy type converter
+    def convert_numpy(obj):
+        """Recursively convert numpy types to native Python types"""
+        if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, dict):
+            return {convert_numpy(k): convert_numpy(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [convert_numpy(item) for item in obj]
+        elif pd.isna(obj):
+            return None
+        else:
+            return obj
+    
+    # Convert the entire stats dictionary
+    stats_dict_converted = convert_numpy(stats_dict)
     
     # Save as JSON
     json_file = os.path.join(stats_dir, f"statistics_{stage}.json")
-    with open(json_file, 'w') as f:
-        # Convert numpy types to native Python types for JSON serialization
-        def convert_numpy(obj):
-            if isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return obj
+    try:
+        with open(json_file, 'w') as f:
+            json.dump(stats_dict_converted, f, indent=2)
+        logger.info(f"✅ Statistics saved to {json_file}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save statistics: {str(e)}")
         
-        json.dump(stats_dict, f, indent=2, default=convert_numpy)
-    
-    logger.info(f"✅ Statistics saved to {json_file}")
+        # Fallback: Save as pickle if JSON fails
+        pickle_file = os.path.join(stats_dir, f"statistics_{stage}.pkl")
+        try:
+            import pickle
+            with open(pickle_file, 'wb') as f:
+                pickle.dump(stats_dict, f)
+            logger.warning(f"⚠️ Saved as pickle instead: {pickle_file}")
+        except Exception as e2:
+            logger.error(f"❌ Pickle fallback also failed: {str(e2)}")
 
 def generate_visualizations(df: pd.DataFrame, stage: str, stats_dir: str, logger):
     """Generate comprehensive visualizations"""
@@ -443,13 +546,17 @@ def enforce_data_types(df: pd.DataFrame, logger) -> pd.DataFrame:
         if col in df_clean.columns:
             try:
                 if df_clean[col].dtype != expected_type:
-                    df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+                    # FIXED: Use errors='coerce' and downcast to suppress warnings
+                    df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce', downcast=None)
                     if expected_type.startswith('int'):
-                        df_clean[col] = df_clean[col].round().astype('Int64')  # Nullable integer
+                        df_clean[col] = df_clean[col].round().astype('Int64')
                     type_conversions += 1
-                    logger.info(f"  ✅ Converted {col} to {expected_type}")
+                    # Only log actual conversions, not every row
+                    if type_conversions <= 10:  # Limit logging
+                        logger.info(f"  ✅ Converted {col} to {expected_type}")
             except Exception as e:
-                logger.warning(f"  ⚠️ Failed to convert {col}: {str(e)}")
+                if type_conversions <= 10:
+                    logger.warning(f"  ⚠️ Failed to convert {col}: {str(e)}")
     
     logger.info(f"✅ Completed {type_conversions} type conversions")
     return df_clean
@@ -461,13 +568,7 @@ def validate_wifi_constraints(df: pd.DataFrame, logger) -> pd.DataFrame:
     df_clean = df.copy()
     initial_count = len(df_clean)
     
-    # FIXED: Expanded valid PHY rates for complete 802.11g support
-    EXPANDED_VALID_PHY_RATES = [
-        1000000, 2000000, 3000000, 4000000, 5500000, 6000000, 9000000, 11000000,
-        12000000, 18000000, 24000000, 36000000, 48000000, 54000000  # Complete 802.11g
-    ]
-    
-    # Validate rate indices (keep existing)
+    # Validate rate indices
     if 'rateIdx' in df_clean.columns:
         invalid_rates = ~df_clean['rateIdx'].isin(VALID_RATE_INDICES)
         invalid_count = invalid_rates.sum()
@@ -475,16 +576,17 @@ def validate_wifi_constraints(df: pd.DataFrame, logger) -> pd.DataFrame:
             logger.info(f"  ⚠️ Found {invalid_count} rows with invalid rate indices")
             df_clean = df_clean[~invalid_rates]
     
-    # FIXED: Use expanded PHY rates
+    # FIXED: Use expanded PHY rates (complete 802.11g)
     if 'phyRate' in df_clean.columns:
-        invalid_phy = ~df_clean['phyRate'].isin(EXPANDED_VALID_PHY_RATES)
+        invalid_phy = ~df_clean['phyRate'].isin(VALID_PHY_RATES)
         invalid_count = invalid_phy.sum()
         if invalid_count > 0:
             logger.info(f"  ⚠️ Found {invalid_count} rows with invalid PHY rates")
-            logger.info(f"  📊 Keeping additional rates: {set(df_clean['phyRate'].unique()) - set(VALID_PHY_RATES)}")
+            unique_invalid = df_clean[invalid_phy]['phyRate'].unique()
+            logger.info(f"  📊 Invalid PHY rates found: {sorted(unique_invalid)}")
             df_clean = df_clean[~invalid_phy]
     
-    # Validate channel widths (keep existing)
+    # Validate channel widths
     if 'channelWidth' in df_clean.columns:
         invalid_channels = ~df_clean['channelWidth'].isin(VALID_CHANNEL_WIDTHS)
         invalid_count = invalid_channels.sum()
@@ -586,7 +688,7 @@ def balance_classes(
     major_classes: List[int] = [0, 7],
     major_min: int = 200_000,
     minor_min: int = 100_000,
-    enable_balancing: bool = False  # NEW FLAG
+    enable_balancing: bool = False
 ) -> pd.DataFrame:
     """Balance classes with realistic ratios for major/minor classes."""
     
@@ -614,7 +716,8 @@ def balance_classes(
             n = min(class_counts[c], minor_min)
             logger.info(f"  Minor class {c}: keeping up to {n} samples")
         if class_counts[c] > n:
-            sampled = df[df[target_col]==c].sample(n=n, random_state=42)
+            # FIXED: Issue #14 - Use global random seed
+            sampled = df[df[target_col]==c].sample(n=n, random_state=RANDOM_SEED)
             logger.info(f"    ✅ {c}: Downsampled from {class_counts[c]} to {n}")
         else:
             sampled = df[df[target_col]==c]
@@ -635,6 +738,9 @@ def main():
     try:
         # Load data
         df_raw = load_and_validate_data(INPUT_CSV, logger)
+        
+        # FIXED: Issue #28 - Remove constant/useless features EARLY
+        df_raw = remove_constant_useless_features(df_raw, logger)
         
         # Generate initial statistics
         initial_stats = generate_comprehensive_statistics(df_raw, "initial", logger)
@@ -684,6 +790,7 @@ def main():
         logger.info(f"📊 Final columns: {len(df_clean.columns)}")
         logger.info(f"📁 Output file: {OUTPUT_CSV}")
         logger.info(f"📁 Statistics: {stats_dir}")
+        logger.info(f"🔧 Random seed used: {RANDOM_SEED}")
         
         # Print summary to console
         print(f"\n✅ CLEANING COMPLETE!")
