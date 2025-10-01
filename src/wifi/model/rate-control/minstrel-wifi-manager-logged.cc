@@ -1093,8 +1093,7 @@ MinstrelWifiManagerLogged::GetStratifiedLogProbability(uint8_t rate, double snr,
         p *= 1.5;
     if (idx <= 1)
         p = 1.0;
-    if (idx >= 6 && snr > 25.0 && success)
-        p *= 0.5;
+    // REMOVED the penalty line entirely
     return std::min(1.0, p);
 }
 
