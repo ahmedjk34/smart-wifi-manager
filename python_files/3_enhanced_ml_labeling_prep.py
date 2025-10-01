@@ -360,75 +360,82 @@ def create_context_specific_labels(row: pd.Series, context: str, current_rate: i
     - Increased noise to ±1.0 with strategy biases (Issue #9)
     - No hardcoded rate 7 (Issue #10)
     """
-    # ONLY use PRE-DECISION features (Issue #33)
+    """
+    FIXED: More aggressive oracle that explores ALL rates based on SNR + success
+    """
     short_succ = safe_float(row.get('shortSuccRatio', 1))
-    med_succ = safe_float(row.get('medSuccRatio', 1))
     packet_loss = safe_float(row.get('packetLossRate', 0))
-    snr_var = safe_float(row.get('snrVariance', 0))
+    snr = safe_float(row.get('lastSnr', 20))  # ← USE SNR for oracle only!
     
-    # FIXED: Issue #9 - Strategy-specific noise with biases
-    cons_noise = np.random.uniform(ORACLE_NOISE['conservative_min'], ORACLE_NOISE['conservative_max'])
-    bal_noise = np.random.uniform(ORACLE_NOISE['balanced_min'], ORACLE_NOISE['balanced_max'])
-    agg_noise = np.random.uniform(ORACLE_NOISE['aggressive_min'], ORACLE_NOISE['aggressive_max'])
-    
-    # Base rate selection using ONLY success ratios and packet loss (NO SNR)
+    # Base rate selection using SNR + success (oracle can use SNR!)
     if context == "emergency_recovery":
-        # Emergency: Go to safest rates
         if short_succ < 0.25 or packet_loss > 0.6:
             base = 0
         elif short_succ < 0.6:
             base = 1
         else:
             base = 2
-            
+    
     elif context == "poor_unstable":
-        # Poor conditions: Conservative but allow some exploration
         if packet_loss > 0.4:
             base = max(0, current_rate - 2)
-        elif short_succ > 0.7 and med_succ > 0.65:
-            base = min(5, current_rate + 1)  # Limited increase
+        elif snr < 12:  # ← Use SNR for oracle
+            base = 2
+        elif short_succ > 0.7:
+            base = 4  # ← Allow exploration
         else:
-            base = 1
-            
+            base = 2
+    
     elif context == "marginal_conditions":
-        # Marginal: Use success patterns
-        if short_succ > 0.7 and packet_loss < 0.1:
+        if snr > 18 and short_succ > 0.8:
+            base = 5  # ← Push higher
+        elif snr > 15 and short_succ > 0.7:
             base = 4
         elif short_succ > 0.5:
             base = 3
         else:
             base = 2
-                
+    
     elif context in ["good_stable", "good_unstable"]:
-        # Good conditions: Balance based on success
-        if short_succ > 0.9:
-            base = min(5, current_rate + 1)
-        elif short_succ < 0.6:
-            base = max(0, current_rate - 1)
-        else:
-            base = current_rate
-                
-    elif context == "excellent_stable":
-        # Excellent: Allow high rates
-        if short_succ > 0.95 and packet_loss < 0.05:
-            base = 6  # Not hardcoded 7 anymore
-        else:
+        # FIXED: Use SNR to determine optimal rate
+        if snr > 26 and short_succ > 0.9:
+            base = 6
+        elif snr > 22 and short_succ > 0.85:
             base = 5
+        elif snr > 18 and short_succ > 0.75:
+            base = 4
+        elif snr > 15:
+            base = 3
+        else:
+            base = max(0, current_rate - 1)
+    
+    elif context == "excellent_stable":
+        # FIXED: Push for highest rates
+        if snr > 30 and short_succ > 0.95:
+            base = 7  # ← Actually use rate 7!
+        elif snr > 26 and short_succ > 0.9:
+            base = 6
+        elif snr > 22:
+            base = 5
+        else:
+            base = 4
     else:
         base = current_rate
     
-    # Apply strategy-specific noise (FIXED: Issue #9, #10)
+    # Apply strategy-specific noise
+    cons_noise = np.random.uniform(-1.2, 0.5)
+    bal_noise = np.random.uniform(-1.0, 1.0)
+    agg_noise = np.random.uniform(-0.5, 1.5)  # ← More aggressive!
+    
     cons = int(np.clip(base + cons_noise, 0, 7))
     bal = int(np.clip(base + bal_noise, 0, 7))
-    agg = int(np.clip(base + agg_noise, 0, 7))  # FIXED: Not hardcoded 7
+    agg = int(np.clip(base + agg_noise, 0, 7))
     
-    labels = {
+    return {
         "oracle_conservative": cons,
         "oracle_balanced": bal,
         "oracle_aggressive": agg,
     }
-    
-    return labels
 
 # ================== SYNTHETIC EDGE CASES (REDUCED) ==================
 def generate_critical_edge_cases(target_samples: int = 5000) -> pd.DataFrame:
