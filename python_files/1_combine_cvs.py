@@ -1,11 +1,14 @@
 """
-FIXED: Robust CSV Combiner with Strict Column Enforcement
-Handles malformed CSV rows by enforcing exactly 19 columns
-Prevents terminal spam and invalid CSV generation
+FIXED: Robust CSV Combiner with Rate-Balanced Sampling
+Handles malformed CSV rows AND balances samples across rate classes
+
+CRITICAL FIX: Implements stratified sampling per rate to prevent high-rate domination
+- Equal-time simulation generates more high-rate samples
+- This combiner ensures balanced training data (15K samples per rate)
 
 Author: ahmedjk34
-Date: 2025-10-01 16:06:18 UTC
-Version: 2.0 (EMERGENCY FIX)
+Date: 2025-10-01 18:24:49 UTC
+Version: 3.0 (SMART BALANCING)
 """
 
 import os
@@ -25,6 +28,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
 LOG_DIR = os.path.join(PARENT_DIR, "balanced-results")
 OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALL.csv")
+RANDOM_SEED = 42
 
 # FIXED: Define EXACT expected columns (19 fields)
 EXPECTED_COLUMNS = [
@@ -58,7 +62,7 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
             # Fix header
             fixed_header = ','.join(EXPECTED_COLUMNS) + '\n'
             
-            # Fix data lines - keep only first 19 comma-separated values
+            # Fix data lines
             fixed_lines = [fixed_header]
             for i, line in enumerate(lines[1:], start=2):
                 if not line.strip():
@@ -66,12 +70,9 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
                 
                 parts = line.strip().split(',')
                 
-                # Enforce exactly 19 columns
                 if len(parts) < 19:
-                    # Pad with empty strings
                     parts += [''] * (19 - len(parts))
                 elif len(parts) > 19:
-                    # Truncate to 19 (keep first 18 + last for scenario_file)
                     parts = parts[:18] + [parts[-1]]
                 
                 fixed_lines.append(','.join(parts) + '\n')
@@ -81,7 +82,6 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
             with open(temp_file, 'w') as f:
                 f.writelines(fixed_lines)
             
-            # Replace original
             os.replace(temp_file, filepath)
             print(f"  ✅ Fixed {os.path.basename(filepath)}")
         
@@ -101,18 +101,15 @@ def get_file_info(log_dir: str) -> List[tuple]:
         fpath = os.path.join(log_dir, fname)
         
         try:
-            # Validate and fix CSV structure first
             success, error = validate_and_fix_csv(fpath)
             if not success:
                 print(f"❌ {fname}: Validation failed - {error}")
                 continue
             
-            # Now safely read the file
             sample_df = pd.read_csv(fpath, nrows=5, low_memory=False, on_bad_lines='skip')
             
-            # Count total rows
             with open(fpath, 'r') as f:
-                row_count = sum(1 for line in f) - 1  # -1 for header
+                row_count = sum(1 for line in f) - 1
             
             file_info.append((fname, row_count, len(sample_df.columns), sample_df.columns.tolist()))
             print(f"✓ {fname}: {row_count:,} rows, {len(sample_df.columns)} cols")
@@ -123,32 +120,27 @@ def get_file_info(log_dir: str) -> List[tuple]:
     return file_info
 
 def clean_dataframe(df: pd.DataFrame, fname: str) -> pd.DataFrame:
-    """Clean and standardize dataframe with strict validation"""
+    """Clean and standardize dataframe"""
     if df.empty:
         return df
     
-    # FIXED: Ensure exactly 19 columns
+    # Ensure exactly 19 columns
     if len(df.columns) != 19:
-        print(f"  ⚠️ DataFrame has {len(df.columns)} columns, enforcing 19...")
-        
-        # If too many columns, keep first 19
         if len(df.columns) > 19:
             df = df.iloc[:, :19]
-        
-        # Force correct column names
         df.columns = EXPECTED_COLUMNS
     
-    # Set scenario_file column (last column)
+    # Set scenario_file
     df['scenario_file'] = fname.replace('_detailed.csv', '')
     
-    # Remove completely blank rows (excluding scenario_file)
-    cols_to_check = EXPECTED_COLUMNS[:-1]  # All except scenario_file
+    # Remove blank rows
+    cols_to_check = EXPECTED_COLUMNS[:-1]
     existing_cols = [col for col in cols_to_check if col in df.columns]
     
     if existing_cols:
         df = df.dropna(subset=existing_cols, how='all')
     
-    # FIXED: Convert numeric columns with error suppression
+    # Convert numeric columns
     numeric_cols = [
         'time', 'stationId', 'rateIdx', 'phyRate',
         'lastSnr', 'snrFast', 'snrSlow', 'snrTrendShort',
@@ -163,10 +155,99 @@ def clean_dataframe(df: pd.DataFrame, fname: str) -> pd.DataFrame:
     
     return df
 
-def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 10000):
-    """Process files in chunks to avoid memory issues"""
+def balance_samples_per_rate(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    CRITICAL: Balance samples across rate classes
     
-    # Get and validate file information
+    Even with equal simulation time, high rates generate more packets.
+    This ensures balanced training data across all 8 rate classes.
+    
+    Strategy:
+    - Identify minimum samples per rate
+    - Target: 3x minimum or 15K per rate (whichever is lower)
+    - Undersample over-represented classes
+    - Keep all samples from under-represented classes
+    """
+    print("\n🔧 Balancing samples across rate classes...")
+    print("="*60)
+    
+    if 'rateIdx' not in df.columns:
+        print("⚠️ rateIdx column not found - skipping balancing")
+        return df
+    
+    # Get current distribution
+    rate_counts = df['rateIdx'].value_counts().sort_index()
+    print("📊 Original distribution:")
+    for rate, count in rate_counts.items():
+        pct = (count / len(df)) * 100
+        print(f"   Rate {rate}: {count:,} samples ({pct:.1f}%)")
+    
+    # Determine target samples per rate
+    min_samples = rate_counts.min()
+    max_samples = rate_counts.max()
+    
+    # Target: 3x minimum, capped at 15K
+    target_per_rate = min(min_samples * 3, 15000)
+    
+    # If minimum is too low, use 10K as absolute minimum target
+    if target_per_rate < 5000:
+        target_per_rate = min(10000, max_samples)
+    
+    print(f"\n🎯 Target samples per rate: {target_per_rate:,}")
+    print(f"   Min in dataset: {min_samples:,}")
+    print(f"   Max in dataset: {max_samples:,}")
+    print(f"   Imbalance ratio: {max_samples/min_samples:.1f}x")
+    
+    # Stratified sampling per rate
+    balanced_dfs = []
+    
+    for rate in range(8):
+        rate_df = df[df['rateIdx'] == rate].copy()
+        original_count = len(rate_df)
+        
+        if original_count == 0:
+            print(f"⚠️ Rate {rate}: NO SAMPLES - skipping")
+            continue
+        
+        if original_count > target_per_rate:
+            # Undersample high-rate classes
+            rate_df = rate_df.sample(n=target_per_rate, random_state=RANDOM_SEED)
+            reduction_pct = ((original_count - target_per_rate) / original_count) * 100
+            print(f"   Rate {rate}: {original_count:,} → {target_per_rate:,} "
+                 f"({reduction_pct:.0f}% reduced)")
+        else:
+            # Keep all samples from low-rate classes
+            print(f"   Rate {rate}: {original_count:,} (kept all)")
+        
+        balanced_dfs.append(rate_df)
+    
+    # Combine balanced data
+    balanced_df = pd.concat(balanced_dfs, ignore_index=True)
+    
+    # Shuffle to prevent sequential bias
+    balanced_df = balanced_df.sample(frac=1.0, random_state=RANDOM_SEED).reset_index(drop=True)
+    
+    # Report final distribution
+    final_counts = balanced_df['rateIdx'].value_counts().sort_index()
+    final_imbalance = final_counts.max() / final_counts.min()
+    
+    print(f"\n✅ Balanced dataset created:")
+    print(f"   Total samples: {len(df):,} → {len(balanced_df):,} "
+         f"({len(balanced_df)/len(df)*100:.1f}% retained)")
+    print(f"   Imbalance ratio: {max_samples/min_samples:.1f}x → {final_imbalance:.1f}x")
+    print(f"\n📊 Final distribution:")
+    
+    for rate, count in final_counts.items():
+        pct = (count / len(balanced_df)) * 100
+        print(f"   Rate {rate}: {count:,} samples ({pct:.1f}%)")
+    
+    print("="*60)
+    
+    return balanced_df
+
+def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 10000):
+    """Process files in chunks (for very large datasets)"""
+    
     file_info = get_file_info(log_dir)
     
     if not file_info:
@@ -176,10 +257,8 @@ def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 100
     total_rows = sum(info[1] for info in file_info)
     print(f"\n📊 Total estimated rows: {total_rows:,}")
     
-    # Sort files by size (process smaller ones first)
     file_info.sort(key=lambda x: x[1])
     
-    # Initialize output
     header_written = False
     processed_rows = 0
     
@@ -190,9 +269,9 @@ def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 100
         print(f"Processing {fname} ({row_count:,} rows)...")
         
         try:
-            # Process large files in chunks
             if row_count > chunk_size:
-                chunk_iter = pd.read_csv(fpath, chunksize=chunk_size, low_memory=False, on_bad_lines='skip')
+                chunk_iter = pd.read_csv(fpath, chunksize=chunk_size, 
+                                        low_memory=False, on_bad_lines='skip')
                 
                 for i, chunk in enumerate(chunk_iter):
                     chunk = clean_dataframe(chunk, fname)
@@ -200,7 +279,6 @@ def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 100
                     if chunk.empty:
                         continue
                     
-                    # Write to output
                     write_mode = 'w' if not header_written else 'a'
                     chunk.to_csv(output_csv, mode=write_mode, 
                                 index=False, header=not header_written)
@@ -212,7 +290,6 @@ def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 100
                     del chunk
                     gc.collect()
             else:
-                # Process smaller files normally
                 df = pd.read_csv(fpath, low_memory=False, on_bad_lines='skip')
                 df = clean_dataframe(df, fname)
                 
@@ -231,10 +308,21 @@ def process_files_in_chunks(log_dir: str, output_csv: str, chunk_size: int = 100
             print(f"❌ Error processing {fname}: {e}")
             continue
     
-    print(f"\n✅ Successfully combined {processed_rows:,} rows into {output_csv}")
+    print(f"\n✅ Combined {processed_rows:,} rows")
+    
+    # CRITICAL: Now balance the combined file!
+    print("\n🔄 Loading combined file for balancing...")
+    combined_df = pd.read_csv(output_csv, low_memory=False)
+    
+    balanced_df = balance_samples_per_rate(combined_df)
+    
+    balanced_df.to_csv(output_csv, index=False)
+    print(f"\n✅ Saved balanced data: {len(balanced_df):,} rows → {output_csv}")
 
-def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0.1, max_samples_per_file: int = 10000):
-    """Process with random sampling to reduce data size"""
+def process_with_smart_balancing(log_dir: str, output_csv: str):
+    """
+    RECOMMENDED: Load all files, then apply smart rate balancing
+    """
     
     file_info = get_file_info(log_dir)
     
@@ -242,33 +330,39 @@ def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0
         print("❌ No valid files to process!")
         return
     
-    print(f"\n📊 SAMPLING MODE (10% of data, max {max_samples_per_file:,} rows per file)\n")
+    total_rows = sum(info[1] for info in file_info)
+    estimated_memory_mb = (total_rows * 19 * 8) / (1024 * 1024) * 3  # 3x overhead
+    
+    available_memory_mb = psutil.virtual_memory().available / (1024 * 1024)
+    
+    print(f"\n📊 Memory estimation:")
+    print(f"   Total rows: {total_rows:,}")
+    print(f"   Estimated RAM needed: {estimated_memory_mb:.0f} MB")
+    print(f"   Available RAM: {available_memory_mb:.0f} MB")
+    
+    # Safety check
+    if estimated_memory_mb > available_memory_mb * 0.6:
+        print(f"\n⚠️ WARNING: Estimated memory usage too high!")
+        print(f"   Switching to chunk processing (Option 1)...")
+        process_files_in_chunks(log_dir, output_csv, chunk_size=5000)
+        return
+    
+    print(f"\n📊 SMART BALANCING MODE (equal samples per rate, FULL DATASET)\n")
     
     dfs = []
     total_original = 0
-    total_sampled = 0
     
     for fname, row_count, col_count, file_cols in file_info:
         fpath = os.path.join(log_dir, fname)
         total_original += row_count
         
         try:
-            if row_count > 5000:
-                # Sample 10% of large files
-                sample_size = min(int(row_count * sample_ratio), max_samples_per_file)
-                df = pd.read_csv(fpath, low_memory=False, on_bad_lines='skip')
-                df = df.sample(n=min(sample_size, len(df)), random_state=42)
-                print(f"Sampled {len(df):,} rows from {fname} (10% of {row_count:,})")
-            else:
-                # Load all for small files
-                df = pd.read_csv(fpath, low_memory=False, on_bad_lines='skip')
-                print(f"Loaded all {len(df):,} rows from {fname}")
-            
+            df = pd.read_csv(fpath, low_memory=False, on_bad_lines='skip')
             df = clean_dataframe(df, fname)
             
             if not df.empty:
                 dfs.append(df)
-                total_sampled += len(df)
+                print(f"Loaded {len(df):,} rows from {fname}")
             
         except Exception as e:
             print(f"❌ Error processing {fname}: {e}")
@@ -277,20 +371,25 @@ def process_with_sampling(log_dir: str, output_csv: str, sample_ratio: float = 0
         print(f"\n🔄 Combining {len(dfs)} dataframes...")
         combined_df = pd.concat(dfs, ignore_index=True, sort=False)
         
-        print(f"✅ Saved sampled data: {len(combined_df):,} rows")
-        print(f"📊 Original: {total_original:,} → Sampled: {total_sampled:,} ({total_sampled/total_original*100:.1f}%)")
+        print(f"\n📊 Combined dataset: {len(combined_df):,} rows")
         
-        combined_df.to_csv(output_csv, index=False)
-        print(f"✅ Output written to: {os.path.abspath(output_csv)}")
+        # CRITICAL: Apply smart balancing
+        balanced_df = balance_samples_per_rate(combined_df)
+        
+        balanced_df.to_csv(output_csv, index=False)
+        print(f"\n✅ Output written to: {os.path.abspath(output_csv)}")
+        print(f"📊 Original: {total_original:,} → Final: {len(balanced_df):,} "
+              f"({len(balanced_df)/total_original*100:.1f}%)")
     else:
         print("❌ No data to save!")
 
 # Main execution
 if __name__ == "__main__":
     print("="*60)
-    print("FIXED CSV Combiner - Column Validation & Error Handling")
+    print("FIXED CSV Combiner - Smart Rate Balancing")
     print(f"Author: ahmedjk34")
-    print(f"Date: 2025-10-01 16:06:18 UTC")
+    print(f"Date: 2025-10-01 18:24:49 UTC")
+    print(f"Version: 3.0 (SMART BALANCING)")
     print("="*60 + "\n")
     
     if not os.path.exists(LOG_DIR):
@@ -302,8 +401,8 @@ if __name__ == "__main__":
         print(f"🗑️  Removed existing output file\n")
     
     print("Choose processing method:")
-    print("1. Chunk processing (memory efficient)")
-    print("2. Sampling (10% of data, max 10K rows per file)")
+    print("1. Chunk processing + smart balancing (memory efficient)")
+    print("2. Smart balancing (RECOMMENDED - load all → balance by rate)")
     print("3. File info only (validation check)")
     
     choice = input("\nEnter choice (1-3): ").strip()
@@ -311,7 +410,12 @@ if __name__ == "__main__":
     if choice == "1":
         process_files_in_chunks(LOG_DIR, OUTPUT_CSV, chunk_size=5000)
     elif choice == "2":
-        process_with_sampling(LOG_DIR, OUTPUT_CSV, sample_ratio=0.1, max_samples_per_file=10000)
+        try:
+            import psutil
+            process_with_smart_balancing(LOG_DIR, OUTPUT_CSV)
+        except ImportError:
+            print("⚠️ psutil not installed, using regular load all...")
+            process_with_smart_balancing(LOG_DIR, OUTPUT_CSV)
     elif choice == "3":
         get_file_info(LOG_DIR)
     else:
