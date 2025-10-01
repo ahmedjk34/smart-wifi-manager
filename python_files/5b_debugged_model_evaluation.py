@@ -15,6 +15,7 @@ Date: 2025-10-01
 Pipeline Stage: Step 5 - Enhanced Debugging Evaluation (FIXED)
 """
 
+from typing import Dict
 import pandas as pd
 import numpy as np
 import joblib
