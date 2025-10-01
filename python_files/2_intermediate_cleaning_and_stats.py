@@ -56,7 +56,7 @@ import json
 # ================== CONFIGURATION ==================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(BASE_DIR)
-INPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALLB.csv")
+INPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-BALANCED.csv")
 OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-ml-cleaned.csv")
 STATS_DIR = os.path.join(BASE_DIR, "cleaning_stats")
 LOG_FILE = os.path.join(BASE_DIR, "intermediate_cleaning.log")
