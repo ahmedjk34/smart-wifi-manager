@@ -49,8 +49,12 @@ HYPERPARAMS_FILE = BASE_DIR / "hyperparameter_results" / "hyperparameter_tuning_
 OUTPUT_DIR = BASE_DIR / "evaluation_results"
 
 # Target labels to evaluate
-TARGET_LABELS = ["oracle_conservative", "oracle_balanced", "oracle_aggressive"]
-
+TARGET_LABELS = [
+    "rateIdx",                    # Natural ground truth comparison
+    "oracle_conservative",
+    "oracle_balanced",
+    "oracle_aggressive"
+]
 # FIXED: Issue #18 - Lowered correlation threshold
 CORRELATION_THRESHOLD_MODERATE = 0.4
 CORRELATION_THRESHOLD_HIGH = 0.7
