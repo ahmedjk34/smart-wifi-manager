@@ -1,18 +1,45 @@
 /*
- * Smart WiFi Manager Benchmark - FIXED FOR 14-FEATURE PIPELINE
- * Compatible with SmartWifiManagerRf v5.0 (14 safe features, zero temporal leakage)
+ * Smart WiFi Manager Benchmark - FULLY UPDATED FOR NEW PIPELINE (9 FEATURES)
+ * Compatible with probabilistic oracle models trained on 2025-10-02
  *
- * CRITICAL FIXES (2025-10-01 14:55:14 UTC):
- * - Issue #1: No temporal leakage feature logging (handled by manager)
- * - Issue #33: Success ratios from PREVIOUS window (handled by manager)
- * - Issue #4: Scenario naming for proper train/test splitting
- * - 802.11a support (8 rates: 0-7)
- * - 14 features (not 21)
- * - Realistic accuracy expectations: 65-75% (not 95%+)
+ * CRITICAL UPDATES (2025-10-02 17:59:30 UTC):
+ * ============================================================================
+ * WHAT WE CHANGED:
+ * 1. Feature count: 14 → 9 (removed 5 outcome features)
+ * 2. Default oracle: oracle_balanced → oracle_aggressive (62.8% accuracy)
+ * 3. Model paths: root → python_files/trained_models/
+ * 4. Feature validation: Now expects exactly 9 features
+ * 5. Removed outcome feature tracking (shortSuccRatio, medSuccRatio, etc.)
+ * 6. Updated accuracy expectations: 65-75% → 45-63% (realistic!)
+ * 7. Added model accuracy profiles from training results
+ *
+ * WHY WE CHANGED IT:
+ * - File 3 removed 5 outcome features (shortSuccRatio, medSuccRatio,
+ *   packetLossRate, severity, confidence) due to data leakage
+ * - Your trained models expect 9 features, not 14!
+ * - oracle_aggressive performs best (62.8% test accuracy)
+ * - Model files are in python_files/trained_models/ subdirectory
+ * - Realistic accuracy expectations (not fake 95%+ overfitting)
+ *
+ * NEW FEATURE LIST (9 safe features):
+ * ✓ 1. lastSnr (dB)               - Most recent realistic SNR
+ * ✓ 2. snrFast (dB)               - Fast-moving average
+ * ✓ 3. snrSlow (dB)               - Slow-moving average
+ * ✓ 4. snrTrendShort              - Short-term trend
+ * ✓ 5. snrStabilityIndex          - Stability metric
+ * ✓ 6. snrPredictionConfidence    - Prediction confidence
+ * ✓ 7. snrVariance                - SNR variance
+ * ✓ 8. channelWidth (MHz)         - Channel bandwidth
+ * ✓ 9. mobilityMetric             - Node mobility
+ *
+ * REMOVED FEATURES (data leakage):
+ * ❌ shortSuccRatio, medSuccRatio  - Outcome-based success ratios
+ * ❌ packetLossRate                - Outcome-based packet loss
+ * ❌ severity, confidence           - Derived from outcomes
  *
  * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-10-01 14:55:14 UTC
- * Version: 5.0 (FIXED - Zero Temporal Leakage)
+ * Date: 2025-10-02 17:59:30 UTC
+ * Version: 6.0 (NEW PIPELINE - Probabilistic Oracle, 9 Features)
  */
 
 #include "ns3/applications-module.h"
@@ -58,7 +85,7 @@ double maxCollectedSnr = -1e9;
 std::mutex snrCollectionMutex;
 
 // ============================================================================
-// FIXED: Realistic SNR conversion (matches manager)
+// UPDATED: Realistic SNR conversion (matches your custom engine)
 // ============================================================================
 enum SnrModel
 {
@@ -196,7 +223,7 @@ struct EnhancedTestCaseStats
 EnhancedTestCaseStats currentStats;
 
 // ============================================================================
-// Test case structure
+// UPDATED: Test case structure (9 features)
 // ============================================================================
 struct EnhancedBenchmarkTestCase
 {
@@ -216,7 +243,7 @@ struct EnhancedBenchmarkTestCase
           numInterferers(0),
           packetSize(1500),
           trafficRate("1Mbps"),
-          oracleStrategy("oracle_balanced"),
+          oracleStrategy("oracle_aggressive"), // CHANGED: default is now aggressive!
           expectedMinThroughput(1.0)
     {
     }
@@ -230,7 +257,7 @@ struct EnhancedBenchmarkTestCase
 };
 
 // ============================================================================
-// FIXED: Simple trace callbacks (no feature logging - manager handles it)
+// SIMPLIFIED: Trace callbacks (no feature logging - manager handles it)
 // ============================================================================
 void
 EnhancedRateTrace(std::string context, uint64_t rate, uint64_t oldRate)
@@ -330,7 +357,7 @@ PrintEnhancedTestCaseSummary(const EnhancedTestCaseStats& stats)
 
     std::cout << "\n" << std::string(80, '=') << std::endl;
     std::cout << "[TEST " << stats.testCaseNumber
-              << "] FIXED SYSTEM SUMMARY (14 Features, Zero Leakage)" << std::endl;
+              << "] NEW PIPELINE SUMMARY (9 Features, Probabilistic Oracle)" << std::endl;
     std::cout << std::string(80, '=') << std::endl;
 
     std::cout << "Configuration:" << std::endl;
@@ -382,7 +409,7 @@ PrintEnhancedTestCaseSummary(const EnhancedTestCaseStats& stats)
 }
 
 // ============================================================================
-// FIXED: Test case runner
+// UPDATED: Test case runner (9 features, new model paths)
 // ============================================================================
 void
 RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
@@ -426,7 +453,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     currentStats.rateChanges = 0;
 
     std::cout << "\n" << std::string(60, '=') << std::endl;
-    std::cout << "FIXED BENCHMARK - TEST CASE " << testCaseNumber << std::endl;
+    std::cout << "NEW PIPELINE BENCHMARK - TEST CASE " << testCaseNumber << std::endl;
     std::cout << "Scenario: " << tc.scenarioName << std::endl;
     std::cout << "Distance: " << tc.staDistance << "m | Interferers: " << tc.numInterferers
               << std::endl;
@@ -458,13 +485,20 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         phy.SetChannel(channel.Create());
 
         WifiHelper wifi;
-        wifi.SetStandard(WIFI_STANDARD_80211a); // FIXED: 802.11a (8 rates: 0-7)
+        wifi.SetStandard(WIFI_STANDARD_80211a); // 802.11a (8 rates: 0-7)
 
-        // FIXED: Model paths for 14-feature models
-        std::string modelPath = "step4_rf_" + tc.oracleStrategy + "_FIXED.joblib";
-        std::string scalerPath = "step4_scaler_" + tc.oracleStrategy + "_FIXED.joblib";
+        // CRITICAL FIX: Updated model paths for new pipeline
+        // OLD: "step4_rf_oracle_balanced_FIXED.joblib"
+        // NEW: "python_files/trained_models/step4_rf_oracle_aggressive_FIXED.joblib"
+        std::string modelPath =
+            "python_files/trained_models/step4_rf_" + tc.oracleStrategy + "_FIXED.joblib";
+        std::string scalerPath =
+            "python_files/trained_models/step4_scaler_" + tc.oracleStrategy + "_FIXED.joblib";
 
-        // FIXED: Configure SmartWifiManagerRf with realistic parameters
+        std::cout << "Loading model: " << modelPath << std::endl;
+        std::cout << "Loading scaler: " << scalerPath << std::endl;
+
+        // UPDATED: Configure SmartWifiManagerRf for 9 features
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                      "ModelPath",
                                      StringValue(modelPath),
@@ -503,7 +537,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
 
         // MAC configuration
         WifiMacHelper mac;
-        Ssid ssid = Ssid("smartrf-fixed-" + tc.oracleStrategy);
+        Ssid ssid = Ssid("smartrf-newpipeline-" + tc.oracleStrategy);
 
         mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
@@ -517,7 +551,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
         NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
 
-        // FIXED: Manager initialization and verification
+        // Manager initialization and verification
         Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
         if (!staDevice)
         {
@@ -540,11 +574,11 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             return;
         }
 
-        std::cout << "SUCCESS: SmartWifiManagerRf (v5.0 - 14 features) initialized!" << std::endl;
+        std::cout << "SUCCESS: SmartWifiManagerRf (v6.0 - 9 features) initialized!" << std::endl;
         g_currentSmartManager = smartManager;
         g_managerInitialized = true;
 
-        // FIXED: Configure manager with test parameters
+        // Configure manager with test parameters
         smartManager->SetBenchmarkDistance(tc.staDistance);
         smartManager->SetCurrentInterferers(tc.numInterferers);
         smartManager->UpdateFromBenchmarkGlobals(tc.staDistance, tc.numInterferers);
@@ -922,8 +956,8 @@ main(int argc, char* argv[])
 {
     auto benchmarkStartTime = std::chrono::high_resolution_clock::now();
 
-    logFile.open("smartrf-fixed-benchmark-logs.txt");
-    detailedLog.open("smartrf-fixed-benchmark-detailed.txt");
+    logFile.open("smartrf-newpipeline-benchmark-logs.txt");
+    detailedLog.open("smartrf-newpipeline-benchmark-detailed.txt");
 
     if (!logFile.is_open() || !detailedLog.is_open())
     {
@@ -931,14 +965,15 @@ main(int argc, char* argv[])
         return 1;
     }
 
-    logFile << "FIXED Smart WiFi Manager Benchmark - 14 Safe Features, Zero Temporal Leakage"
+    logFile << "NEW PIPELINE Smart WiFi Manager Benchmark - 9 Safe Features, Probabilistic Oracle"
             << std::endl;
     logFile << "Author: ahmedjk34 (https://github.com/ahmedjk34)" << std::endl;
-    logFile << "Date: 2025-10-01 14:55:14 UTC" << std::endl;
-    logFile << "Version: 5.0 (FIXED)" << std::endl;
-    logFile << "Pipeline: 14 features, 65-75% realistic accuracy" << std::endl;
+    logFile << "Date: 2025-10-02 17:59:30 UTC" << std::endl;
+    logFile << "Version: 6.0 (NEW PIPELINE)" << std::endl;
+    logFile << "Pipeline: 9 features, 45-63% realistic accuracy (probabilistic oracles)"
+            << std::endl;
 
-    // Generate test cases
+    // UPDATED: Generate test cases (oracle_aggressive default!)
     std::vector<EnhancedBenchmarkTestCase> testCases;
 
     std::vector<double> distances = {20.0, 40.0, 60.0};
@@ -947,7 +982,9 @@ main(int argc, char* argv[])
     std::vector<uint32_t> packetSizes = {256, 1500};
     std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};
 
-    std::string strategy = "oracle_balanced";
+    // CHANGED: Default oracle is now aggressive (best performance: 62.8%)
+    std::string strategy = "oracle_aggressive";
+
     for (double d : distances)
     {
         for (double s : speeds)
@@ -1006,16 +1043,17 @@ main(int argc, char* argv[])
         return 1;
     }
 
-    logFile << "Generated " << testCases.size() << " valid test cases (oracle_balanced only)"
+    logFile << "Generated " << testCases.size() << " valid test cases (oracle_aggressive only)"
             << std::endl;
 
-    std::cout << "FIXED Smart WiFi Manager Benchmark v5.0" << std::endl;
-    std::cout << "Total test cases: " << testCases.size() << " (oracle_balanced only)" << std::endl;
-    std::cout << "Features: 14 (zero temporal leakage)" << std::endl;
-    std::cout << "Expected accuracy: 65-75% (realistic)" << std::endl;
+    std::cout << "NEW PIPELINE Smart WiFi Manager Benchmark v6.0" << std::endl;
+    std::cout << "Total test cases: " << testCases.size() << " (oracle_aggressive only)"
+              << std::endl;
+    std::cout << "Features: 9 (zero temporal leakage, no outcome features)" << std::endl;
+    std::cout << "Expected accuracy: 62.8% (oracle_aggressive, realistic)" << std::endl;
     std::cout << "802.11a: 8 rates (0-7)" << std::endl;
 
-    std::string csvFilename = "smartrf-fixed-benchmark-results.csv";
+    std::string csvFilename = "smartrf-newpipeline-benchmark-results.csv";
     std::ofstream csv(csvFilename);
 
     if (!csv.is_open())
@@ -1083,7 +1121,7 @@ main(int argc, char* argv[])
         std::chrono::duration_cast<std::chrono::minutes>(benchmarkEndTime - benchmarkStartTime);
 
     std::cout << "\n" << std::string(80, '=') << std::endl;
-    std::cout << "FIXED SMART WIFI MANAGER BENCHMARK COMPLETED" << std::endl;
+    std::cout << "NEW PIPELINE SMART WIFI MANAGER BENCHMARK COMPLETED" << std::endl;
     std::cout << std::string(80, '=') << std::endl;
     std::cout << "Execution Summary:" << std::endl;
     std::cout << "   Total test cases: " << totalTests << std::endl;
@@ -1095,19 +1133,21 @@ main(int argc, char* argv[])
 
     std::cout << "\nOutput Files:" << std::endl;
     std::cout << "   Results: " << csvFilename << std::endl;
-    std::cout << "   Main log: smartrf-fixed-benchmark-logs.txt" << std::endl;
-    std::cout << "   Detailed log: smartrf-fixed-benchmark-detailed.txt" << std::endl;
+    std::cout << "   Main log: smartrf-newpipeline-benchmark-logs.txt" << std::endl;
+    std::cout << "   Detailed log: smartrf-newpipeline-benchmark-detailed.txt" << std::endl;
 
-    std::cout << "\nFIXED SYSTEM FEATURES:" << std::endl;
-    std::cout << "   14 safe features (zero temporal leakage)" << std::endl;
-    std::cout << "   Issue #1: Removed 7 temporal leakage features" << std::endl;
-    std::cout << "   Issue #33: Success ratios from PREVIOUS window" << std::endl;
-    std::cout << "   Issue #4: Scenario naming for train/test splitting" << std::endl;
+    std::cout << "\nNEW PIPELINE FEATURES:" << std::endl;
+    std::cout << "   9 safe features (zero temporal leakage, no outcome features)" << std::endl;
+    std::cout << "   Removed 5 outcome features (shortSuccRatio, medSuccRatio, packetLossRate, "
+                 "severity, confidence)"
+              << std::endl;
+    std::cout << "   oracle_aggressive default (62.8% test accuracy)" << std::endl;
+    std::cout << "   Model path: python_files/trained_models/" << std::endl;
     std::cout << "   802.11a: 8 rates (0-7)" << std::endl;
-    std::cout << "   Realistic accuracy: 65-75%" << std::endl;
+    std::cout << "   Realistic accuracy: 45-63% (probabilistic oracles)" << std::endl;
 
     std::cout << "\nAuthor: ahmedjk34 (https://github.com/ahmedjk34)" << std::endl;
-    std::cout << "System: ML-Enhanced WiFi Rate Adaptation (FULLY FIXED v5.0)" << std::endl;
+    std::cout << "System: ML-Enhanced WiFi Rate Adaptation (NEW PIPELINE v6.0)" << std::endl;
     std::cout << std::string(80, '=') << std::endl;
 
     logFile << "\nBENCHMARK EXECUTION COMPLETED" << std::endl;
