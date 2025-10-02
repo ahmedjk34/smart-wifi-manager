@@ -107,34 +107,15 @@ DecisionCountController::CheckTerminationCondition()
 {
     double currentTime = Simulator::Now().GetSeconds();
 
-    // Don't terminate too early - ensure minimum sampling time
-    if (currentTime < m_minSamplingTime)
+    // FIXED: Use ONLY time-based termination (ignore packet counts)
+    // This ensures all scenarios run for same duration regardless of rate
+
+    if (currentTime >= (m_maxSimulationTime - 1.0)) // Stop 1 second before max
     {
-        return;
-    }
+        NS_LOG_INFO("Time limit approaching at " << currentTime << "s. Collected "
+                                                 << m_adaptationEvents << " adaptations.");
 
-    // More lenient termination conditions
-    bool targetReached = (m_adaptationEvents >= m_targetSuccesses * 0.7); // 70% of target
-
-    bool sufficientSampling =
-        (currentTime > 20.0) && // At least 20 seconds
-        (m_adaptationEvents >= std::max(static_cast<uint32_t>(10),
-                                        m_targetSuccesses / 4)); // At least 10 or 25% of target
-
-    // Emergency termination for very low activity
-    bool emergencyStop = (currentTime > 60.0) &&    // After 1 minute
-                         (m_adaptationEvents >= 5); // At least 5 events
-
-    if (targetReached || sufficientSampling || emergencyStop)
-    {
-        NS_LOG_INFO("Termination condition met at time "
-                    << currentTime << ". Reason: "
-                    << (targetReached
-                            ? "target_reached"
-                            : (sufficientSampling ? "sufficient_sampling" : "emergency_stop"))
-                    << ". Adaptations: " << m_adaptationEvents << "/" << m_targetSuccesses);
-
-        // Cancel any pending periodic events
+        // Cancel pending events
         if (m_periodicEventId.IsRunning())
         {
             Simulator::Cancel(m_periodicEventId);
