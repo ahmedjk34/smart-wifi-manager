@@ -1360,10 +1360,57 @@ SmartWifiManagerRf::GetSnrPredictionConfidence(WifiRemoteStation* st) const
 double
 SmartWifiManagerRf::GetMobilityMetric(WifiRemoteStation* st) const
 {
+    NS_LOG_FUNCTION(this << st);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
-    double snrMobility = std::tanh(station->snrVariance / 10.0);
-    station->mobilityMetric = snrMobility;
-    return std::max(0.0, std::min(50.0, station->mobilityMetric));
+
+    // FIX #1: Get actual node speed from MobilityModel (NOT SNR variance!)
+    // Get the node associated with this station
+    Ptr<WifiPhy> phy = GetPhy();
+    if (phy == nullptr)
+    {
+        NS_LOG_WARN("No PHY available, using fallback mobility metric");
+        station->mobilityMetric = 0.0;
+        return 0.0;
+    }
+
+    Ptr<NetDevice> device = phy->GetDevice();
+    if (device == nullptr)
+    {
+        NS_LOG_WARN("No device available, using fallback mobility metric");
+        station->mobilityMetric = 0.0;
+        return 0.0;
+    }
+
+    Ptr<Node> node = device->GetNode();
+    if (node == nullptr)
+    {
+        NS_LOG_WARN("No node available, using fallback mobility metric");
+        station->mobilityMetric = 0.0;
+        return 0.0;
+    }
+
+    // Get MobilityModel from node
+    Ptr<MobilityModel> mobility = node->GetObject<MobilityModel>();
+    if (mobility == nullptr)
+    {
+        NS_LOG_DEBUG("No MobilityModel found, assuming stationary (speed = 0)");
+        station->mobilityMetric = 0.0;
+        return 0.0;
+    }
+
+    // Calculate actual speed from velocity vector
+    Vector velocity = mobility->GetVelocity();
+    double speed =
+        std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+
+    // Clamp speed to reasonable range (0-50 m/s)
+    speed = std::max(0.0, std::min(50.0, speed));
+
+    station->mobilityMetric = speed;
+
+    NS_LOG_DEBUG("Mobility metric calculated: speed=" << speed << " m/s");
+
+    return speed;
 }
 
 void
