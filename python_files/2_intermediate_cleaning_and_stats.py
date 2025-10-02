@@ -2,7 +2,25 @@
 Intermediate ML Data Cleaning and Statistical Analysis Pipeline
 Processes smart-v3-logged-ALL.csv with advanced cleaning, filtering, and comprehensive statistics.
 
-CRITICAL: This file does NOT balance classes - that happens in File 1 (CSV combiner)
+CRITICAL FIXES (2025-10-02 14:26:45 UTC):
+- Issue C6: Updated imbalance thresholds to match File 1b output (20x from POWER=0.5)
+- Issue M5: Corrected validation expectations (File 1b DOES balance, this is correct)
+- Issue C3: NOW REMOVES OUTCOME FEATURES (shortSuccRatio, packetLossRate, etc.)
+
+WHAT WAS WRONG BEFORE:
+❌ File 2 expected 5-20x imbalance (natural WiFi)
+❌ But File 1b creates 20x imbalance (POWER=0.5 balancing)
+❌ This caused FALSE WARNING: "Distribution looks artificially balanced!"
+❌ Outcome features (shortSuccRatio, packetLossRate) were NOT removed in File 2
+
+WHAT'S FIXED NOW:
+✅ File 2 expects 15-30x imbalance (matches File 1b POWER=0.5 output)
+✅ No false warnings about "artificial balancing"
+✅ Clear documentation: File 1b DOES balance (this is CORRECT behavior)
+✅ File 2 only does statistical cleaning (no class balancing)
+✅ REMOVES OUTCOME FEATURES (5 features: shortSuccRatio, medSuccRatio, packetLossRate, severity, confidence)
+
+CRITICAL: This file does NOT balance classes - that happens in File 1b (CSV combiner)
           Balancing here would destroy real WiFi traffic characteristics!
 
 Features:
@@ -10,16 +28,17 @@ Features:
 - Extensive outlier detection and filtering
 - Data type enforcement and validation
 - Comprehensive statistical analysis and visualization
-- NO CLASS BALANCING (maintains real WiFi distribution)
+- NO CLASS BALANCING (maintains File 1b distribution)
 - Detailed logging and reporting
 - Export cleaned data and statistics
 - FIXED: Early removal of constant/useless features (Issue #28)
 - FIXED: Reproducible random seed (Issue #14)
-- FIXED: No class balancing in File 2 (Issue #TBD)
+- FIXED: Correct imbalance expectations (Issue C6)
+- FIXED: Removes outcome features (Issue C3)
 
 Author: ahmedjk34
-Date: 2025-09-22
-FIXED: 2025-10-01 (Issues #14, #28, no-balancing)
+Date: 2025-10-02 14:26:45 UTC (FULLY FIXED)
+FIXED: Issues #14, #28, C3, C6, M5
 """
 
 import warnings
@@ -68,8 +87,7 @@ np.random.seed(RANDOM_SEED)
 # WiFi-specific constraints
 VALID_RATE_INDICES = [0, 1, 2, 3, 4, 5, 6, 7]
 VALID_PHY_RATES = [
-    1000000, 2000000, 5500000, 6000000, 9000000, 11000000, 12000000, 18000000,
-    24000000, 36000000, 48000000, 54000000  # Complete 802.11g support
+    6000000, 9000000, 12000000, 18000000, 24000000, 36000000, 48000000, 54000000  # 802.11a rates
 ]
 VALID_CHANNEL_WIDTHS = [20, 40, 80, 160]
 
@@ -82,35 +100,61 @@ CONSTANT_USELESS_FEATURES = [
     'retryCount'
 ]
 
-# Data validation ranges
+# 🔧 FIXED: Issue C3 - Outcome features to remove (NEW!)
+# These are results of the CURRENT rate choice, not inputs for rate selection
+OUTCOME_FEATURES_TO_REMOVE = [
+    'shortSuccRatio',   # Success rate of CURRENT rate (outcome)
+    'medSuccRatio',     # Medium-term success rate (outcome)
+    'packetLossRate',   # Loss rate of CURRENT rate (outcome)
+    'severity',         # Derived from packetLossRate (outcome)
+    'confidence',       # Derived from shortSuccRatio (outcome)
+]
+
+# Temporal leakage features (should already be removed by File 1b, but check)
+TEMPORAL_LEAKAGE_FEATURES = [
+    'consecSuccess',
+    'consecFailure',
+    'retrySuccessRatio',
+    'timeSinceLastRateChange',
+    'rateStabilityScore',
+    'recentRateChanges',
+    'packetSuccess'
+]
+
+# Known leaky features (should already be removed)
+KNOWN_LEAKY_FEATURES = [
+    'phyRate',
+    'optimalRateDistance',
+    'recentThroughputTrend',
+    'conservativeFactor',
+    'aggressiveFactor',
+    'recommendedSafeRate'
+]
+
+# Data validation ranges (only for features that won't be removed)
 VALIDATION_RANGES = {
-    'lastSnr': (-10, 50),  # Expanded to allow slightly negative SNR
+    'lastSnr': (-10, 50),
     'snrFast': (-10, 50),
     'snrSlow': (-10, 50),
     'snrTrendShort': (-20, 20),
     'snrStabilityIndex': (0, 50),
     'snrPredictionConfidence': (0, 1),
-    'shortSuccRatio': (0, 1),
-    'medSuccRatio': (0, 1),
-    'consecSuccess': (0, 10000),
-    'consecFailure': (0, 100),
-    'recentThroughputTrend': (0, 10),
-    'packetLossRate': (0, 1),
-    'retrySuccessRatio': (0, 100),
-    'recentRateChanges': (0, 100),
-    'timeSinceLastRateChange': (0, 10000),
-    'rateStabilityScore': (0, 1),
-    'optimalRateDistance': (0, 10),
-    'severity': (0, 1),
-    'confidence': (0, 1),
     'channelWidth': (10, 160),
     'mobilityMetric': (0, 1000),
     'snrVariance': (0, 1000),
-    'packetSuccess': (0, 1),
 }
 
-# CRITICAL: Class balancing DISABLED - happens in File 1 instead!
+# CRITICAL: Class balancing DISABLED - happens in File 1b instead!
 ENABLE_CLASS_BALANCING = False
+
+# 🔧 FIXED: Issue C6 - Updated imbalance thresholds to match File 1b output
+# File 1b with POWER=0.5 creates ~20x imbalance (down from ~100x natural)
+IMBALANCE_THRESHOLDS = {
+    'too_balanced': 10,      # <10x = suspiciously flat (artificial)
+    'expected_min': 15,      # 15x = lower bound of File 1b output
+    'expected_max': 30,      # 30x = upper bound of File 1b output
+    'too_imbalanced': 50     # >50x = File 1b didn't work properly
+}
 
 # ================== SETUP ==================
 def setup_logging():
@@ -126,17 +170,26 @@ def setup_logging():
     )
     logger = logging.getLogger(__name__)
     logger.info("="*80)
-    logger.info("INTERMEDIATE ML DATA CLEANING - STATISTICAL CLEANING ONLY")
+    logger.info("INTERMEDIATE ML DATA CLEANING - FULLY FIXED (REMOVES OUTCOME FEATURES)")
     logger.info("="*80)
     logger.info(f"Author: ahmedjk34")
-    logger.info(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Date: 2025-10-02 14:26:45 UTC")
     logger.info(f"Random Seed: {RANDOM_SEED} (Issue #14 - Reproducibility)")
     logger.info(f"Class Balancing: {'ENABLED' if ENABLE_CLASS_BALANCING else 'DISABLED (correct!)'}")
     logger.info("="*80)
+    logger.info("FIXES APPLIED:")
+    logger.info("  ✅ Issue C6: Imbalance thresholds updated (15-30x expected)")
+    logger.info("  ✅ Issue M5: Validation expectations corrected")
+    logger.info("  ✅ Issue C3: OUTCOME FEATURES REMOVED (5 features)")
+    logger.info("="*80)
     logger.info("")
     logger.info("⚠️ IMPORTANT: This file does NOT balance classes!")
-    logger.info("   Class balancing happens in File 1 (CSV combiner) to maintain real WiFi distribution.")
-    logger.info("   File 2 only performs statistical cleaning (outliers, duplicates, validation).")
+    logger.info("   Class balancing happens in File 1b (CSV combiner) to maintain realistic distribution.")
+    logger.info("   File 1b with POWER=0.5 creates ~20x imbalance (down from ~100x natural WiFi).")
+    logger.info("   File 2 performs statistical cleaning AND removes outcome features.")
+    logger.info("")
+    logger.info("🔧 OUTCOME FEATURES REMOVED:")
+    logger.info(f"   {OUTCOME_FEATURES_TO_REMOVE}")
     logger.info("")
     return logger
 
@@ -164,39 +217,59 @@ def load_and_validate_data(filepath: str, logger) -> pd.DataFrame:
         logger.error(f"❌ Failed to load data: {str(e)}")
         sys.exit(1)
 
-# ================== EARLY FEATURE REMOVAL ==================
-def remove_constant_useless_features(df: pd.DataFrame, logger) -> pd.DataFrame:
+# ================== FEATURE REMOVAL ==================
+def remove_all_unwanted_features(df: pd.DataFrame, logger) -> pd.DataFrame:
     """
-    FIXED: Issue #28 - Remove constant/useless features early in pipeline
+    🔧 FIXED: Issue C3, #28 - Remove constant/useless/temporal/leaky/outcome features
     """
-    logger.info("🧹 EARLY REMOVAL: Checking for constant/useless features...")
+    logger.info("🧹 REMOVING ALL UNWANTED FEATURES (constant, temporal, leaky, outcome)...")
     
-    features_to_remove = []
+    # Combine all features to remove
+    ALL_FEATURES_TO_REMOVE = list(set(
+        CONSTANT_USELESS_FEATURES +
+        TEMPORAL_LEAKAGE_FEATURES +
+        KNOWN_LEAKY_FEATURES +
+        OUTCOME_FEATURES_TO_REMOVE  # ← NEW! Removes outcome features
+    ))
     
-    for feature in CONSTANT_USELESS_FEATURES:
+    initial_cols = len(df.columns)
+    removed_features = []
+    
+    for feature in ALL_FEATURES_TO_REMOVE:
         if feature in df.columns:
-            unique_count = df[feature].nunique()
-            
-            if unique_count <= 1:
-                unique_val = df[feature].iloc[0] if len(df) > 0 else None
-                logger.info(f"  ❌ {feature}: CONSTANT (value={unique_val}) - REMOVING")
-                features_to_remove.append(feature)
-            else:
-                if df[feature].dtype in ['int64', 'float64']:
-                    zero_pct = (df[feature] == 0).sum() / len(df) * 100
-                    if zero_pct > 99:
-                        logger.info(f"  ⚠️ {feature}: {zero_pct:.1f}% zeros - REMOVING (useless)")
-                        features_to_remove.append(feature)
-                    else:
-                        logger.info(f"  ℹ️ {feature}: Has {unique_count} unique values, keeping")
+            removed_features.append(feature)
     
-    if features_to_remove:
-        df_clean = df.drop(columns=features_to_remove)
-        logger.info(f"✅ Removed {len(features_to_remove)} constant/useless features: {features_to_remove}")
-        logger.info(f"📊 Dataset shape after removal: {df_clean.shape}")
+    if removed_features:
+        df_clean = df.drop(columns=removed_features)
+        
+        # Categorize removed features for logging
+        removed_constant = [f for f in CONSTANT_USELESS_FEATURES if f in removed_features]
+        removed_temporal = [f for f in TEMPORAL_LEAKAGE_FEATURES if f in removed_features]
+        removed_leaky = [f for f in KNOWN_LEAKY_FEATURES if f in removed_features]
+        removed_outcome = [f for f in OUTCOME_FEATURES_TO_REMOVE if f in removed_features]
+        
+        logger.info(f"🧹 Removed {len(removed_features)} unwanted features:")
+        if removed_constant:
+            logger.info(f"   ❌ Constant/useless ({len(removed_constant)}): {removed_constant}")
+        if removed_temporal:
+            logger.info(f"   ❌ Temporal leakage ({len(removed_temporal)}): {removed_temporal}")
+        if removed_leaky:
+            logger.info(f"   ❌ Known leaky ({len(removed_leaky)}): {removed_leaky}")
+        if removed_outcome:
+            logger.info(f"   ❌ Outcome features ({len(removed_outcome)}): {removed_outcome}")
+        
+        logger.info(f"📊 Dataset shape: {initial_cols} → {len(df_clean.columns)} columns")
+        
+        print(f"\n🧹 REMOVED {len(removed_features)} UNWANTED FEATURES:")
+        print(f"   Constant: {len(removed_constant)}")
+        print(f"   Temporal: {len(removed_temporal)}")
+        print(f"   Leaky: {len(removed_leaky)}")
+        print(f"   Outcome: {len(removed_outcome)}")
+        print(f"📊 Dataset now has {len(df_clean.columns)} columns (was {initial_cols})")
+        
         return df_clean
     else:
-        logger.info("✅ No constant/useless features found to remove")
+        logger.info("✅ No unwanted features found to remove")
         return df
 
 # ================== COMPREHENSIVE STATISTICS ==================
@@ -211,9 +284,7 @@ def generate_comprehensive_statistics(df: pd.DataFrame, stage: str, logger) -> D
         'basic_info': {},
         'column_info': {},
         'numerical_stats': {},
-        'categorical_stats': {},
         'missing_data': {},
-        'outliers': {},
         'wifi_specific': {}
     }
     
@@ -254,15 +325,25 @@ def generate_comprehensive_statistics(df: pd.DataFrame, stage: str, logger) -> D
         rate_dist = df['rateIdx'].value_counts().sort_index()
         wifi_stats['rate_index_distribution'] = rate_dist.to_dict()
         
-        # CRITICAL: Check if distribution looks natural
+        # 🔧 FIXED: Issue C6 - Check if distribution matches File 1b expectations
         if len(rate_dist) >= 8:
             rate_imbalance = rate_dist.max() / rate_dist.min()
             wifi_stats['rate_imbalance_ratio'] = float(rate_imbalance)
             
-            if rate_imbalance < 2.0:
-                logger.warning("⚠️ WARNING: Rate distribution looks artificially balanced!")
-                logger.warning("   Real WiFi should have 5-20x more high rates than low rates.")
-                logger.warning("   If you see this, check File 1 balancing logic!")
+            # Updated validation logic
+            if rate_imbalance < IMBALANCE_THRESHOLDS['too_balanced']:
+                logger.warning(f"⚠️ WARNING: Rate imbalance is {rate_imbalance:.1f}x (too balanced!)")
+                logger.warning(f"   Expected: {IMBALANCE_THRESHOLDS['expected_min']}-{IMBALANCE_THRESHOLDS['expected_max']}x from File 1b")
+                logger.warning(f"   This suggests File 1b balancing didn't work or wrong POWER setting")
+            elif IMBALANCE_THRESHOLDS['expected_min'] <= rate_imbalance <= IMBALANCE_THRESHOLDS['expected_max']:
+                logger.info(f"✅ Rate imbalance is {rate_imbalance:.1f}x (matches File 1b POWER=0.5 output)")
+                logger.info(f"   This is CORRECT behavior (File 1b balanced from ~100x to ~20x)")
+            elif rate_imbalance > IMBALANCE_THRESHOLDS['too_imbalanced']:
+                logger.warning(f"⚠️ WARNING: Rate imbalance is {rate_imbalance:.1f}x (too imbalanced!)")
+                logger.warning(f"   Expected: {IMBALANCE_THRESHOLDS['expected_min']}-{IMBALANCE_THRESHOLDS['expected_max']}x from File 1b")
+                logger.warning(f"   This suggests File 1b balancing failed or POWER too high")
+            else:
+                logger.info(f"✅ Rate imbalance is {rate_imbalance:.1f}x (acceptable)")
     
     if 'lastSnr' in df.columns:
         snr_data = df['lastSnr'].dropna()
@@ -324,7 +405,7 @@ def generate_visualizations(df: pd.DataFrame, stage: str, stats_dir: str, logger
     
     plt.style.use('default')
     
-    # 1. Rate distribution (CRITICAL - shows if balancing happened)
+    # 1. Rate distribution
     if 'rateIdx' in df.columns:
         plt.figure(figsize=(12, 6))
         rate_counts = df['rateIdx'].value_counts().sort_index()
@@ -339,9 +420,10 @@ def generate_visualizations(df: pd.DataFrame, stage: str, stats_dir: str, logger
         # Add imbalance ratio annotation
         if len(rate_counts) >= 8:
             imbalance = rate_counts.max() / rate_counts.min()
-            plt.text(0.5, 0.95, f'Imbalance Ratio: {imbalance:.1f}x', 
+            color = 'green' if IMBALANCE_THRESHOLDS['expected_min'] <= imbalance <= IMBALANCE_THRESHOLDS['expected_max'] else 'red'
+            plt.text(0.5, 0.95, f'Imbalance Ratio: {imbalance:.1f}x\n(Expected: {IMBALANCE_THRESHOLDS["expected_min"]}-{IMBALANCE_THRESHOLDS["expected_max"]}x)', 
                     transform=plt.gca().transAxes, ha='center',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                    bbox=dict(boxstyle='round', facecolor=color, alpha=0.3))
         
         plt.subplot(1, 2, 2)
         percentages = (rate_counts / rate_counts.sum() * 100).round(1)
@@ -398,12 +480,9 @@ def enforce_data_types(df: pd.DataFrame, logger) -> pd.DataFrame:
         'time': 'float64',
         'stationId': 'int64',
         'rateIdx': 'int64',
-        'phyRate': 'int64',
         'lastSnr': 'float64',
         'snrFast': 'float64',
         'snrSlow': 'float64',
-        'shortSuccRatio': 'float64',
-        'medSuccRatio': 'float64',
         'channelWidth': 'int64',
     }
     
@@ -433,13 +512,6 @@ def validate_wifi_constraints(df: pd.DataFrame, logger) -> pd.DataFrame:
         invalid_count = (~valid_mask).sum()
         if invalid_count > 0:
             logger.info(f"  ⚠️ Removing {invalid_count} rows with invalid rate indices")
-            df_clean = df_clean[valid_mask]
-    
-    if 'phyRate' in df_clean.columns:
-        valid_mask = df_clean['phyRate'].notna() & df_clean['phyRate'].isin(VALID_PHY_RATES)
-        invalid_count = (~valid_mask).sum()
-        if invalid_count > 0:
-            logger.info(f"  ⚠️ Removing {invalid_count} rows with invalid PHY rates")
             df_clean = df_clean[valid_mask]
     
     if 'channelWidth' in df_clean.columns:
@@ -482,21 +554,24 @@ def handle_missing_data(df: pd.DataFrame, logger) -> pd.DataFrame:
     df_clean = df.copy()
     initial_count = len(df_clean)
     
-    critical_columns = ['rateIdx', 'phyRate', 'lastSnr', 'shortSuccRatio']
+    # Only check critical columns that still exist after feature removal
+    critical_columns = ['rateIdx', 'lastSnr']
+    existing_critical = [c for c in critical_columns if c in df_clean.columns]
     
-    missing_critical = df_clean[critical_columns].isnull().any(axis=1)
-    critical_missing_count = missing_critical.sum()
-    
-    if critical_missing_count > 0:
-        logger.info(f"  ❌ Removing {critical_missing_count} rows missing critical columns")
-        df_clean = df_clean[~missing_critical]
+    if existing_critical:
+        missing_critical = df_clean[existing_critical].isnull().any(axis=1)
+        critical_missing_count = missing_critical.sum()
+        
+        if critical_missing_count > 0:
+            logger.info(f"  ❌ Removing {critical_missing_count} rows missing critical columns")
+            df_clean = df_clean[~missing_critical]
     
     logger.info(f"✅ Missing data handling complete. Retained {len(df_clean)}/{initial_count} rows")
     return df_clean
 
 # ================== MAIN PIPELINE ==================
 def main():
-    """Main pipeline execution - Statistical cleaning ONLY"""
+    """Main pipeline execution - Statistical cleaning + outcome feature removal"""
     logger = setup_logging()
     stats_dir = create_stats_directory()
     
@@ -504,8 +579,8 @@ def main():
         # Load data
         df_raw = load_and_validate_data(INPUT_CSV, logger)
         
-        # Remove constant/useless features early
-        df_raw = remove_constant_useless_features(df_raw, logger)
+        # Remove ALL unwanted features (constant, temporal, leaky, outcome)
+        df_raw = remove_all_unwanted_features(df_raw, logger)
         
         # Generate initial statistics
         initial_stats = generate_comprehensive_statistics(df_raw, "initial", logger)
@@ -514,7 +589,7 @@ def main():
         
         # Start cleaning pipeline
         logger.info("\n" + "="*60)
-        logger.info("STARTING DATA CLEANING PIPELINE (STATISTICAL ONLY)")
+        logger.info("STARTING DATA CLEANING PIPELINE")
         logger.info("="*60)
         
         df_clean = remove_duplicates(df_raw, logger)
@@ -522,10 +597,6 @@ def main():
         df_clean = validate_wifi_constraints(df_clean, logger)
         df_clean = filter_outliers(df_clean, logger)
         df_clean = handle_missing_data(df_clean, logger)
-        
-        # CRITICAL: NO CLASS BALANCING HERE!
-        logger.info("\n⚠️ SKIPPING class balancing (correct behavior!)")
-        logger.info("   Class balancing happens in File 1 to maintain realistic WiFi distribution")
         
         # Generate final statistics
         final_stats = generate_comprehensive_statistics(df_clean, "final", logger)
@@ -543,11 +614,15 @@ def main():
             imbalance = rate_dist.max() / rate_dist.min()
             logger.info(f"\n📊 Rate imbalance ratio: {imbalance:.1f}x")
             
-            if imbalance < 3.0:
-                logger.warning("⚠️ WARNING: Distribution looks artificially balanced!")
-                logger.warning("   Real WiFi should have 5-20x imbalance (high rates dominate)")
-            else:
-                logger.info("✅ Distribution looks realistic (high rates dominate)")
+            # 🔧 FIXED: Issue C6 - Corrected validation logic
+            if imbalance < IMBALANCE_THRESHOLDS['too_balanced']:
+                logger.warning(f"⚠️ WARNING: Distribution is {imbalance:.1f}x (too balanced!)")
+                logger.warning(f"   Expected: {IMBALANCE_THRESHOLDS['expected_min']}-{IMBALANCE_THRESHOLDS['expected_max']}x from File 1b")
+            elif IMBALANCE_THRESHOLDS['expected_min'] <= imbalance <= IMBALANCE_THRESHOLDS['expected_max']:
+                logger.info(f"✅ Distribution looks correct ({imbalance:.1f}x matches File 1b output)")
+            elif imbalance > IMBALANCE_THRESHOLDS['too_imbalanced']:
+                logger.warning(f"⚠️ WARNING: Distribution is {imbalance:.1f}x (too imbalanced!)")
+                logger.warning(f"   Expected: {IMBALANCE_THRESHOLDS['expected_min']}-{IMBALANCE_THRESHOLDS['expected_max']}x from File 1b")
         
         # Save cleaned data
         logger.info(f"\n💾 Saving cleaned data to: {OUTPUT_CSV}")
@@ -555,18 +630,21 @@ def main():
         
         # Final summary
         logger.info("\n" + "="*60)
-        logger.info("CLEANING PIPELINE COMPLETE")
+        logger.info("CLEANING PIPELINE COMPLETE (FULLY FIXED)")
         logger.info("="*60)
         logger.info(f"📊 Initial rows: {len(df_raw):,}")
         logger.info(f"📊 Final rows: {len(df_clean):,}")
         logger.info(f"📊 Rows removed: {len(df_raw) - len(df_clean):,} "
                    f"({(len(df_raw) - len(df_clean))/len(df_raw)*100:.1f}%)")
         logger.info(f"📁 Output file: {OUTPUT_CSV}")
-        logger.info(f"🔧 Class balancing: DISABLED (correct!)")
+        logger.info(f"🔧 Outcome features removed: {OUTCOME_FEATURES_TO_REMOVE}")
+        logger.info(f"✅ Dataset ready for File 3 (oracle label generation)")
         
-        print(f"\n✅ CLEANING COMPLETE!")
+        print(f"\n✅ CLEANING COMPLETE (FULLY FIXED)!")
         print(f"📊 {len(df_raw):,} → {len(df_clean):,} rows")
         print(f"📁 Cleaned data: {OUTPUT_CSV}")
+        print(f"🔧 Removed {len(OUTCOME_FEATURES_TO_REMOVE)} outcome features")
+        print(f"✅ Ready for File 3!")
         
         return True
         
@@ -579,52 +657,3 @@ def main():
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
-
-
-# def balance_classes(
-# df: pd.DataFrame, 
-# target_col: str, 
-# logger, 
-# major_classes: List[int] = [0, 7],
-# major_min: int = 200_000,
-# minor_min: int = 100_000,
-# enable_balancing: bool = False
-# ) -> pd.DataFrame:
-# """Balance classes with realistic ratios for major/minor classes."""
-
-# if not enable_balancing:
-#     logger.info(f"⚖️ Class balancing for {target_col} is DISABLED - skipping")
-#     return df
-
-# logger.info(f"⚖️ Advanced class balancing for {target_col} ...")
-
-# if target_col not in df.columns:
-#     logger.warning(f"⚠️ Target column {target_col} not found. Skipping balancing.")
-#     return df
-
-# class_counts = df[target_col].value_counts().sort_index()
-# logger.info(f"📊 Current class distribution:")
-# for class_val, count in class_counts.items():
-#     logger.info(f"  {class_val}: {count} samples")
-
-# dfs = []
-# for c in class_counts.index:
-#     if c in major_classes:
-#         n = min(class_counts[c], major_min)
-#         logger.info(f"  Major class {c}: keeping up to {n} samples")
-#     else:
-#         n = min(class_counts[c], minor_min)
-#         logger.info(f"  Minor class {c}: keeping up to {n} samples")
-#     if class_counts[c] > n:
-#         # FIXED: Issue #14 - Use global random seed
-#         sampled = df[df[target_col]==c].sample(n=n, random_state=RANDOM_SEED)
-#         logger.info(f"    ✅ {c}: Downsampled from {class_counts[c]} to {n}")
-#     else:
-#         sampled = df[df[target_col]==c]
-#         logger.info(f"    ✅ {c}: Kept all {class_counts[c]} samples")
-#     dfs.append(sampled)
-
-# balanced_df = pd.concat(dfs, ignore_index=True)
-# logger.info(f"✅ Balancing complete. Final dataset: {len(balanced_df)} rows")
-# logger.info(f"New class distribution:\n{balanced_df[target_col].value_counts().sort_index()}")
-# return balanced_df
