@@ -393,7 +393,7 @@ def evaluate_model_performance(target_label: str, df: pd.DataFrame, logger, prog
         for feat, imp in top_features[:3]:
             if any(leak in feat for leak in ['consec', 'retry', 'packet']):
                 progress.add_issue(
-                    "SUSPICIOUS_FEATURE_IMPORTANCE",
+                    "SUSPICIOUS_FEATURE_IMPORTANCE", 
                     f"Potential leakage feature '{feat}' ranks in top 3",
                     "WARNING"
                 )
