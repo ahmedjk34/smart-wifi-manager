@@ -406,27 +406,34 @@ def classify_network_context(row) -> str:
 # ================== ORACLE LABEL CREATION (FULLY FIXED) ==================
 def create_snr_based_oracle_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
     """
-    🔧 FIXED: Issues C2, C3, ORACLE_DETERMINISM - Oracle uses ONLY SNR-based thresholds with LARGER NOISE
+    🔧 FIXED: PROBABILISTIC APPROACH - Guaranteed variance, no rounding issues!
     
-    NO outcome features (shortSuccRatio, packetLossRate) used!
-    Based on IEEE 802.11a SNR requirements for successful transmission
+    Instead of continuous noise that gets rounded away by int(), we use
+    discrete probabilistic choices. This guarantees each SNR maps to
+    multiple possible labels.
     
-    ⚠️ CORRECTED FOR 802.11a (OFDM, 5 GHz band):
+    Conservative Strategy: Prefers lower rates (safer)
+      - 45% chance: stay at base rate
+      - 30% chance: drop by 1 rate
+      - 15% chance: drop by 2 rates
+      - 7% chance: drop by 3 rates
+      - 3% chance: increase by 1 rate (occasional optimism)
     
-    Standard SNR thresholds for 802.11a rates (OFDM):
-    - Rate 0 (6 Mbps):    SNR ≥ 6 dB   (BPSK 1/2)
-    - Rate 1 (9 Mbps):    SNR ≥ 8 dB   (BPSK 3/4)
-    - Rate 2 (12 Mbps):   SNR ≥ 10 dB  (QPSK 1/2)
-    - Rate 3 (18 Mbps):   SNR ≥ 13 dB  (QPSK 3/4)
-    - Rate 4 (24 Mbps):   SNR ≥ 16 dB  (16-QAM 1/2)
-    - Rate 5 (36 Mbps):   SNR ≥ 19 dB  (16-QAM 3/4)
-    - Rate 6 (48 Mbps):   SNR ≥ 22 dB  (64-QAM 2/3)
-    - Rate 7 (54 Mbps):   SNR ≥ 25 dB  (64-QAM 3/4)
+    Balanced Strategy: Symmetric around base rate
+      - 35% chance: stay at base rate
+      - 25% chance: drop by 1 rate
+      - 25% chance: increase by 1 rate
+      - 8% chance: drop by 2 rates
+      - 7% chance: increase by 2 rates
     
-    🔧 CRITICAL FIX: Noise ranges increased from ±0.5 to ±1.5
-    This ensures variance survives int() conversion and prevents determinism!
+    Aggressive Strategy: Prefers higher rates (faster)
+      - 45% chance: stay at base rate
+      - 30% chance: increase by 1 rate
+      - 15% chance: increase by 2 rates
+      - 7% chance: increase by 3 rates
+      - 3% chance: drop by 1 rate (occasional caution)
     
-    Source: IEEE 802.11a-1999 specification, typical implementation values
+    Expected variance per SNR: 3-5 unique labels (realistic WiFi noise!)
     """
     # Extract ONLY pre-decision features
     snr = safe_float(row.get('lastSnr', 20))
@@ -475,33 +482,52 @@ def create_snr_based_oracle_labels(row: pd.Series, context: str, current_rate: i
     elif context in ['excellent_stable', 'excellent_unstable']:
         base = min(7, base + 1)  # Can be slightly more aggressive in excellent conditions
     
-    # 🔧 FIXED: ORACLE_DETERMINISM - Apply strategy-specific noise with LARGER RANGES
-    # Old: ±0.5 got rounded away by int()
-    # New: ±1.5 survives int() and creates variance!
+    # 🔧 PROBABILISTIC APPROACH - Guaranteed variance!
     
-    # Conservative: Bias toward lower rates (-1.5 to 0.5)
-    cons_noise = np.random.uniform(ORACLE_NOISE['conservative_min'], 
-                                   ORACLE_NOISE['conservative_max'])
+    # Conservative: Bias toward lower rates
+    rand_cons = np.random.rand()
+    if rand_cons < 0.45:
+        cons = base
+    elif rand_cons < 0.75:
+        cons = max(0, base - 1)
+    elif rand_cons < 0.90:
+        cons = max(0, base - 2)
+    elif rand_cons < 0.97:
+        cons = max(0, base - 3)
+    else:
+        cons = min(7, base + 1)  # Occasional optimism
     
-    # Balanced: Symmetric noise (-1.0 to 1.0)
-    bal_noise = np.random.uniform(ORACLE_NOISE['balanced_min'], 
-                                  ORACLE_NOISE['balanced_max'])
+    # Balanced: Symmetric around base
+    rand_bal = np.random.rand()
+    if rand_bal < 0.35:
+        bal = base
+    elif rand_bal < 0.60:
+        bal = max(0, base - 1)
+    elif rand_bal < 0.85:
+        bal = min(7, base + 1)
+    elif rand_bal < 0.93:
+        bal = max(0, base - 2)
+    else:
+        bal = min(7, base + 2)
     
-    # Aggressive: Bias toward higher rates (-0.5 to 1.5)
-    agg_noise = np.random.uniform(ORACLE_NOISE['aggressive_min'], 
-                                  ORACLE_NOISE['aggressive_max'])
-    
-    # Apply noise and clamp to valid range
-    cons = int(np.clip(base + cons_noise, 0, 7))
-    bal = int(np.clip(base + bal_noise, 0, 7))
-    agg = int(np.clip(base + agg_noise, 0, 7))
+    # Aggressive: Bias toward higher rates
+    rand_agg = np.random.rand()
+    if rand_agg < 0.45:
+        agg = base
+    elif rand_agg < 0.75:
+        agg = min(7, base + 1)
+    elif rand_agg < 0.90:
+        agg = min(7, base + 2)
+    elif rand_agg < 0.97:
+        agg = min(7, base + 3)
+    else:
+        agg = max(0, base - 1)  # Occasional caution
     
     return {
         "oracle_conservative": cons,
         "oracle_balanced": bal,
         "oracle_aggressive": agg,
     }
-
 # ================== SYNTHETIC EDGE CASES (FIXED) ==================
 def generate_critical_edge_cases(target_samples: int = SYNTHETIC_EDGE_CASES) -> pd.DataFrame:
     """
