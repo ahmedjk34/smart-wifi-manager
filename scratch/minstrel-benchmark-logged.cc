@@ -166,13 +166,13 @@ MinstrelDecisionTrace(std::string context,
 static void
 TxTrace(Ptr<const Packet> packet)
 {
-    static uint32_t txCount = 0;
-    txCount++;
+    // static uint32_t txCount = 0;
+    // txCount++;
 
-    if (txCount % 5000 == 0)
-    {
-        std::cout << "[TX] Total packets transmitted: " << txCount << std::endl;
-    }
+    // if (txCount % 5000 == 0)
+    // {
+    //     std::cout << "[TX] Total packets transmitted: " << txCount << std::endl;
+    // }
 }
 
 // ============================================================================
@@ -618,7 +618,7 @@ main(int argc, char* argv[])
 
     // Generate test cases
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(30);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(500);
 
     std::cout << "\n📊 Generated " << testCases.size() << " performance-based scenarios"
               << std::endl;

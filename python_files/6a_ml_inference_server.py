@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Enhanced ML Inference Server - Production-ready WiFi rate adaptation inference
-Supports multiple models, comprehensive monitoring, and easy extensibility.
+FULLY UPDATED FOR NEW PIPELINE (9 safe features, oracle_aggressive default)
 
 Author: ahmedjk34 (https://github.com/ahmedjk34)
-Date: 2025-09-22
-Usage: python3 python_files/6a_enhanced_ml_inference_server.py --config server_config.json
+Date: 2025-10-02
+Usage: python3 python_files/6a_enhanced_ml_inference_server.py
 """
 
 import json
@@ -36,7 +36,7 @@ class ModelConfig:
     model_path: str
     scaler_path: str
     description: str = ""
-    features_count: int = 21  # FIXED: Changed from 28 to 21
+    features_count: int = 9  # FIXED: 9 safe features only!
     rate_classes: int = 8
 
 @dataclass
@@ -53,29 +53,19 @@ class ServerConfig:
 
 # ================== FEATURE DEFINITIONS ==================
 class WiFiFeatures:
-    """WiFi feature definitions and validation - UPDATED for 21 safe features."""
+    """WiFi feature definitions and validation - 9 SAFE FEATURES ONLY."""
     
-    # FIXED: 21 safe features matching your training script exactly
+    # FIXED: 9 safe features matching File 4 training pipeline
     FEATURE_NAMES = [
         # SNR features (7)
         "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
         "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
         
-        # Performance features (6) 
-        "shortSuccRatio", "medSuccRatio", "consecSuccess", "consecFailure",
-        "packetLossRate", "retrySuccessRatio",
-        
-        # Rate adaptation features (3)
-        "recentRateChanges", "timeSinceLastRateChange", "rateStabilityScore",
-        
-        # Network assessment features (3)
-        "severity", "confidence", "packetSuccess",
-        
         # Network configuration features (2)
         "channelWidth", "mobilityMetric"
     ]
     
-    # FIXED: Updated ranges for 21 safe features (indices 0-20)
+    # FIXED: Ranges for 9 safe features (indices 0-8)
     FEATURE_RANGES = {
         # SNR features (7)
         0: (-5.0, 40.0, "lastSnr (dB)"),
@@ -86,27 +76,9 @@ class WiFiFeatures:
         5: (0.0, 1.0, "snrPredictionConfidence"),
         6: (0.0, 100.0, "snrVariance"),
         
-        # Performance features (6)
-        7: (0.0, 1.0, "shortSuccRatio"),
-        8: (0.0, 1.0, "medSuccRatio"),
-        9: (0, float('inf'), "consecSuccess"),
-        10: (0, float('inf'), "consecFailure"),
-        11: (0.0, 1.0, "packetLossRate"),
-        12: (0.0, 1.0, "retrySuccessRatio"),
-        
-        # Rate adaptation features (3)
-        13: (0, 100, "recentRateChanges"),
-        14: (0.0, 1e6, "timeSinceLastRateChange (ms)"),
-        15: (0.0, 1.0, "rateStabilityScore"),
-        
-        # Network assessment features (3)
-        16: (0.0, 1.0, "severity"),
-        17: (0.0, 1.0, "confidence"),
-        18: (0.0, 1.0, "packetSuccess"),
-        
         # Network configuration features (2)
-        19: (5.0, 160.0, "channelWidth (MHz)"),
-        20: (0.0, 1.0, "mobilityMetric")
+        7: (5.0, 160.0, "channelWidth (MHz)"),
+        8: (0.0, 50.0, "mobilityMetric")
     }
 
     @classmethod
@@ -117,10 +89,7 @@ class WiFiFeatures:
         for i, (min_val, max_val, name) in cls.FEATURE_RANGES.items():
             if i < len(arr):
                 original = arr[i]
-                if max_val == float('inf'):
-                    arr[i] = max(arr[i], min_val)
-                else:
-                    arr[i] = np.clip(arr[i], min_val, max_val)
+                arr[i] = np.clip(arr[i], min_val, max_val)
                 
                 if abs(original - arr[i]) > 1e-6:
                     warnings.append(f"{name}: {original:.3f} → {arr[i]:.3f}")
@@ -230,6 +199,7 @@ class EnhancedMLInferenceServer:
         self.models: Dict[str, Any] = {}
         self.scalers: Dict[str, Any] = {}
         self.model_configs: Dict[str, ModelConfig] = {}
+        self.default_model = None  # Will be set to oracle_aggressive
         
         self.monitor = ServerMonitor(config.monitoring_window)
         self._stop_event = threading.Event()
@@ -254,9 +224,10 @@ class EnhancedMLInferenceServer:
         )
         
         self.logger = logging.getLogger('MLInferenceServer')
-        self.logger.info(f"🚀 Enhanced ML Inference Server v2.0 initializing...")
+        self.logger.info(f"🚀 Enhanced ML Inference Server v3.0 (NEW PIPELINE) initializing...")
         self.logger.info(f"👤 Author: ahmedjk34 (https://github.com/ahmedjk34)")
-        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (safe features only)")    
+        self.logger.info(f"📅 Pipeline Date: 2025-10-02 (Probabilistic Oracle)")
+        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (SAFE FEATURES ONLY)")
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully."""
@@ -278,6 +249,11 @@ class EnhancedMLInferenceServer:
             self.scalers[model_config.name] = scaler
             self.model_configs[model_config.name] = model_config
             
+            # Set default model to oracle_aggressive
+            if model_config.name == "oracle_aggressive" or self.default_model is None:
+                self.default_model = model_config.name
+                self.logger.info(f"✨ Set '{model_config.name}' as default model")
+            
             load_time = (time.time() - start_time) * 1000
             self.logger.info(f"✅ Model '{model_config.name}' loaded in {load_time:.1f} ms")
             self.logger.info(f"📝 Description: {model_config.description}")
@@ -290,9 +266,9 @@ class EnhancedMLInferenceServer:
         """Make prediction using specified model (or default)."""
         start_time = time.time()
         
-        # Select model
+        # Select model (default to oracle_aggressive)
         if model_name is None:
-            model_name = list(self.models.keys())[0] if self.models else None
+            model_name = self.default_model
         
         if model_name not in self.models:
             available = list(self.models.keys())
@@ -373,7 +349,7 @@ class EnhancedMLInferenceServer:
                 self.monitor.record_request(model_name, latency_ms, False, error_msg)
             
             return {
-                "rateIdx": 3,  # Safe fallback
+                "rateIdx": 3,  # Safe fallback (18 Mbps)
                 "latencyMs": latency_ms,
                 "success": False,
                 "error": error_msg,
@@ -390,23 +366,26 @@ class EnhancedMLInferenceServer:
                 "features_count": config.features_count,
                 "rate_classes": config.rate_classes,
                 "model_path": config.model_path,
-                "scaler_path": config.scaler_path
+                "scaler_path": config.scaler_path,
+                "is_default": (name == self.default_model)
             }
         
         info = {
             "server": {
-                "version": "2.0.0",
+                "version": "3.0.0",
                 "author": "ahmedjk34",
                 "github": "https://github.com/ahmedjk34",
+                "pipeline_date": "2025-10-02",
                 "uptime": time.time() - self.monitor.start_time,
                 "config": asdict(self.config)
             },
             "models": models_info,
+            "default_model": self.default_model,
             "features": {
                 "count": len(WiFiFeatures.FEATURE_NAMES),
                 "names": WiFiFeatures.FEATURE_NAMES,
                 "safe_features_only": True,
-                "removed_leaky_features": ["phyRate", "optimalRateDistance", "recentThroughputTrend", "conservativeFactor", "aggressiveFactor", "recommendedSafeRate"]
+                "no_outcome_features": True
             }
         }
         
@@ -452,7 +431,7 @@ class EnhancedMLInferenceServer:
             if not data:
                 return
             
-            self.logger.debug(f"[{client_id}] 📨 Received: {data[:100]}...")       
+            self.logger.debug(f"[{client_id}] 📨 Received: {data[:100]}...")
 
             # Handle special commands
             if data.strip() == "SHUTDOWN":
@@ -479,7 +458,7 @@ class EnhancedMLInferenceServer:
             elif data.strip().startswith("MODELS"):
                 self.logger.info(f"[{client_id}] 📋 Models list requested")
                 models = {name: config.description for name, config in self.model_configs.items()}
-                self._send_all(conn, json.dumps({"models": models}) + "\n")
+                self._send_all(conn, json.dumps({"models": models, "default": self.default_model}) + "\n")
                 return
             
             # Handle prediction request
@@ -489,7 +468,7 @@ class EnhancedMLInferenceServer:
                 
                 # Check if last part is a model name
                 model_name = None
-                if len(parts) > 21 and parts[-1] in self.models:  # FIXED: 21 features
+                if len(parts) > 9 and parts[-1] in self.models:  # FIXED: 9 features
                     model_name = parts[-1]
                     features = [float(x) for x in parts[:-1]]
                 else:
@@ -545,10 +524,10 @@ class EnhancedMLInferenceServer:
             
             self.logger.info(f"🚀 Enhanced ML Inference Server listening on {self.config.host}:{self.config.port}")
             self.logger.info(f"📊 Loaded models: {list(self.models.keys())}")
+            self.logger.info(f"✨ Default model: {self.default_model}")
             self.logger.info(f"📈 Monitoring enabled: {self.config.enable_monitoring}")
             self.logger.info(f"🔧 Max connections: {self.config.max_connections}")
-            self.logger.info(f"🔢 Features expected: {len(WiFiFeatures.FEATURE_NAMES)} (safe features only)")            
-            # Print available commands
+            self.logger.info(f"🔢 Features expected: {len(WiFiFeatures.FEATURE_NAMES)} (SAFE FEATURES ONLY)")
             self.logger.info("📋 Available commands: INFO, STATS, MODELS, SHUTDOWN")
             
             while not self._stop_event.is_set():
@@ -582,88 +561,72 @@ class EnhancedMLInferenceServer:
             
             self.logger.info("🛑 Enhanced ML Inference Server stopped")
 
-# ================== CONFIGURATION LOADING ==================
-def load_config(config_path: str) -> Tuple[ServerConfig, List[ModelConfig]]:
-    """Load server and model configurations from JSON file."""
-    with open(config_path, 'r') as f:
-        config_data = json.load(f)
+# ================== AUTO-DISCOVERY & CONFIGURATION ==================
+def auto_discover_models(base_path: Path) -> List[ModelConfig]:
+    """Auto-discover trained models in the trained_models directory."""
+    models = []
     
-    # Parse server config
-    server_config = ServerConfig(**config_data.get('server', {}))
+    # Model priority order (oracle_aggressive first)
+    model_patterns = [
+        ("oracle_aggressive", "Aggressive oracle - prefers higher rates (62.8% test accuracy)"),
+        ("oracle_balanced", "Balanced oracle - symmetric exploration (45.3% test accuracy)"),
+        ("oracle_conservative", "Conservative oracle - prefers lower rates (47.5% test accuracy)"),
+        ("rateIdx", "Minstrel-HT behavior - mimics ns-3 implementation (46.1% test accuracy)")
+    ]
     
-    # Parse model configs
-    model_configs = []
-    for model_data in config_data.get('models', []):
-        model_configs.append(ModelConfig(**model_data))
+    for model_name, description in model_patterns:
+        model_file = base_path / f"step4_rf_{model_name}_FIXED.joblib"
+        scaler_file = base_path / f"step4_scaler_{model_name}_FIXED.joblib"
+        
+        if model_file.exists() and scaler_file.exists():
+            models.append(ModelConfig(
+                name=model_name,
+                model_path=str(model_file),
+                scaler_path=str(scaler_file),
+                description=description,
+                features_count=9,
+                rate_classes=8
+            ))
     
-    return server_config, model_configs
-
-def create_default_config(config_path: str):
-    """Create a default configuration file."""
-    config = {
-        "server": {
-            "port": 8765,
-            "host": "localhost",
-            "max_connections": 100,
-            "socket_timeout": 1.0,
-            "log_level": "INFO",
-            "log_file": "ml_inference_server.log",
-            "enable_monitoring": True,
-            "monitoring_window": 1000
-        },
-        "models": [
-            {
-                "name": "oracle_balanced",
-                "model_path": "step3_rf_oracle_balanced_model_FIXED.joblib",
-                "scaler_path": "step3_scaler_oracle_balanced_FIXED.joblib",
-                "description": "Oracle balanced strategy - optimal for real-world scenarios",
-                "features_count": 21,  # FIXED: Changed from 28 to 21
-                "rate_classes": 8
-            },
-            {
-                "name": "rateIdx",
-                "model_path": "step3_rf_rateIdx_model_FIXED.joblib", 
-                "scaler_path": "step3_scaler_rateIdx_FIXED.joblib",
-                "description": "Original rateIdx model - current protocol behavior",
-                "features_count": 21,  # FIXED: Changed from 28 to 21
-                "rate_classes": 8
-            }
-        ]
-    }
-    
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
-    
-    print(f"✅ Created default config: {config_path}")
+    return models
 
 # ================== MAIN EXECUTION ==================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Enhanced ML Inference Server v2.0")
-    parser.add_argument("--config", default="server_config.json", help="Configuration file path")
-    parser.add_argument("--create-config", action="store_true", help="Create default configuration file")
-    parser.add_argument("--port", type=int, help="Override port number")
-    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Override log level")
+    parser = argparse.ArgumentParser(description="Enhanced ML Inference Server v3.0 (New Pipeline)")
+    parser.add_argument("--port", type=int, default=8765, help="Server port")
+    parser.add_argument("--host", default="localhost", help="Server host")
+    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Log level")
+    parser.add_argument("--models-dir", default="python_files/trained_models", help="Models directory")
     
     args = parser.parse_args()
     
-    if args.create_config:
-        create_default_config(args.config)
-        sys.exit(0)
-    
     try:
-        # Load configuration
-        if not Path(args.config).exists():
-            print(f"❌ Config file not found: {args.config}")
-            print(f"💡 Create one with: python3 {sys.argv[0]} --create-config")
+        # Setup base path
+        base_path = Path(args.models_dir)
+        
+        if not base_path.exists():
+            print(f"❌ Models directory not found: {base_path}")
+            print(f"💡 Please run training first (File 4)")
             sys.exit(1)
         
-        server_config, model_configs = load_config(args.config)
+        # Auto-discover models
+        print(f"🔍 Auto-discovering models in: {base_path}")
+        model_configs = auto_discover_models(base_path)
         
-        # Apply command line overrides
-        if args.port:
-            server_config.port = args.port
-        if args.log_level:
-            server_config.log_level = args.log_level
+        if not model_configs:
+            print(f"❌ No trained models found in {base_path}")
+            print(f"💡 Expected files: step4_rf_*_FIXED.joblib, step4_scaler_*_FIXED.joblib")
+            sys.exit(1)
+        
+        print(f"✅ Found {len(model_configs)} models: {[m.name for m in model_configs]}")
+        
+        # Create server config
+        server_config = ServerConfig(
+            port=args.port,
+            host=args.host,
+            log_level=args.log_level,
+            enable_monitoring=True
+        )
         
         # Create and configure server
         server = EnhancedMLInferenceServer(server_config)
