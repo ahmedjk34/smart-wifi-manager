@@ -139,19 +139,24 @@ def print_prediction(result: Dict[str, Any], features: List[float], model_name: 
     
     print("\n📝 Input Features (15 - Phase 1A):")
     
-    # 🚀 PHASE 1A: Updated feature names (15 features)
+    # 🚀 PHASE 1B: Updated feature names (14 features)
     feature_names = [
-        # Original 9 features
+        # SNR features (7)
         "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
         "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-        "channelWidth", "mobilityMetric",
-        # NEW 6 features (Phase 1A)
-        "retryRate", "frameErrorRate", "channelBusyRatio",
-        "recentRateAvg", "rateStability", "sinceLastChange"
+        
+        # Network state (1)
+        "mobilityMetric",
+        
+        # Phase 1A features (2)
+        "retryRate", "frameErrorRate",
+        
+        # Phase 1B features (4)
+        "rssiVariance", "interferenceLevel", "distanceMetric", "avgPacketSize"
     ]
-    
+
     for i, (name, val) in enumerate(zip(feature_names, features)):
-        marker = "🚀" if i >= 9 else "  "  # Mark new features
+        marker = "🚀" if i >= 10 else "  "  # Mark Phase 1B features
         print(f" {marker} {i:2d}: {name:30s} = {val:10.4f}")
     
     print("="*80 + "\n")
@@ -280,7 +285,7 @@ def run_batch(client: MLClient, batch_file: str):
             
             # Parse features and optional model name
             model_name = None
-            if len(parts) > 15 and not is_float(parts[-1]):
+            if len(parts) > 14 and not is_float(parts[-1]):
                 model_name = parts[-1]
                 features = [float(x) for x in parts[:-1]]
             else:
@@ -328,37 +333,29 @@ def main():
         description="Enhanced ML Client v4.0 (Phase 1A - 15 Features)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-🚀 PHASE 1A: 15 FEATURES (9 original + 6 enhanced)
+🚀 PHASE 1B: 14 FEATURES (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
 
 Examples:
   # Get server info
   python3 6b_ml_client.py --info
   
-  # Get server statistics
-  python3 6b_ml_client.py --stats
-  
-  # List available models
-  python3 6b_ml_client.py --models
-  
-  # Make prediction (15 features, default model = oracle_aggressive)
+  # Make prediction (14 features, default model = oracle_aggressive)
   python3 6b_ml_client.py --predict \\
-    25 25 25 0 0.01 0.99 0.5 20 0.5 \\
-    0.1 0.05 0.3 4.0 0.9 0.5
+    25 25 25 0 0.01 0.99 0.5 \\
+    0.5 \\
+    0.1 0.05 \\
+    0.5 0.3 20.0 1200.0
   
-  # Make prediction with specific model
+  # With specific model
   python3 6b_ml_client.py --predict \\
-    25 25 25 0 0.01 0.99 0.5 20 0.5 \\
-    0.1 0.05 0.3 4.0 0.9 0.5 \\
+    25 25 25 0 0.01 0.99 0.5 \\
+    0.5 \\
+    0.1 0.05 \\
+    0.5 0.3 20.0 1200.0 \\
     oracle_balanced
-  
-  # Batch predictions from file
-  python3 6b_ml_client.py --batch test_features.txt
-  
-  # Shutdown server
-  python3 6b_ml_client.py --shutdown
 
-Feature order (15 features - Phase 1A):
-  ORIGINAL 9:
+Feature order (14 features - Phase 1B):
+  SNR FEATURES (7):
    1. lastSnr (dB)
    2. snrFast (dB)
    3. snrSlow (dB)
@@ -366,17 +363,20 @@ Feature order (15 features - Phase 1A):
    5. snrStabilityIndex
    6. snrPredictionConfidence
    7. snrVariance
-   8. channelWidth (MHz)
-   9. mobilityMetric
   
-  🚀 NEW 6 (Phase 1A):
-  10. retryRate (0-1)
-  11. frameErrorRate (0-1)
-  12. channelBusyRatio (0-1)
-  13. recentRateAvg (0-7)
-  14. rateStability (0-1)
-  15. sinceLastChange (0-1)
-        """
+  NETWORK STATE (1):
+   8. mobilityMetric
+  
+  PHASE 1A (2):
+   9. retryRate (0-1)
+  10. frameErrorRate (0-1)
+  
+  🚀 PHASE 1B (4):
+  11. rssiVariance (dB²)
+  12. interferenceLevel (0-1)
+  13. distanceMetric (m)
+  14. avgPacketSize (bytes)
+"""
     )
     
     # Connection options
@@ -389,7 +389,7 @@ Feature order (15 features - Phase 1A):
     group.add_argument("--info", action="store_true", help="Get server information")
     group.add_argument("--stats", action="store_true", help="Get server statistics")
     group.add_argument("--models", action="store_true", help="List available models")
-    group.add_argument("--predict", nargs='+', help="Make prediction (15 features + optional model name)")
+    group.add_argument("--predict", nargs='+', help="Make prediction (14 features + optional model name)")
     group.add_argument("--batch", help="Run batch predictions from file")
     group.add_argument("--shutdown", action="store_true", help="Shutdown server")
     
@@ -420,11 +420,11 @@ Feature order (15 features - Phase 1A):
             else:
                 features = [float(x) for x in args.predict]
             
-            if len(features) != 15:
-                print(f"❌ Expected 15 features (Phase 1A), got {len(features)}")
+            if len(features) != 14:
+                print(f"❌ Expected 14 features (Phase 1B), got {len(features)}")
                 print(f"💡 Use --help to see feature order")
                 sys.exit(1)
-            
+
             result = client.predict(features, model_name)
             print_prediction(result, features, model_name)
         
