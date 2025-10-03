@@ -162,6 +162,7 @@ MinstrelWifiManagerLogged::SetupPhy(const Ptr<WifiPhy> phy)
         if (m_logFile.is_open())
         {
             // FIXED: CSV header with 20 features (14 original + 6 Phase 1A)
+            // FIXED: CSV header with 24 features (20 Phase 1A + 4 Phase 1B)
             m_logFile << "time,stationId,rateIdx,phyRate,"
                       // SNR features (7 - SAFE)
                       << "lastSnr,snrFast,snrSlow,snrTrendShort,"
@@ -177,6 +178,8 @@ MinstrelWifiManagerLogged::SetupPhy(const Ptr<WifiPhy> phy)
                       // PHASE 1A: NEW FEATURES (6 - SAFE)
                       << "retryRate,frameErrorRate,channelBusyRatio,"
                       << "recentRateAvg,rateStability,sinceLastChange,"
+                      // PHASE 1B: NEW FEATURES (4 - SAFE) ← ADD THIS LINE!
+                      << "rssiVariance,interferenceLevel,distanceMetric,avgPacketSize,"
                       // Scenario identifier (1)
                       << "scenario_file\n";
 
@@ -295,6 +298,10 @@ MinstrelWifiManagerLogged::DoCreateStation() const
     station->m_channelBusyTime = 0.0;
     station->m_observationTime = 0.1;
     station->m_packetsSinceRateChange = 0;
+
+    // PHASE 1B: Initialize new feature tracking
+    station->m_recentCollisions = 0;
+    station->m_recentTransmissions = 0;
 
     // Assign unique station ID
     station->m_stationId = m_nextStationId++;
@@ -870,6 +877,14 @@ MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, Wif
         }
     }
 
+    // PHASE 1B: Track RSSI history for variance calculation
+    double rssi = realisticSnr; // Use realistic SNR as RSSI proxy
+    station->m_rssiHistory.push_back(rssi);
+    if (station->m_rssiHistory.size() > 10)
+    {
+        station->m_rssiHistory.pop_front();
+    }
+
     NS_LOG_DEBUG("DoReportRxOk: Raw SNR=" << rxSnr << " -> Realistic SNR=" << realisticSnr
                                           << " dB (dist=" << m_scenarioDistance
                                           << "m, intf=" << m_scenarioInterferers << ")");
@@ -921,6 +936,17 @@ MinstrelWifiManagerLogged::DoReportDataFailed(WifiRemoteStation* st)
     station->m_framesFailed++;
     station->m_framesRetried += station->m_longRetry;
 
+    // PHASE 1B: Track collisions for interference level
+    station->m_recentCollisions++;
+    station->m_recentTransmissions++;
+
+    // Keep window size = 50
+    if (station->m_recentTransmissions > 50)
+    {
+        station->m_recentCollisions = static_cast<uint32_t>(station->m_recentCollisions * 0.98);
+        station->m_recentTransmissions = 50;
+    }
+
     // Track in current window
     station->m_currentShortWindow.push_back(false);
     station->m_currentMedWindow.push_back(false);
@@ -962,6 +988,24 @@ MinstrelWifiManagerLogged::DoReportDataOk(WifiRemoteStation* st,
     // PHASE 1A: Track telemetry
     station->m_framesSent++;
     station->m_framesRetried += station->m_longRetry;
+
+    // PHASE 1B: Track successful transmissions
+    station->m_recentTransmissions++;
+
+    // Keep window size = 50
+    if (station->m_recentTransmissions > 50)
+    {
+        station->m_recentCollisions = static_cast<uint32_t>(station->m_recentCollisions * 0.98);
+        station->m_recentTransmissions = 50;
+    }
+
+    // PHASE 1B: Track packet size
+    uint32_t packetSize = m_pktLen; // Default from attribute
+    station->m_packetSizeHistory.push_back(packetSize);
+    if (station->m_packetSizeHistory.size() > 10)
+    {
+        station->m_packetSizeHistory.pop_front();
+    }
 
     // Track in current window
     station->m_currentShortWindow.push_back(true);
@@ -1243,7 +1287,7 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
                   << std::endl;
     }
 
-    // Calculate 14 original features
+    // Calculate Phase 1A features (20 original)
     double shortSuccRatio = CalculatePreviousShortSuccessRatio(st);
     double medSuccRatio = CalculatePreviousMedSuccessRatio(st);
     double packetLossRate = CalculatePreviousPacketLoss(st);
@@ -1256,13 +1300,10 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
     double severity = CalculateSeverity(st);
     double confidence = CalculateConfidence(st);
 
-    // PHASE 1A: Calculate 6 new features
     double retryRate =
         st->m_framesSent > 0 ? static_cast<double>(st->m_framesRetried) / st->m_framesSent : 0.0;
-
     double frameErrorRate =
         st->m_framesSent > 0 ? static_cast<double>(st->m_framesFailed) / st->m_framesSent : 0.0;
-
     double channelBusyRatio =
         st->m_observationTime > 0 ? st->m_channelBusyTime / st->m_observationTime : 0.3;
 
@@ -1294,20 +1335,29 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
         }
         variance /= st->m_rateHistory.size();
         double stddev = std::sqrt(variance);
-
         rateStability = 1.0 / (1.0 + stddev);
     }
 
     double sinceLastChange =
         std::min(100.0, static_cast<double>(st->m_packetsSinceRateChange)) / 100.0;
 
-    // Clamp Phase 1A features
+    // PHASE 1B: Calculate NEW features (4 additional)
+    double rssiVariance = CalculateRssiVariance(st);
+    double interferenceLevel = CalculateInterferenceLevel(st);
+    double distanceMetric = GetDistanceMetric();
+    double avgPacketSize = CalculateAvgPacketSize(st);
+
+    // Clamp all features
     retryRate = std::clamp(retryRate, 0.0, 1.0);
     frameErrorRate = std::clamp(frameErrorRate, 0.0, 1.0);
     channelBusyRatio = std::clamp(channelBusyRatio, 0.0, 1.0);
     recentRateAvg = std::clamp(recentRateAvg, 0.0, 7.0);
     rateStability = std::clamp(rateStability, 0.0, 1.0);
     sinceLastChange = std::clamp(sinceLastChange, 0.0, 1.0);
+    rssiVariance = std::clamp(rssiVariance, 0.0, 100.0);
+    interferenceLevel = std::clamp(interferenceLevel, 0.0, 1.0);
+    distanceMetric = std::clamp(distanceMetric, 0.0, 200.0);
+    avgPacketSize = std::clamp(avgPacketSize, 64.0, 1500.0);
 
     // 802.11a rates
     const uint64_t rates802_11a[8] =
@@ -1321,7 +1371,7 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
         return std::isfinite(val) ? val : defaultVal;
     };
 
-    // Write CSV row with ALL 20 features
+    // Write CSV row with ALL 24 features (20 Phase 1A + 4 Phase 1B)
     m_logFile << std::fixed << std::setprecision(6) << simTime << "," << stationId << ","
               << static_cast<uint32_t>(rateIdx) << "," << phyRate
               << ","
@@ -1343,9 +1393,13 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
               // Assessment (2)
               << safeValue(severity) << "," << safeValue(confidence, 0.5)
               << ","
-              // PHASE 1A: New features (6)
+              // Phase 1A (6)
               << retryRate << "," << frameErrorRate << "," << channelBusyRatio << ","
               << recentRateAvg << "," << rateStability << "," << sinceLastChange
+              << ","
+              // PHASE 1B: NEW FEATURES (4)
+              << rssiVariance << "," << interferenceLevel << "," << distanceMetric << ","
+              << avgPacketSize
               << ","
               // Scenario file (1)
               << m_scenarioFileName << "\n";
@@ -1354,6 +1408,78 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
     {
         m_logFile.flush();
     }
+}
+
+// ============================================================================
+// PHASE 1B: NEW FEATURE CALCULATIONS
+// ============================================================================
+
+double
+MinstrelWifiManagerLogged::CalculateRssiVariance(MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_rssiHistory.size() < 3)
+    {
+        return 0.0; // Not enough samples
+    }
+
+    // Calculate mean
+    double mean = 0.0;
+    for (double rssi : st->m_rssiHistory)
+    {
+        mean += rssi;
+    }
+    mean /= st->m_rssiHistory.size();
+
+    // Calculate variance
+    double variance = 0.0;
+    for (double rssi : st->m_rssiHistory)
+    {
+        double diff = rssi - mean;
+        variance += diff * diff;
+    }
+    variance /= st->m_rssiHistory.size();
+
+    return variance; // Units: dB²
+}
+
+double
+MinstrelWifiManagerLogged::CalculateInterferenceLevel(MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_recentTransmissions == 0)
+    {
+        return 0.05; // Default 5% collision rate
+    }
+
+    // Ratio of collisions to total transmissions
+    double interferenceRatio =
+        static_cast<double>(st->m_recentCollisions) / st->m_recentTransmissions;
+
+    // Clamp to [0.0, 1.0]
+    return std::clamp(interferenceRatio, 0.0, 1.0);
+}
+
+double
+MinstrelWifiManagerLogged::GetDistanceMetric() const
+{
+    // Return scenario distance in meters (set via SetScenarioParameters)
+    return m_scenarioDistance;
+}
+
+double
+MinstrelWifiManagerLogged::CalculateAvgPacketSize(MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_packetSizeHistory.empty())
+    {
+        return 1200.0; // Default MTU
+    }
+
+    uint64_t sum = 0;
+    for (uint32_t size : st->m_packetSizeHistory)
+    {
+        sum += size;
+    }
+
+    return static_cast<double>(sum) / st->m_packetSizeHistory.size();
 }
 
 // ============================================================================
