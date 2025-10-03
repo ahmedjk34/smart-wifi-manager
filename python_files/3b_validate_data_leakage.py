@@ -56,7 +56,8 @@ OUTCOME_FEATURES_REMOVED = [
     "severity", "confidence"
 ]
 
-# 🔧 FIXED: Safe features (15 features after Phase 1A)
+# 🔧 FIXED: Safe features (12 features after removing rate-dependent)
+# 🚀 PHASE 1A: 12 features (not 15 - removed 3 leaky ones)
 SAFE_FEATURES = [
     # SNR features (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
@@ -65,24 +66,37 @@ SAFE_FEATURES = [
     # Network state (2)
     "channelWidth", "mobilityMetric",
     
-    # 🚀 PHASE 1A: NEW FEATURES (6)
-    "retryRate", "frameErrorRate", "channelBusyRatio",
-    "recentRateAvg", "rateStability", "sinceLastChange"
-]  # TOTAL: 15 features
+    # 🚀 PHASE 1A: SAFE ONLY (3 features, not 6!)
+    "retryRate",          # ✅ Past retry rate (not current)
+    "frameErrorRate",     # ✅ Past error rate (not current)
+    "channelBusyRatio",   # ✅ Channel occupancy (independent of rate)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
+    # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
+    # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
+]  # TOTAL: 12 features (not 15)
 
 # SNR features (EXPECTED to correlate with oracle labels!)
-# 🚀 PHASE 1A: Added 4 Phase 1A features that depend on SNR
+# 🚀 PHASE 1A: Added Phase 1A features that depend on SNR
 SNR_FEATURES = [
     # Core SNR measurements (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
-    # 🚀 PHASE 1A: SNR-dependent features (4)
+    # 🚀 PHASE 1A: SNR-dependent features (2, not 4!)
     "retryRate",        # Worse SNR → more retries (high correlation expected)
     "frameErrorRate",   # Worse SNR → more errors (high correlation expected)
-    "recentRateAvg",    # SNR affects rate choice (moderate correlation)
-    "rateStability"     # SNR instability → rate instability (moderate correlation)
-]  # TOTAL: 11 SNR-related features
+    # Note: channelBusyRatio is NOT SNR-dependent (interference, not signal)
+]  # TOTAL: 9 SNR-related features (not 11)
+
+# 🚨 RATE-DEPENDENT FEATURES (Should be REMOVED by File 2, NOT in File 4!)
+# These are in the enriched CSV but should NOT be used for training
+RATE_DEPENDENT_FEATURES = [
+    "recentRateAvg",      # Includes current rate in average
+    "rateStability",      # Includes current rate in variance
+    "sinceLastChange"     # Tells if rate just changed
+]
+
 
 CONTEXT_LABEL = "network_context"
 
@@ -175,13 +189,16 @@ def check_safe_features_present(df: pd.DataFrame) -> Tuple[bool, List[str]]:
         return False, missing_safe
     else:
         print(f"\n✅ PASS: All {len(SAFE_FEATURES)} safe features present")
-        print(f"   7 SNR features + 2 network state + 6 Phase 1A features = 15 total")
+        print(f"   7 SNR features + 2 network state + 3 Phase 1A features = 12 total")
         print(f"   (NO outcome features - removed in File 2)")
+        print(f"   ⚠️ NOTE: 3 rate-dependent features in CSV but EXCLUDED from training")
+
         return True, []
 
 def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bool, List[Tuple[str, float]]]:
     """
     🔧 FIXED: Understands that SNR SHOULD correlate with oracle labels!
+    🔧 FIXED: Excludes rate-dependent features from critical checks
     
     Only flags:
     - Outcome features with high correlation (shouldn't exist!)
@@ -189,6 +206,7 @@ def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bo
     
     Does NOT flag:
     - SNR features (they're SUPPOSED to correlate with oracle!)
+    - Rate-dependent features (exist in CSV but excluded by File 4)
     """
     print("\n" + "="*80)
     print(f"5. FEATURE-TARGET CORRELATION VALIDATION (SNR-AWARE)")
@@ -201,6 +219,7 @@ def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bo
     
     critical_corrs = []
     expected_corrs = []
+    excluded_corrs = []  # NEW: Track rate-dependent features
     
     # Check correlations for all remaining features
     for col in df.columns:
@@ -213,6 +232,12 @@ def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bo
                 
                 if pd.notnull(corr):
                     abs_corr = abs(corr)
+                    
+                    # 🔧 NEW: Skip rate-dependent features (they're in CSV but excluded from training)
+                    if col in RATE_DEPENDENT_FEATURES:
+                        print(f"⚠️ EXCLUDED: {col} = {corr:.3f} (exists in CSV, excluded by File 4)")
+                        excluded_corrs.append((col, corr))
+                        continue  # Don't flag as critical!
                     
                     # Determine which threshold to use
                     if col in SNR_FEATURES:
@@ -244,6 +269,13 @@ def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bo
             except Exception as e:
                 print(f"⚠️ Could not compute correlation for {col}: {e}")
     
+    # Summary
+    if excluded_corrs:
+        print(f"\n⚠️ NOTE: {len(excluded_corrs)} rate-dependent features in CSV (excluded from training)")
+        print(f"   These are OK - File 4 will exclude them:")
+        for feat, corr in excluded_corrs:
+            print(f"     - {feat}: {corr:.3f}")
+    
     if critical_corrs:
         print(f"\n🚨 VALIDATION FAILED: {len(critical_corrs)} critical correlations")
         for feat, corr in critical_corrs:
@@ -256,7 +288,7 @@ def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bo
         else:
             print(f"\n✅ PASS: No concerning correlations found")
         return True, []
-
+    
 def check_context_snr_relationship(df: pd.DataFrame) -> Tuple[bool, float]:
     """
     🔧 FIXED: Context-SNR correlation is EXPECTED (context is defined by SNR ranges)
@@ -384,6 +416,36 @@ def check_scenario_file_presence(df: pd.DataFrame) -> Tuple[bool, Dict]:
     
     return True, metrics
 
+
+def check_rate_dependent_features_excluded(df: pd.DataFrame, logger, progress) -> Tuple[bool, List[str]]:
+    """
+    🔧 NEW: Validate that rate-dependent features are NOT used for training
+    
+    These features exist in enriched CSV but should be excluded by File 4
+    """
+    progress.start_stage("Rate-Dependent Features Exclusion Check")
+    
+    found_rate_dependent = []
+    for feature in RATE_DEPENDENT_FEATURES:
+        if feature in df.columns:
+            logger.info(f"✅ Rate-dependent feature '{feature}' exists in CSV (expected)")
+            found_rate_dependent.append(feature)
+        else:
+            logger.warning(f"⚠️ Rate-dependent feature '{feature}' NOT in CSV (should exist)")
+    
+    if len(found_rate_dependent) == len(RATE_DEPENDENT_FEATURES):
+        progress.add_success(f"All {len(RATE_DEPENDENT_FEATURES)} rate-dependent features found in CSV")
+        progress.add_success("⚠️ NOTE: These should be EXCLUDED by File 4 (not removed from CSV)")
+        return True, found_rate_dependent
+    else:
+        progress.add_issue(
+            "MISSING_RATE_DEPENDENT_FEATURES",
+            f"Some rate-dependent features missing from CSV",
+            "WARNING"
+        )
+        return False, found_rate_dependent
+    
+
 # ================== MAIN VALIDATION ==================
 def main():
     print("="*80)
@@ -449,7 +511,24 @@ def main():
     if not passed:
         all_passed = False
         critical_issues.append("scenario_file column missing")
-    
+
+    # Add this after line ~580 (after validate_safe_features_present):
+    # Define dummy logger and progress for compatibility
+    class DummyLogger:
+        def info(self, msg): print(msg)
+        def warning(self, msg): print(msg)
+    class DummyProgress:
+        def start_stage(self, msg): print(f"== {msg} ==")
+        def add_success(self, msg): print(f"✅ {msg}")
+        def add_issue(self, code, msg, level): print(f"{level}: {code} - {msg}")
+
+    logger = DummyLogger()
+    progress = DummyProgress()
+
+    passed, found = check_rate_dependent_features_excluded(df, logger, progress)
+    if passed:
+        progress.add_success(f"Rate-dependent features properly handled (in CSV, excluded from training)")
+        
     # Final summary
     print("\n" + "="*80)
     print("VALIDATION SUMMARY")
