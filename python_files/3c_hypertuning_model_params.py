@@ -2,9 +2,10 @@
 Step 3c: Hyperparameter Tuning for WiFi Rate Adaptation - PHASE 5 ENHANCED
 Systematic optimization of RandomForest hyperparameters using GridSearchCV
 
-CRITICAL UPDATES (2025-10-02 20:26:30 UTC):
+CRITICAL UPDATES (2025-10-03 14:18:32 UTC):
+- 🚀 PHASE 1B: 14 safe features (4 Phase 1B features added, 2 broken Phase 1A removed)
 - 🚀 PHASE 5A: MinMaxScaler option (preserves physical meaning of SNR)
-- 🚀 PHASE 5B: Enhanced grid for 15 features (can go deeper without overfitting)
+- 🚀 PHASE 5B: Enhanced grid for 14 features (can go deeper without overfitting)
 - 🚀 PHASE 5C: Optional XGBoost support (if RF accuracy plateaus)
 - Issue C1: Fixed overfitting hyperparameters (max_depth=15/20/25, min_samples_leaf=5/8)
 - Issue C5: Removed conflicting grid definitions (single source of truth)
@@ -79,20 +80,30 @@ TARGET_LABELS = ["rateIdx", "oracle_conservative", "oracle_balanced", "oracle_ag
 
 # Safe features (no temporal leakage - Issue #1)
 # 🚀 PHASE 1A + 5: Safe features (15 features, no temporal leakage)
+# 🚀 PHASE 1B: Safe features (14 features, no temporal leakage)
 SAFE_FEATURES = [
-    # Original 9 features
-    "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
+    # SNR features (7)
+    "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    "channelWidth", "mobilityMetric",
     
-    # 🚀 PHASE 1A: NEW FEATURES (6 added)
-    "retryRate",          # Retry rate (past performance)
-    "frameErrorRate",     # Error rate (PHY feedback)
-    "channelBusyRatio",   # Channel occupancy (interference)
-    "recentRateAvg",      # Recent rate average (temporal context)
-    "rateStability",      # Rate stability (change frequency)
-    "sinceLastChange"     # Time since last rate change (stability)
-]
+    # Network state (1 - removed channelWidth, always 20)
+    "mobilityMetric",
+    
+    # 🚀 PHASE 1A: SAFE ONLY (2 features - removed channelBusyRatio, always 0)
+    "retryRate",          # ✅ Past retry rate (not current)
+    "frameErrorRate",     # ✅ Past error rate (not current)
+    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
+    
+    # 🚀 PHASE 1B: NEW FEATURES (4)
+    "rssiVariance",       # ✅ RSSI variance (signal stability)
+    "interferenceLevel",  # ✅ Interference level (collision tracking)
+    "distanceMetric",     # ✅ Distance metric (from scenario)
+    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
+    # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
+    # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
+]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
 
 # ================== HYPERPARAMETER GRIDS ==================
 # 🔧 FIXED: Issue C1, C5 - Single grid with proper regularization
@@ -101,8 +112,8 @@ SAFE_FEATURES = [
 # - Limits tree depth to prevent overfitting
 # - Requires multiple samples per leaf (no memorization)
 # - Uses feature subsampling (adds randomness)
-# 🚀 PHASE 5: ENHANCED GRID for 15 features
-# With 15 features, we can go slightly deeper without overfitting
+# 🚀 PHASE 5: ENHANCED GRID for 14 features
+# With 14 features, we can go slightly deeper without overfitting
 ULTRA_FAST_GRID = {
     'n_estimators': [200, 300],      # More trees for 15 features
     'max_depth': [15, 20, 25],       # Can go deeper with more features
