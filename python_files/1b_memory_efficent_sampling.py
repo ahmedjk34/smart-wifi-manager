@@ -438,6 +438,7 @@ def main():
     print(f"   POWER = {POWER}         # 0.3-0.7 recommended")
     print(f"   TARGET_TOTAL = {TARGET_TOTAL}")
     print("="*60)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
