@@ -87,7 +87,7 @@ RATE_MAPPING = {
 
 
 # 🔧 FIXED: Issue C3 - SAFE features list (RATE-DEPENDENT FEATURES REMOVED!)
-# 🚀 PHASE 1A: REDUCED to 12 features (was 15, removed 3 leaky)
+# 🚀 PHASE 1B: UPDATED to 14 features (was 12, added 4 Phase 1B, removed 2 leaky Phase 1A)
 # These features are available BEFORE making rate decision
 SAFE_FEATURES = [
     # SNR features (pre-decision) - SAFE (7)
@@ -100,18 +100,24 @@ SAFE_FEATURES = [
     # ❌ REMOVED: severity (derived from packetLossRate)
     # ❌ REMOVED: confidence (derived from shortSuccRatio)
     
-    # Network state (pre-decision) - SAFE (2)
-    "channelWidth", "mobilityMetric",
+    # Network state (pre-decision) - SAFE (1, removed channelWidth - always 20)
+    "mobilityMetric",
     
-    # 🚀 PHASE 1A: NEW FEATURES - ONLY SAFE ONES (3, not 6!)
+    # 🚀 PHASE 1A: NEW FEATURES - ONLY SAFE ONES (2, removed channelBusyRatio - always 0)
     "retryRate",          # ✅ Retry rate (past performance, not current)
     "frameErrorRate",     # ✅ Error rate (PHY feedback, not current)
-    "channelBusyRatio",   # ✅ Channel occupancy (interference, independent of rate)
+    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
     
     # ❌ REMOVED: recentRateAvg (LEAKAGE! - includes current rate in calculation)
     # ❌ REMOVED: rateStability (LEAKAGE! - includes current rate in calculation)  
     # ❌ REMOVED: sinceLastChange (LEAKAGE! - tells model if rate just changed)
-]  # TOTAL: 12 features (7 SNR + 2 network + 3 Phase 1A SAFE)
+    
+    # 🚀 PHASE 1B: NEW FEATURES (4)
+    "rssiVariance",       # ✅ RSSI variance (signal stability)
+    "interferenceLevel",  # ✅ Interference level (collision tracking)
+    "distanceMetric",     # ✅ Distance metric (from scenario)
+    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
+]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
 
 
 # Temporal leakage features (should already be removed in File 2)
@@ -195,8 +201,9 @@ def setup_logging():
     logger.info("  - Oracle labels will have VARIANCE (not deterministic!)")
     logger.info("  - Each SNR bin should have 1.5-3.0 unique labels")
     logger.info("  - Oracle accuracy will DROP to 70-80% (realistic!)")
-    logger.info("  - Training features reduced from 14 to 9 (removed 5 outcome features)")
+    logger.info("  - Training features: 14 (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)")
     logger.info("  - Model will learn SNR→Rate mappings with realistic noise")
+    logger.info("  - PHASE 1B: Added rssiVariance, interferenceLevel, distanceMetric, avgPacketSize")
     logger.info("="*80)
     return logger
 
@@ -369,6 +376,7 @@ def remove_leaky_and_temporal_features(df):
 def classify_network_context(row) -> str:
     """
     🔧 FIXED: Issue H5 - Context classification uses ONLY SNR and variance
+    🚀 PHASE 1B: Now also uses interferenceLevel and rssiVariance
     NO outcome features (success, packet loss) used!
     
     Context determination based on IEEE 802.11 signal quality standards
@@ -376,6 +384,8 @@ def classify_network_context(row) -> str:
     # Use ONLY pre-decision features
     snr = safe_float(row.get('lastSnr', 20))
     snr_variance = safe_float(row.get('snrVariance', 0))
+    rssi_variance = safe_float(row.get('rssiVariance', 0))  # PHASE 1B
+    interference = safe_float(row.get('interferenceLevel', 0))  # PHASE 1B
     mobility = safe_float(row.get('mobilityMetric', 0))
     
     # SNR-based context (primary factor)
@@ -392,13 +402,21 @@ def classify_network_context(row) -> str:
     else:
         base_context = 'good'
     
-    # Stability modifier (variance-based)
-    if snr_variance > CONTEXT_THRESHOLDS['variance_high']:
+    # Stability modifier (variance-based, now using BOTH snrVariance and rssiVariance)
+    combined_variance = max(snr_variance, rssi_variance)  # Use worst-case variance
+    if combined_variance > CONTEXT_THRESHOLDS['variance_high']:
         stability = 'unstable'
-    elif snr_variance > CONTEXT_THRESHOLDS['variance_moderate']:
+    elif combined_variance > CONTEXT_THRESHOLDS['variance_moderate']:
         stability = 'somewhat_unstable'
     else:
         stability = 'stable'
+    
+    # Interference modifier (PHASE 1B)
+    if interference > 0.7:  # High interference
+        if base_context in ['excellent', 'good']:
+            base_context = 'marginal_conditions'  # Degrade context
+        elif base_context == 'marginal_conditions':
+            base_context = 'poor'
     
     # Mobility modifier
     if mobility > CONTEXT_THRESHOLDS['mobility_high']:
@@ -417,15 +435,17 @@ def classify_network_context(row) -> str:
         return 'poor_unstable'
     else:
         return f'{base_context}_stable'
-
 # ================== ORACLE LABEL CREATION (FULLY FIXED) ==================
 def create_snr_based_oracle_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
     """
     ✅ TUNED: Focused probabilistic oracle (2-3 labels per SNR, not 6)
+    🚀 PHASE 1B: Now uses interferenceLevel and rssiVariance
     """
     # Extract features
     snr = safe_float(row.get('lastSnr', 20))
     snr_variance = safe_float(row.get('snrVariance', 0))
+    rssi_variance = safe_float(row.get('rssiVariance', 0))  # PHASE 1B
+    interference = safe_float(row.get('interferenceLevel', 0))  # PHASE 1B
     mobility = safe_float(row.get('mobilityMetric', 0))
     
     # Map SNR to base rate
@@ -438,16 +458,28 @@ def create_snr_based_oracle_labels(row: pd.Series, context: str, current_rate: i
     elif snr < 25: base = 6
     else: base = 7
     
-    # Apply penalties
+    # Apply penalties (now includes PHASE 1B features)
     penalty = 0
-    if snr_variance > CONTEXT_THRESHOLDS['variance_high']:
+    
+    # Variance penalty (use worst-case between snr_variance and rssi_variance)
+    combined_variance = max(snr_variance, rssi_variance)
+    if combined_variance > CONTEXT_THRESHOLDS['variance_high']:
         penalty += 1
-    elif snr_variance > CONTEXT_THRESHOLDS['variance_moderate']:
+    elif combined_variance > CONTEXT_THRESHOLDS['variance_moderate']:
         penalty += 0.5
+    
+    # Mobility penalty
     if mobility > CONTEXT_THRESHOLDS['mobility_high']:
         penalty += 1
     elif mobility > CONTEXT_THRESHOLDS['mobility_moderate']:
         penalty += 0.5
+    
+    # Interference penalty (PHASE 1B)
+    if interference > 0.7:  # High interference
+        penalty += 1
+    elif interference > 0.4:  # Moderate interference
+        penalty += 0.5
+    
     base = max(0, int(base - penalty))
     
     # Context adjustments
@@ -500,8 +532,6 @@ def create_snr_based_oracle_labels(row: pd.Series, context: str, current_rate: i
         "oracle_balanced": bal,
         "oracle_aggressive": agg,
     }
-
-
 # ================== SYNTHETIC EDGE CASES (FIXED) ==================
 def generate_critical_edge_cases(target_samples: int = SYNTHETIC_EDGE_CASES) -> pd.DataFrame:
     """
@@ -533,16 +563,21 @@ def generate_critical_edge_cases(target_samples: int = SYNTHETIC_EDGE_CASES) -> 
 def create_high_snr_high_rate() -> Dict[str, Any]:
     """
     🔧 FIXED: SYNTHETIC_HARDCODED - Now uses dynamic oracle generation!
+    🚀 PHASE 1B: Now includes rssiVariance and interferenceLevel
     Excellent conditions → high rate
     """
     snr = np.random.uniform(25, 35)
     variance = np.random.uniform(0.1, 1.0)
+    rssi_variance = np.random.uniform(0.1, 1.0)  # PHASE 1B
+    interference = np.random.uniform(0.0, 0.2)  # Low interference for excellent conditions
     mobility = np.random.uniform(0, 3)
     
     # Create row for oracle function
     row = pd.Series({
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility
     })
     
@@ -552,6 +587,8 @@ def create_high_snr_high_rate() -> Dict[str, Any]:
     return {
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility,
         'channelWidth': 20,
         'rateIdx': 7,
@@ -561,48 +598,24 @@ def create_high_snr_high_rate() -> Dict[str, Any]:
         'network_context': 'excellent_stable'
     }
 
-def create_low_snr_low_rate() -> Dict[str, Any]:
-    """
-    🔧 FIXED: SYNTHETIC_HARDCODED - Now uses dynamic oracle generation!
-    Poor conditions → low rate
-    """
-    snr = np.random.uniform(3, 10)
-    variance = np.random.uniform(0.5, 3.0)
-    mobility = np.random.uniform(0, 5)
-    
-    row = pd.Series({
-        'lastSnr': snr,
-        'snrVariance': variance,
-        'mobilityMetric': mobility
-    })
-    
-    # ✅ FIXED: Use oracle function!
-    oracle_labels = create_snr_based_oracle_labels(row, 'emergency_recovery', 0)
-    
-    return {
-        'lastSnr': snr,
-        'snrVariance': variance,
-        'mobilityMetric': mobility,
-        'channelWidth': 20,
-        'rateIdx': np.random.choice([0, 1, 2]),
-        'oracle_conservative': oracle_labels['oracle_conservative'],
-        'oracle_balanced': oracle_labels['oracle_balanced'],
-        'oracle_aggressive': oracle_labels['oracle_aggressive'],
-        'network_context': 'emergency_recovery'
-    }
 
 def create_mid_snr_mid_rate() -> Dict[str, Any]:
     """
     🔧 FIXED: SYNTHETIC_HARDCODED - Now uses dynamic oracle generation!
+    🚀 PHASE 1B: Now includes rssiVariance and interferenceLevel
     Moderate conditions → moderate rate
     """
     snr = np.random.uniform(12, 20)
     variance = np.random.uniform(0.5, 2.5)
+    rssi_variance = np.random.uniform(0.5, 2.5)  # PHASE 1B
+    interference = np.random.uniform(0.2, 0.5)  # Moderate interference
     mobility = np.random.uniform(0, 8)
     
     row = pd.Series({
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility
     })
     
@@ -612,6 +625,8 @@ def create_mid_snr_mid_rate() -> Dict[str, Any]:
     return {
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility,
         'channelWidth': 20,
         'rateIdx': np.random.choice([3, 4, 5]),
@@ -621,18 +636,60 @@ def create_mid_snr_mid_rate() -> Dict[str, Any]:
         'network_context': 'good_stable'
     }
 
-def create_high_variance_scenario() -> Dict[str, Any]:
+def create_low_snr_low_rate() -> Dict[str, Any]:
     """
     🔧 FIXED: SYNTHETIC_HARDCODED - Now uses dynamic oracle generation!
-    High variance → conservative rate
+    🚀 PHASE 1B: Now includes rssiVariance and interferenceLevel
+    Poor conditions → low rate
     """
-    snr = np.random.uniform(15, 25)
-    variance = np.random.uniform(5, 10)  # High variance
+    snr = np.random.uniform(3, 10)
+    variance = np.random.uniform(0.5, 3.0)
+    rssi_variance = np.random.uniform(0.5, 3.0)  # PHASE 1B
+    interference = np.random.uniform(0.6, 1.0)  # High interference for poor conditions
     mobility = np.random.uniform(0, 5)
     
     row = pd.Series({
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
+        'mobilityMetric': mobility
+    })
+    
+    # ✅ FIXED: Use oracle function!
+    oracle_labels = create_snr_based_oracle_labels(row, 'emergency_recovery', 0)
+    
+    return {
+        'lastSnr': snr,
+        'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
+        'mobilityMetric': mobility,
+        'channelWidth': 20,
+        'rateIdx': np.random.choice([0, 1, 2]),
+        'oracle_conservative': oracle_labels['oracle_conservative'],
+        'oracle_balanced': oracle_labels['oracle_balanced'],
+        'oracle_aggressive': oracle_labels['oracle_aggressive'],
+        'network_context': 'emergency_recovery'
+    }
+
+def create_high_variance_scenario() -> Dict[str, Any]:
+    """
+    🔧 FIXED: SYNTHETIC_HARDCODED - Now uses dynamic oracle generation!
+    🚀 PHASE 1B: Now includes rssiVariance and interferenceLevel
+    High variance → conservative rate
+    """
+    snr = np.random.uniform(15, 25)
+    variance = np.random.uniform(5, 10)  # High variance
+    rssi_variance = np.random.uniform(5, 10)  # High RSSI variance too (PHASE 1B)
+    interference = np.random.uniform(0.3, 0.6)  # Moderate interference
+    mobility = np.random.uniform(0, 5)
+    
+    row = pd.Series({
+        'lastSnr': snr,
+        'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility
     })
     
@@ -642,6 +699,8 @@ def create_high_variance_scenario() -> Dict[str, Any]:
     return {
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility,
         'channelWidth': 20,
         'rateIdx': np.random.choice([3, 4, 5, 6]),
@@ -654,15 +713,20 @@ def create_high_variance_scenario() -> Dict[str, Any]:
 def create_high_mobility_scenario() -> Dict[str, Any]:
     """
     🔧 FIXED: SYNTHETIC_HARDCODED - Now uses dynamic oracle generation!
+    🚀 PHASE 1B: Now includes rssiVariance and interferenceLevel
     High mobility → conservative rate
     """
     snr = np.random.uniform(15, 25)
     variance = np.random.uniform(2, 5)
+    rssi_variance = np.random.uniform(2, 5)  # PHASE 1B
+    interference = np.random.uniform(0.3, 0.6)  # Moderate interference
     mobility = np.random.uniform(10, 50)  # High mobility
     
     row = pd.Series({
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility
     })
     
@@ -672,6 +736,8 @@ def create_high_mobility_scenario() -> Dict[str, Any]:
     return {
         'lastSnr': snr,
         'snrVariance': variance,
+        'rssiVariance': rssi_variance,  # PHASE 1B
+        'interferenceLevel': interference,  # PHASE 1B
         'mobilityMetric': mobility,
         'channelWidth': 20,
         'rateIdx': np.random.choice([3, 4, 5, 6]),
@@ -680,7 +746,6 @@ def create_high_mobility_scenario() -> Dict[str, Any]:
         'oracle_aggressive': oracle_labels['oracle_aggressive'],
         'network_context': 'good_stable'
     }
-
 # ================== ORACLE RANDOMNESS VALIDATION ==================
 def validate_oracle_randomness(df: pd.DataFrame, logger):
     """
@@ -841,7 +906,7 @@ def main():
     logger.info(f"Network context distribution:\n{nc_vc}")
 
     # Feature stats (only SAFE features)
-    print("\n--- SAFE FEATURE STATISTICS (9 features, NO outcomes) ---")
+    print("\n--- SAFE FEATURE STATISTICS (14 features, NO outcomes) ---")
     safe_feature_cols = [c for c in final_df.columns if c in SAFE_FEATURES]
     if safe_feature_cols:
         stats_df = final_df[safe_feature_cols].describe(include='all').transpose()
