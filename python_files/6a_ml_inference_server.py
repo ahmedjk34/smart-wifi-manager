@@ -58,9 +58,31 @@ class ServerConfig:
     enable_monitoring: bool = True
     monitoring_window: int = 1000
 
+
+    
 # ================== FEATURE DEFINITIONS ==================
 class WiFiFeatures:
-    """WiFi feature definitions and validation - 15 SAFE FEATURES (PHASE 1A)."""
+    """WiFi feature definitions and validation - 14 SAFE FEATURES (PHASE 1B)."""
+    
+    # 🚀 PHASE 1B: 14 safe features matching File 4 training pipeline
+    FEATURE_NAMES = [
+        # SNR features (7)
+        "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
+        "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
+        
+        # Network state (1 - removed channelWidth)
+        "mobilityMetric",
+        
+        # Phase 1A features (2 - removed channelBusyRatio)
+        "retryRate",          # Retry rate (past performance)
+        "frameErrorRate",     # Error rate (PHY feedback)
+        
+        # 🚀 PHASE 1B: NEW FEATURES (4)
+        "rssiVariance",       # RSSI variance (signal stability)
+        "interferenceLevel",  # Interference level (collision tracking)
+        "distanceMetric",     # Distance metric (from scenario)
+        "avgPacketSize"       # Average packet size (traffic characteristic)
+    ]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
     
     # 🚀 PHASE 1B: Ranges for 14 safe features
     FEATURE_RANGES = {
@@ -85,28 +107,6 @@ class WiFiFeatures:
         11: (0.0, 1.0, "interferenceLevel"),
         12: (0.0, 200.0, "distanceMetric (m)"),
         13: (64.0, 1500.0, "avgPacketSize (bytes)")
-    }
-    
-    # 🚀 PHASE 1A: Ranges for 15 safe features (indices 0-14)
-    FEATURE_RANGES = {
-        # Original 9 features (0-8)
-        0: (-5.0, 40.0, "lastSnr (dB)"),
-        1: (-5.0, 40.0, "snrFast (dB)"),
-        2: (-5.0, 40.0, "snrSlow (dB)"),
-        3: (-10.0, 10.0, "snrTrendShort"),
-        4: (0.0, 10.0, "snrStabilityIndex"),
-        5: (0.0, 1.0, "snrPredictionConfidence"),
-        6: (0.0, 100.0, "snrVariance"),
-        7: (5.0, 160.0, "channelWidth (MHz)"),
-        8: (0.0, 50.0, "mobilityMetric"),
-        
-        # 🚀 PHASE 1A: NEW FEATURES (9-14)
-        9: (0.0, 1.0, "retryRate"),
-        10: (0.0, 1.0, "frameErrorRate"),
-        11: (0.0, 1.0, "channelBusyRatio"),
-        12: (0.0, 7.0, "recentRateAvg"),
-        13: (0.0, 1.0, "rateStability"),
-        14: (0.0, 1.0, "sinceLastChange")
     }
 
     @classmethod
