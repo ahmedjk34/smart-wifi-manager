@@ -89,7 +89,7 @@ RATE_MAPPING = {
 # 🚀 PHASE 1A: ENHANCED to 15 features (was 9)
 # These features are available BEFORE making rate decision
 SAFE_FEATURES = [
-    # SNR features (pre-decision) - SAFE
+    # SNR features (pre-decision) - SAFE (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
@@ -99,7 +99,7 @@ SAFE_FEATURES = [
     # ❌ REMOVED: severity (derived from packetLossRate)
     # ❌ REMOVED: confidence (derived from shortSuccRatio)
     
-    # Network state (pre-decision) - SAFE
+    # Network state (pre-decision) - SAFE (2)
     "channelWidth", "mobilityMetric",
     
     # 🚀 PHASE 1A: NEW FEATURES (6 added for 67% more information!)
@@ -109,7 +109,8 @@ SAFE_FEATURES = [
     "recentRateAvg",      # Recent rate average (temporal context)
     "rateStability",      # Rate stability (change frequency)
     "sinceLastChange"     # Time since last rate change (stability)
-]
+]  # TOTAL: 15 features (7 SNR + 2 network + 6 Phase 1A)
+
 
 
 # Temporal leakage features (should already be removed in File 2)
