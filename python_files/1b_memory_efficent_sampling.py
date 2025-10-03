@@ -39,7 +39,7 @@ NUM_RATES = 8
 # BALANCING STRATEGY - Choose one:
 STRATEGY = 'power'  # 'power', 'balanced', or 'tiered'
 POWER = 0.5         # Only used if STRATEGY='power' (0.3-0.7 recommended)
-TARGET_TOTAL = 1_250_000  # Total samples in final dataset
+TARGET_TOTAL = 2_812_500  # Total samples in final dataset
 
 # Tiered strategy percentages (only used if STRATEGY='tiered')
 TIERED_PERCENTAGES = {
@@ -53,7 +53,7 @@ TIERED_PERCENTAGES = {
     7: 35,  # Still dominant, but not overwhelming
 }
 
-# FIXED: Phase 1A - 25 columns (4 metadata + 20 features + 1 scenario)
+# PHASE 1B UPDATE (2025-10-03): Now 29 columns (was 25)
 EXPECTED_COLUMNS = [
     # Metadata (4)
     'time', 'stationId', 'rateIdx', 'phyRate',
@@ -78,9 +78,13 @@ EXPECTED_COLUMNS = [
     'retryRate', 'frameErrorRate', 'channelBusyRatio',
     'recentRateAvg', 'rateStability', 'sinceLastChange',
     
+    # PHASE 1B: NEW FEATURES (4)
+    'rssiVariance', 'interferenceLevel', 'distanceMetric', 'avgPacketSize',
+    
     # Scenario identifier (1)
     'scenario_file'
-]  # TOTAL: 25 columns
+]  # TOTAL: 29 columns (4 metadata + 24 features + 1 scenario)
+
 
 # ==================== PASS 1: COUNT RATES ====================
 def count_rates_fast(filepath):
