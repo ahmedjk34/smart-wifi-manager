@@ -420,9 +420,16 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     currentStats.simulationTime = 20.0;
     currentStats.rateChanges = 0;
 
+    // Determine category for environment adjustments
+    std::string category = "GoodConditions";
+    if (tc.staDistance >= 70.0 || (tc.staDistance >= 50.0 && tc.staSpeed >= 10.0))
+        category = "PoorPerformance";
+    else if (tc.numInterferers >= 3 || (tc.numInterferers >= 2 && tc.staDistance >= 40.0))
+        category = "HighInterference";
+
     std::cout << "\n" << std::string(60, '=') << std::endl;
     std::cout << "FIXED SMART-RF BENCHMARK - TEST CASE " << testCaseNumber << std::endl;
-    std::cout << "Scenario: " << tc.scenarioName << std::endl;
+    std::cout << "Scenario: " << tc.scenarioName << " | Category: " << category << std::endl;
     std::cout << "Distance: " << tc.staDistance << "m | Interferers: " << tc.numInterferers
               << std::endl;
     std::cout << "Expected SNR: "
@@ -432,7 +439,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
 
     logFile << "[TEST START] " << testCaseNumber << " | " << tc.scenarioName
             << " | Strategy: " << tc.oracleStrategy << " | Distance: " << tc.staDistance << "m"
-            << std::endl;
+            << " | Category: " << category << std::endl;
 
     try
     {
@@ -447,10 +454,35 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         interfererApNodes.Create(tc.numInterferers);
         interfererStaNodes.Create(tc.numInterferers);
 
-        // PHY and Channel
+        // ============================================================
+        // MATCHED PHY CONFIGURATION (IDENTICAL TO MINSTREL BASELINE)
+        // ============================================================
         YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
         YansWifiPhyHelper phy;
         phy.SetChannel(channel.Create());
+
+        // MATCHED: Baseline PHY parameters
+        phy.Set("TxPowerStart", DoubleValue(30.0));
+        phy.Set("TxPowerEnd", DoubleValue(30.0));
+        phy.Set("RxNoiseFigure", DoubleValue(3.0)); // Base: 3dB
+        phy.Set("CcaEdThreshold", DoubleValue(-82.0));
+        phy.Set("RxSensitivity", DoubleValue(-92.0));
+
+        // MATCHED: Category-specific adjustments
+        if (category == "PoorPerformance")
+        {
+            phy.Set("RxNoiseFigure", DoubleValue(5.0));
+        }
+        else if (category == "HighInterference")
+        {
+            phy.Set("RxNoiseFigure", DoubleValue(4.0));
+        }
+
+        std::cout << "[PHY] Matched to baseline: TxPower=30dBm, RxNoise="
+                  << (category == "PoorPerformance"
+                          ? "5.0"
+                          : (category == "HighInterference" ? "4.0" : "3.0"))
+                  << "dB" << std::endl;
 
         WifiHelper wifi;
         wifi.SetStandard(WIFI_STANDARD_80211a);
@@ -462,15 +494,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             "python_files/trained_models/step4_scaler_" + tc.oracleStrategy + "_FIXED.joblib";
 
         std::cout << "Loading model: " << modelPath << std::endl;
-        std::cout << "Loading scaler: " << scalerPath << std::endl;
 
-        // CRITICAL FIX: Set test parameters as ATTRIBUTES before device installation
-        // This ensures atomics are initialized BEFORE stations are created
-        std::cout << "========== SETTING TEST PARAMETERS AS ATTRIBUTES ==========" << std::endl;
-        std::cout << "Distance: " << tc.staDistance << "m (will be set via attribute)" << std::endl;
-        std::cout << "Interferers: " << tc.numInterferers << " (will be set via attribute)"
-                  << std::endl;
-
+        // Set manager attributes BEFORE device installation
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                      "ModelPath",
                                      StringValue(modelPath),
@@ -482,13 +507,10 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                      StringValue(tc.oracleStrategy),
                                      "ModelType",
                                      StringValue("oracle"),
-
-                                     // CRITICAL: Set BEFORE station creation via attributes
                                      "BenchmarkDistance",
                                      DoubleValue(tc.staDistance),
                                      "BenchmarkInterferers",
                                      UintegerValue(tc.numInterferers),
-
                                      "ConfidenceThreshold",
                                      DoubleValue(0.15),
                                      "RiskThreshold",
@@ -518,8 +540,6 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                      "EnableScenarioAwareSelection",
                                      BooleanValue(true));
 
-        std::cout << "============================================================" << std::endl;
-
         // MAC configuration
         WifiMacHelper mac;
         Ssid ssid = Ssid("smartrf-fixed-" + tc.oracleStrategy);
@@ -530,13 +550,18 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-        mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
-        NetDeviceContainer interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
+        // Interferer devices
+        NetDeviceContainer interfererStaDevices, interfererApDevices;
+        if (tc.numInterferers > 0)
+        {
+            mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
+            interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
 
-        mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
-        NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
+            mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
+            interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
+        }
 
-        // Manager verification
+        // Get and verify manager
         Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
         if (!staDevice)
         {
@@ -544,56 +569,36 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             return;
         }
 
-        Ptr<WifiRemoteStationManager> baseManager = staDevice->GetRemoteStationManager();
-        if (!baseManager)
-        {
-            std::cout << "FATAL: No remote station manager" << std::endl;
-            return;
-        }
-
-        Ptr<SmartWifiManagerRf> smartManager = DynamicCast<SmartWifiManagerRf>(baseManager);
+        Ptr<SmartWifiManagerRf> smartManager =
+            DynamicCast<SmartWifiManagerRf>(staDevice->GetRemoteStationManager());
         if (!smartManager)
         {
             std::cout << "FATAL: Manager is not SmartWifiManagerRf" << std::endl;
-            std::cout << "Manager type: " << baseManager->GetTypeId().GetName() << std::endl;
             return;
         }
 
-        std::cout << "SUCCESS: SmartWifiManagerRf initialized!" << std::endl;
         g_currentSmartManager = smartManager;
         g_managerInitialized = true;
 
-        // VERIFICATION: Check that attributes were set correctly
+        // Verify attribute sync
         double managerDistance = smartManager->GetCurrentBenchmarkDistance();
         uint32_t managerInterferers = smartManager->GetCurrentInterfererCount();
-
-        std::cout << "========== VERIFICATION AFTER ATTRIBUTE SET ==========" << std::endl;
-        std::cout << "Manager distance: " << managerDistance << "m (expected " << tc.staDistance
-                  << "m)" << std::endl;
-        std::cout << "Manager interferers: " << managerInterferers << " (expected "
-                  << tc.numInterferers << ")" << std::endl;
 
         if (std::abs(managerDistance - tc.staDistance) > 0.1 ||
             managerInterferers != tc.numInterferers)
         {
-            std::cout << "WARNING: Attribute setting failed! Values don't match!" << std::endl;
-            std::cout << "Attempting manual update..." << std::endl;
-            smartManager->SetBenchmarkDistance(tc.staDistance);
-            smartManager->SetCurrentInterferers(tc.numInterferers);
+            std::cout << "[WARN] Attribute sync issue, applying manual update..." << std::endl;
             smartManager->UpdateFromBenchmarkGlobals(tc.staDistance, tc.numInterferers);
-
-            managerDistance = smartManager->GetCurrentBenchmarkDistance();
-            managerInterferers = smartManager->GetCurrentInterfererCount();
-            std::cout << "After manual update: distance=" << managerDistance
-                      << "m, interferers=" << managerInterferers << std::endl;
         }
-        else
-        {
-            std::cout << "ATTRIBUTE SYNC SUCCESSFUL!" << std::endl;
-        }
-        std::cout << "======================================================" << std::endl;
 
-        // Mobility setup
+        std::cout << "[SYNC] Distance=" << smartManager->GetCurrentBenchmarkDistance()
+                  << "m, Interferers=" << smartManager->GetCurrentInterfererCount() << std::endl;
+
+        // ============================================================
+        // MATCHED MOBILITY (IDENTICAL TO MINSTREL BASELINE)
+        // ============================================================
+
+        // AP at origin
         MobilityHelper apMobility;
         Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
         apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -601,54 +606,70 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
         apMobility.Install(wifiApNode);
 
+        // STA mobility - MATCHED
+        MobilityHelper staMobility;
         if (tc.staSpeed > 0.0)
         {
-            MobilityHelper mobMove;
-            mobMove.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-            Ptr<ListPositionAllocator> movingAlloc = CreateObject<ListPositionAllocator>();
-            movingAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
-            mobMove.SetPositionAllocator(movingAlloc);
-            mobMove.Install(wifiStaNodes);
-            wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(
-                Vector(tc.staSpeed, 0.0, 0.0));
+            // Mobile scenario
+            staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
+            Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+            staPositionAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
+            staMobility.SetPositionAllocator(staPositionAlloc);
+            staMobility.Install(wifiStaNodes);
 
-            std::cout << "MOBILITY ENABLED: Speed=" << tc.staSpeed << " m/s" << std::endl;
+            // MATCHED: Minstrel velocity calculation
+            Vector velocity(tc.staSpeed * 0.5, 0.0, 0.0);
+            if (category == "PoorPerformance" || category == "HighInterference")
+            {
+                velocity.y = tc.staSpeed * 0.05 * ((tc.staDistance > 50) ? 1 : -1);
+            }
+
+            wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
+            std::cout << "[MOBILITY] Speed=" << tc.staSpeed << "m/s, Velocity=(" << velocity.x
+                      << "," << velocity.y << ",0)" << std::endl;
         }
         else
         {
-            MobilityHelper mobStill;
-            mobStill.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-            Ptr<ListPositionAllocator> stillAlloc = CreateObject<ListPositionAllocator>();
-            stillAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
-            mobStill.SetPositionAllocator(stillAlloc);
-            mobStill.Install(wifiStaNodes);
+            // Static scenario
+            staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+            Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+            staPositionAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
+            staMobility.SetPositionAllocator(staPositionAlloc);
+            staMobility.Install(wifiStaNodes);
         }
 
-        // Interferer positioning
-        MobilityHelper interfererMobility;
-        Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
-        Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
-
-        for (uint32_t i = 0; i < tc.numInterferers; ++i)
+        // ============================================================
+        // MATCHED INTERFERER PLACEMENT (CIRCULAR DISTRIBUTION)
+        // ============================================================
+        if (tc.numInterferers > 0)
         {
-            double interfererDistance = 25.0 + (i * 15.0);
-            double angle = (i * 60.0) * M_PI / 180.0;
+            MobilityHelper interfererMobility;
+            interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
 
-            Vector apPos(interfererDistance * cos(angle), interfererDistance * sin(angle), 0.0);
-            Vector staPos((interfererDistance + 8) * cos(angle),
-                          (interfererDistance + 8) * sin(angle),
-                          0.0);
+            Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
+            Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
 
-            interfererApAlloc->Add(apPos);
-            interfererStaAlloc->Add(staPos);
+            for (uint32_t i = 0; i < tc.numInterferers; ++i)
+            {
+                double angle = 2.0 * M_PI * i / std::max<uint32_t>(tc.numInterferers, 1);
+                double radius = 30.0 + i * 15.0; // MATCHED: staggered
+
+                interfererApAlloc->Add(
+                    Vector(radius * std::cos(angle), radius * std::sin(angle), 0.0));
+                interfererStaAlloc->Add(Vector((radius + 10.0) * std::cos(angle),
+                                               (radius + 10.0) * std::sin(angle),
+                                               0.0));
+            }
+
+            interfererMobility.SetPositionAllocator(interfererApAlloc);
+            interfererMobility.Install(interfererApNodes);
+
+            interfererMobility.SetPositionAllocator(interfererStaAlloc);
+            interfererMobility.Install(interfererStaNodes);
+
+            std::cout << "[INTERFERERS] Circular placement: " << tc.numInterferers
+                      << " nodes at 30-" << (30 + (tc.numInterferers - 1) * 15) << "m" << std::endl;
         }
-
-        interfererMobility.SetPositionAllocator(interfererApAlloc);
-        interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-        interfererMobility.Install(interfererApNodes);
-
-        interfererMobility.SetPositionAllocator(interfererStaAlloc);
-        interfererMobility.Install(interfererStaNodes);
 
         // Internet stack
         InternetStackHelper stack;
@@ -673,37 +694,67 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             interfererStaInterface = address.Assign(interfererStaDevices);
         }
 
-        // Traffic
+        // ============================================================
+        // MATCHED TRAFFIC CONFIGURATION
+        // ============================================================
         uint16_t port = 4000;
+
+        // MATCHED: Category-based traffic adjustment
+        std::string adjustedRate = tc.trafficRate;
+        if (category == "PoorPerformance" || category == "HighInterference")
+        {
+            double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
+            rateValue *= 0.6; // MATCHED: 60% reduction
+            adjustedRate = std::to_string(static_cast<int>(rateValue)) + "Mbps";
+            std::cout << "[TRAFFIC] Adjusted rate: " << tc.trafficRate << " -> " << adjustedRate
+                      << " (poor conditions)" << std::endl;
+        }
+
         OnOffHelper onoff("ns3::UdpSocketFactory",
                           InetSocketAddress(apInterface.GetAddress(0), port));
-        onoff.SetAttribute("DataRate", DataRateValue(DataRate(tc.trafficRate)));
+        onoff.SetAttribute("DataRate", DataRateValue(DataRate(adjustedRate)));
         onoff.SetAttribute("PacketSize", UintegerValue(tc.packetSize));
-        onoff.SetAttribute("StartTime", TimeValue(Seconds(3.0)));
-        onoff.SetAttribute("StopTime", TimeValue(Seconds(17.0)));
+        onoff.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
+        onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0.0]"));
+        onoff.SetAttribute("StartTime", TimeValue(Seconds(3.0))); // Your timing
+        onoff.SetAttribute("StopTime", TimeValue(Seconds(17.0))); // Your timing
         ApplicationContainer clientApps = onoff.Install(wifiStaNodes.Get(0));
 
         PacketSinkHelper sink("ns3::UdpSocketFactory",
                               InetSocketAddress(Ipv4Address::GetAny(), port));
         ApplicationContainer serverApps = sink.Install(wifiApNode.Get(0));
-        serverApps.Start(Seconds(2.0));
-        serverApps.Stop(Seconds(18.0));
+        serverApps.Start(Seconds(2.0)); // Your timing
+        serverApps.Stop(Seconds(18.0)); // Your timing
 
-        // Interferer traffic
-        for (uint32_t i = 0; i < tc.numInterferers; ++i)
+        // MATCHED: Interferer traffic
+        if (tc.numInterferers > 0)
         {
-            OnOffHelper interfererOnOff(
-                "ns3::UdpSocketFactory",
-                InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
-            interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate("2Mbps")));
-            interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
-            interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(3.5)));
-            interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(16.5)));
-            interfererOnOff.Install(interfererStaNodes.Get(i));
+            for (uint32_t i = 0; i < tc.numInterferers; ++i)
+            {
+                std::string interfererRate = "1Mbps";
+                if (category == "HighInterference")
+                    interfererRate = "2Mbps"; // MATCHED
 
-            PacketSinkHelper interfererSink("ns3::UdpSocketFactory",
-                                            InetSocketAddress(Ipv4Address::GetAny(), port + 1 + i));
-            interfererSink.Install(interfererApNodes.Get(i));
+                OnOffHelper interfererOnOff(
+                    "ns3::UdpSocketFactory",
+                    InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
+                interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate(interfererRate)));
+                interfererOnOff.SetAttribute("PacketSize", UintegerValue(256)); // MATCHED: 256
+                interfererOnOff.SetAttribute(
+                    "OnTime",
+                    StringValue("ns3::ExponentialRandomVariable[Mean=0.5]")); // MATCHED
+                interfererOnOff.SetAttribute(
+                    "OffTime",
+                    StringValue("ns3::ExponentialRandomVariable[Mean=0.5]")); // MATCHED
+                interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(3.5)));
+                interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(16.5)));
+                interfererOnOff.Install(interfererStaNodes.Get(i));
+
+                PacketSinkHelper interfererSink(
+                    "ns3::UdpSocketFactory",
+                    InetSocketAddress(Ipv4Address::GetAny(), port + 1 + i));
+                interfererSink.Install(interfererApNodes.Get(i));
+            }
         }
 
         // Flow monitoring
@@ -713,29 +764,23 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         // Connect traces
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
                         MakeCallback(&EnhancedRateTrace));
-
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxBegin",
                         MakeCallback(&PhyTxBeginTrace));
-
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
                         MakeCallback(&PhyRxEndTrace));
-
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
                         MakeCallback(&PhyRxDropTrace));
-
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/MonitorSnifferRx",
                         MakeCallback(&MonitorSniffRx));
 
-        std::cout << "All trace callbacks connected" << std::endl;
-
-        // Run simulation
+        // Run simulation (YOUR 20s TIMING PRESERVED)
         Simulator::Stop(Seconds(20.0));
-        std::cout << "Starting simulation (20 seconds)..." << std::endl;
-
+        std::cout << "Starting simulation (20 seconds - ENVIRONMENT MATCHED)..." << std::endl;
         Simulator::Run();
 
         std::cout << "Simulation completed, collecting results..." << std::endl;
 
+        // [REST OF YOUR STATS COLLECTION CODE REMAINS UNCHANGED]
         // Collect results
         double throughput = 0, packetLoss = 0, avgDelay = 0, jitter = 0;
         double rxPackets = 0, txPackets = 0, rxBytes = 0;
@@ -909,11 +954,12 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
 
         std::cout << "Test " << testCaseNumber << " completed in " << testDuration.count()
                   << "ms | Throughput: " << throughput << " Mbps | PDR: " << currentStats.pdr
-                  << "% | Rate Changes: " << currentStats.rateChanges << std::endl;
+                  << "% | Rate Changes: " << currentStats.rateChanges << " | ENV: MATCHED"
+                  << std::endl;
 
         logFile << "[TEST COMPLETE] " << testCaseNumber << " | " << tc.scenarioName
-                << " | Duration: " << testDuration.count() << "ms | Throughput: " << throughput
-                << " Mbps | SNR: " << avgSnr
+                << " | Category: " << category << " | Duration: " << testDuration.count()
+                << "ms | Throughput: " << throughput << " Mbps | SNR: " << avgSnr
                 << "dB | Valid: " << (currentStats.statsValid ? "YES" : "NO") << std::endl;
     }
     catch (const std::exception& e)
@@ -958,12 +1004,14 @@ main(int argc, char* argv[])
     // Generate test cases
     std::vector<EnhancedBenchmarkTestCase> testCases;
 
-    std::vector<double> distances = {80.0};
-    std::vector<double> speeds = {0.0, 5.0, 10.0, 15.0};
-    std::vector<uint32_t> interferers = {0, 1, 2, 3};
-    std::vector<uint32_t> packetSizes = {256, 1500};
-    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};
+    // EXPANDED: More comprehensive test matrix (144 meaningful scenarios)
+    // Strategy: Cover edge cases, boundaries, and ML-sensitive regions
 
+    std::vector<double> distances = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0}; // 8
+    std::vector<double> speeds = {0.0, 5.0, 10.0, 15.0};                              // 4
+    std::vector<uint32_t> interferers = {0, 1, 2, 3};                                 // 4
+    std::vector<uint32_t> packetSizes = {256, 1500};                                  // 2
+    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};            // 3
     std::string strategy = "oracle_aggressive";
 
     for (double d : distances)
