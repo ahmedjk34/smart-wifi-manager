@@ -56,18 +56,33 @@ OUTCOME_FEATURES_REMOVED = [
     "severity", "confidence"
 ]
 
-# 🔧 FIXED: Safe features (9 features after File 3 fix)
+# 🔧 FIXED: Safe features (15 features after Phase 1A)
 SAFE_FEATURES = [
+    # SNR features (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    "channelWidth", "mobilityMetric"
-]
+    
+    # Network state (2)
+    "channelWidth", "mobilityMetric",
+    
+    # 🚀 PHASE 1A: NEW FEATURES (6)
+    "retryRate", "frameErrorRate", "channelBusyRatio",
+    "recentRateAvg", "rateStability", "sinceLastChange"
+]  # TOTAL: 15 features
 
 # SNR features (EXPECTED to correlate with oracle labels!)
+# 🚀 PHASE 1A: Added 4 Phase 1A features that depend on SNR
 SNR_FEATURES = [
+    # Core SNR measurements (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
-    "snrStabilityIndex", "snrPredictionConfidence", "snrVariance"
-]
+    "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
+    
+    # 🚀 PHASE 1A: SNR-dependent features (4)
+    "retryRate",        # Worse SNR → more retries (high correlation expected)
+    "frameErrorRate",   # Worse SNR → more errors (high correlation expected)
+    "recentRateAvg",    # SNR affects rate choice (moderate correlation)
+    "rateStability"     # SNR instability → rate instability (moderate correlation)
+]  # TOTAL: 11 SNR-related features
 
 CONTEXT_LABEL = "network_context"
 
@@ -159,7 +174,9 @@ def check_safe_features_present(df: pd.DataFrame) -> Tuple[bool, List[str]]:
         print(f"\n⚠️ WARNING: {len(missing_safe)} safe features missing")
         return False, missing_safe
     else:
-        print(f"\n✅ PASS: All {len(SAFE_FEATURES)} safe features present (NO outcome features)")
+        print(f"\n✅ PASS: All {len(SAFE_FEATURES)} safe features present")
+        print(f"   7 SNR features + 2 network state + 6 Phase 1A features = 15 total")
+        print(f"   (NO outcome features - removed in File 2)")
         return True, []
 
 def check_feature_target_correlations(df: pd.DataFrame, target: str) -> Tuple[bool, List[Tuple[str, float]]]:
