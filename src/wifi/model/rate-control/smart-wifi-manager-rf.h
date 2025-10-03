@@ -421,6 +421,10 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     uint8_t lastPredictedRate{3};
     uint32_t rateStableCount{0};
 
+    // In SmartWifiManagerRfState struct:
+    uint32_t consecutiveFailures = 0;  // Track consecutive failures (AARF-style)
+    uint32_t consecutiveSuccesses = 0; // Track consecutive successes (AARF-style)
+
     SmartWifiManagerRfState()
         : stationId(0),
           lastSnr(0.0),
