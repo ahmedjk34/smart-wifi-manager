@@ -704,7 +704,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         if (category == "PoorPerformance" || category == "HighInterference")
         {
             double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
-            rateValue *= 0.6; // MATCHED: 60% reduction
+            rateValue *= 0.6;                     // MATCHED: 60% reduction
+            rateValue = std::max(0.5, rateValue); // Ensure minimum 0.5 Mbps
             adjustedRate = std::to_string(static_cast<int>(rateValue)) + "Mbps";
             std::cout << "[TRAFFIC] Adjusted rate: " << tc.trafficRate << " -> " << adjustedRate
                       << " (poor conditions)" << std::endl;

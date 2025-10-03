@@ -365,8 +365,9 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     if (category == "PoorPerformance" || category == "HighInterference")
     {
         double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
-        rateValue *= 0.6; // MATCHED: 60% reduction
-        adjustedRate = std::to_string(static_cast<int>(rateValue)) + "Mbps";
+        rateValue *= 0.6;                     // MATCHED: 60% reduction
+        rateValue = std::max(0.5, rateValue); // Ensure minimum 0.5 Mbps
+        adjustedRate = std::to_string(static_cast<int>(std::ceil(rateValue))) + "Mbps";
         std::cout << "[TRAFFIC] Adjusted rate: " << tc.trafficRate << " -> " << adjustedRate
                   << " (poor conditions)" << std::endl;
     }
