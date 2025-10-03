@@ -56,25 +56,32 @@ OUTCOME_FEATURES_REMOVED = [
     "severity", "confidence"
 ]
 
-# 🔧 FIXED: Safe features (12 features after removing rate-dependent)
-# 🚀 PHASE 1A: 12 features (not 15 - removed 3 leaky ones)
+
+# 🔧 FIXED: Safe features (14 features after Phase 1B update)
+# 🚀 PHASE 1B: 14 features (was 12, added 4 Phase 1B, removed 2 broken Phase 1A)
 SAFE_FEATURES = [
     # SNR features (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
-    # Network state (2)
-    "channelWidth", "mobilityMetric",
+    # Network state (1 - removed channelWidth, always 20)
+    "mobilityMetric",
     
-    # 🚀 PHASE 1A: SAFE ONLY (3 features, not 6!)
+    # 🚀 PHASE 1A: SAFE ONLY (2 features, removed channelBusyRatio - always 0)
     "retryRate",          # ✅ Past retry rate (not current)
     "frameErrorRate",     # ✅ Past error rate (not current)
-    "channelBusyRatio",   # ✅ Channel occupancy (independent of rate)
+    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
+    
+    # 🚀 PHASE 1B: NEW FEATURES (4)
+    "rssiVariance",       # ✅ RSSI variance (signal stability)
+    "interferenceLevel",  # ✅ Interference level (collision tracking)
+    "distanceMetric",     # ✅ Distance metric (from scenario)
+    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
     
     # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
     # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
     # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
-]  # TOTAL: 12 features (not 15)
+]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
 
 # SNR features (EXPECTED to correlate with oracle labels!)
 # 🚀 PHASE 1A: Added Phase 1A features that depend on SNR
@@ -83,11 +90,15 @@ SNR_FEATURES = [
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
-    # 🚀 PHASE 1A: SNR-dependent features (2, not 4!)
+    # 🚀 PHASE 1A: SNR-dependent features (2)
     "retryRate",        # Worse SNR → more retries (high correlation expected)
     "frameErrorRate",   # Worse SNR → more errors (high correlation expected)
-    # Note: channelBusyRatio is NOT SNR-dependent (interference, not signal)
-]  # TOTAL: 9 SNR-related features (not 11)
+    
+    # 🚀 PHASE 1B: SNR-dependent features (2 of 4)
+    "rssiVariance",     # Related to SNR stability
+    "interferenceLevel" # Can correlate with poor SNR scenarios
+    # Note: distanceMetric and avgPacketSize are NOT SNR-dependent
+]  # TOTAL: 11 SNR-related features (7 core + 2 Phase 1A + 2 Phase 1B)
 
 # 🚨 RATE-DEPENDENT FEATURES (Should be REMOVED by File 2, NOT in File 4!)
 # These are in the enriched CSV but should NOT be used for training
@@ -189,8 +200,10 @@ def check_safe_features_present(df: pd.DataFrame) -> Tuple[bool, List[str]]:
         return False, missing_safe
     else:
         print(f"\n✅ PASS: All {len(SAFE_FEATURES)} safe features present")
-        print(f"   7 SNR features + 2 network state + 3 Phase 1A features = 12 total")
-        print(f"   (NO outcome features - removed in File 2)")
+        print(f"   7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B = 14 total")
+        print(f"   (NO outcome features - removed in File 3)")
+        print(f"   (channelWidth removed - always 20, no variance)")
+        print(f"   (channelBusyRatio removed - always 0, no variance)")
         print(f"   ⚠️ NOTE: 3 rate-dependent features in CSV but EXCLUDED from training")
 
         return True, []
