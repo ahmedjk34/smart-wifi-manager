@@ -1,28 +1,37 @@
 """
-Step 3c: Hyperparameter Tuning for WiFi Rate Adaptation - FIXED VERSION
+Step 3c: Hyperparameter Tuning for WiFi Rate Adaptation - PHASE 5 ENHANCED
 Systematic optimization of RandomForest hyperparameters using GridSearchCV
 
-CRITICAL FIXES (2025-10-02):
-- Issue C1: Fixed overfitting hyperparameters (max_depth=15/20, min_samples_leaf=5/10)
+CRITICAL UPDATES (2025-10-02 20:26:30 UTC):
+- 🚀 PHASE 5A: MinMaxScaler option (preserves physical meaning of SNR)
+- 🚀 PHASE 5B: Enhanced grid for 15 features (can go deeper without overfitting)
+- 🚀 PHASE 5C: Optional XGBoost support (if RF accuracy plateaus)
+- Issue C1: Fixed overfitting hyperparameters (max_depth=15/20/25, min_samples_leaf=5/8)
 - Issue C5: Removed conflicting grid definitions (single source of truth)
 - Issue H2: Increased CV folds to 5 for better validation
 
+PHASE 5 IMPROVEMENTS:
+✅ MinMaxScaler preserves SNR ranges (5-30 dB → 0.0-1.0, keeps ordering)
+✅ Enhanced grid supports 15 features (more trees, deeper trees)
+✅ XGBoost alternative for boosting-based approach
+✅ Expected accuracy: 75-80% (up from 62.8%)
+
 FIXES APPLIED:
-✅ max_depth limited to [15, 20] (was None → infinite depth)
-✅ min_samples_leaf increased to [5, 10] (was 1 → memorization)
-✅ min_samples_split increased to [10, 20] (was 2 → noise fitting)
-✅ max_features set to ['sqrt'] (was None → no regularization)
-✅ CV folds increased to 5 (was 3 → insufficient validation)
+✅ max_depth limited to [15, 20, 25] (was None → infinite depth)
+✅ min_samples_leaf increased to [5, 8] (was 1 → memorization)
+✅ min_samples_split increased to [10, 15] (was 2 → noise fitting)
+✅ max_features set to ['sqrt', 'log2'] (was None → no regularization)
+✅ CV folds = 5 (was 3 → insufficient validation)
 ✅ Removed all conflicting grid definitions
 
 Expected Impact:
-- CV accuracy will DROP from 91-95% to 70-80% (this is GOOD - less overfitting!)
-- Test accuracy will MATCH CV (±3%) instead of 30-50% drop
-- Model will generalize to new scenarios instead of memorizing training ones
+- CV accuracy will be 75-80% (realistic for 15 features!)
+- Test accuracy will MATCH CV (±3%) instead of dropping
+- Model will generalize to new scenarios
 
 Author: ahmedjk34
-Date: 2025-10-02 (FIXED)
-Pipeline Stage: Step 3c - Hyperparameter Optimization (FIXED)
+Date: 2025-10-02 20:26:30 UTC (PHASE 5 ENHANCED)
+Pipeline Stage: Step 3c - Hyperparameter Optimization (PHASE 5)
 """
 
 import pandas as pd
@@ -43,6 +52,11 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+from sklearn.preprocessing import StandardScaler, MinMaxScaler  # 🚀 PHASE 5A
+
+# 🚀 PHASE 5A: Scaler selection
+USE_MINMAX_SCALER = True  # Set to False to use StandardScaler
+
 # ================== CONFIGURATION ==================
 BASE_DIR = Path(__file__).parent
 PARENT_DIR = BASE_DIR.parent
@@ -58,13 +72,20 @@ np.random.seed(RANDOM_SEED)
 TARGET_LABELS = ["rateIdx", "oracle_conservative", "oracle_balanced", "oracle_aggressive"]
 
 # Safe features (no temporal leakage - Issue #1)
+# 🚀 PHASE 1A + 5: Safe features (15 features, no temporal leakage)
 SAFE_FEATURES = [
+    # Original 9 features
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    "shortSuccRatio", "medSuccRatio",
-    "packetLossRate",
     "channelWidth", "mobilityMetric",
-    "severity", "confidence"
+    
+    # 🚀 PHASE 1A: NEW FEATURES (6 added)
+    "retryRate",          # Retry rate (past performance)
+    "frameErrorRate",     # Error rate (PHY feedback)
+    "channelBusyRatio",   # Channel occupancy (interference)
+    "recentRateAvg",      # Recent rate average (temporal context)
+    "rateStability",      # Rate stability (change frequency)
+    "sinceLastChange"     # Time since last rate change (stability)
 ]
 
 # ================== HYPERPARAMETER GRIDS ==================
@@ -74,20 +95,22 @@ SAFE_FEATURES = [
 # - Limits tree depth to prevent overfitting
 # - Requires multiple samples per leaf (no memorization)
 # - Uses feature subsampling (adds randomness)
+# 🚀 PHASE 5: ENHANCED GRID for 15 features
+# With 15 features, we can go slightly deeper without overfitting
 ULTRA_FAST_GRID = {
-    'n_estimators': [200],          # Sufficient trees for stable predictions
-    'max_depth': [15, 20],          # ✅ FIXED: Limited depth (was None → infinite)
-    'min_samples_split': [10, 20],  # ✅ FIXED: More samples before split (was 2 → noise)
-    'min_samples_leaf': [5, 10],    # ✅ FIXED: Multiple samples per leaf (was 1 → memorize)
-    'max_features': ['sqrt'],       # ✅ FIXED: Feature subsampling (was None → no regularization)
-    'class_weight': ['balanced']    # Keep balanced (handles imbalance)
+    'n_estimators': [200, 300],      # More trees for 15 features
+    'max_depth': [15, 20, 25],       # Can go deeper with more features
+    'min_samples_split': [10, 15],   # Slightly more flexible
+    'min_samples_leaf': [5, 8],      # Allow smaller leaves (more features to split on)
+    'max_features': ['sqrt', 'log2'], # Try both (sqrt = ~4, log2 = ~4)
+    'class_weight': ['balanced']
 }
-# This creates 2×2×2×1 = 8 combinations (~20 minutes with 5-fold CV)
+# This creates 2×3×2×2×2 = 48 combinations (~2 hours with 5-fold CV)
 
-# Quick grid for initial testing (if needed)
+# 🚀 PHASE 5B: QUICK GRID (for testing)
 QUICK_GRID = {
-    'n_estimators': [100],
-    'max_depth': [15],
+    'n_estimators': [200],
+    'max_depth': [20],
     'min_samples_split': [10],
     'min_samples_leaf': [5],
     'max_features': ['sqrt'],
@@ -95,15 +118,16 @@ QUICK_GRID = {
 }
 # This creates 1 combination (~3 minutes with 5-fold CV)
 
-# Full grid for production (if you have time/cluster)
+# 🚀 PHASE 5C: FULL GRID (for production - OVERNIGHT RUN)
 FULL_GRID = {
-    'n_estimators': [100, 200],
-    'max_depth': [10, 15, 20],
-    'min_samples_split': [5, 10, 20],
-    'min_samples_leaf': [2, 5, 10],
-    'max_features': ['sqrt', 'log2'],
+    'n_estimators': [100, 200, 300, 400],
+    'max_depth': [15, 20, 25, 30],
+    'min_samples_split': [5, 10, 15, 20],
+    'min_samples_leaf': [2, 5, 8, 10],
+    'max_features': ['sqrt', 'log2', None],
     'class_weight': ['balanced']
 }
+# This creates 4×4×4×4×3 = 768 combinations (~8-12 hours with 5-fold CV)
 # This creates 2×3×3×3×2 = 108 combinations (~3 hours with 5-fold CV)
 
 # ⚡ CHANGE THIS TO SWITCH MODES
@@ -281,9 +305,19 @@ def tune_hyperparameters(X: np.ndarray, y: np.ndarray, scenarios: np.ndarray,
     logger.info(f"{'='*60}")
     
     # Scale features
-    logger.info("Scaling features...")
-    scaler = StandardScaler()
+    # 🚀 PHASE 5A: Scale features (MinMaxScaler preserves physical meaning)
+    if USE_MINMAX_SCALER:
+        logger.info("Scaling features with MinMaxScaler (preserves ranges)...")
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        logger.info("   Benefits: Preserves SNR ordering, better for tree-based models")
+    else:
+        logger.info("Scaling features with StandardScaler (z-score normalization)...")
+        scaler = StandardScaler()
+        logger.info("   Note: Loses physical meaning of SNR values")
+    
     X_scaled = scaler.fit_transform(X)
+    
+    logger.info(f"   Feature range after scaling: [{X_scaled.min():.3f}, {X_scaled.max():.3f}]")
     
     # Setup base model
     base_model = RandomForestClassifier(
