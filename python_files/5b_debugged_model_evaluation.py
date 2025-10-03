@@ -241,21 +241,40 @@ class EvaluationProgress:
             'successes': self.successes
         }
 
+def get_default_hyperparameters() -> Dict:
+    """
+    🚀 PHASE 5B: Default hyperparameters optimized for 15 features
+    """
+    return {
+        'n_estimators': 300,       # More trees for 15 features (was 200)
+        'max_depth': 25,           # Deeper for 15 features (was 15)
+        'min_samples_split': 10,   # Balanced
+        'min_samples_leaf': 5,     # Balanced
+        'max_features': 'sqrt',    # sqrt(15) ≈ 4 features per split
+        'class_weight': 'balanced',
+        'source': 'default_phase5_enhanced'
+    }
+
+
 # ================== VALIDATION FUNCTIONS ==================
 
-def validate_hyperparameter_optimization(target_label: str, logger, progress) -> bool:
+def validate_hyperparameter_optimization(target_label: str, logger, progress) -> Dict:
     """
-    FIXED: Issue #20 - Validate that optimized hyperparameters were used
+    FIXED: Issue #20 - Validate that optimized hyperparameters were used,
+    with fallback to defaults if missing or invalid.
+    Returns the hyperparameters dict.
     """
     progress.start_stage(f"Hyperparameter Optimization Validation - {target_label}")
     
-    if not HYPERPARAMS_FILE.exists():
+    if not HYPERPARAMS_FILE or not HYPERPARAMS_FILE.exists():
         progress.add_issue(
             "NO_HYPERPARAMETER_TUNING",
-            f"Hyperparameter tuning results not found (Step 3c not run)",
+            f"Hyperparameter tuning results not found (Step 3c not run). Using defaults.",
             "WARNING"
         )
-        return False
+        defaults = get_default_hyperparameters()
+        logger.info(f"   Using default hyperparameters: {defaults}")
+        return defaults
     
     try:
         with open(HYPERPARAMS_FILE, 'r') as f:
@@ -264,27 +283,44 @@ def validate_hyperparameter_optimization(target_label: str, logger, progress) ->
         if target_label not in hyperparams:
             progress.add_issue(
                 "MISSING_TARGET_HYPERPARAMS",
-                f"No hyperparameters found for {target_label}",
+                f"No hyperparameters found for {target_label}. Using defaults.",
                 "WARNING"
             )
-            return False
+            defaults = get_default_hyperparameters()
+            logger.info(f"   Using default hyperparameters: {defaults}")
+            return defaults
         
         target_params = hyperparams[target_label]
-        best_score = target_params['best_score']
-        best_params = target_params['best_params']
-        
-        progress.add_success(f"Hyperparameter tuning applied (CV score: {best_score:.3f})")
+        best_score = target_params.get('best_score', None)
+        best_params = target_params.get('best_params', None)
+
+        if best_params is None:
+            progress.add_issue(
+                "INVALID_HYPERPARAMS_FORMAT",
+                f"Hyperparameters file missing best_params field for {target_label}. Using defaults.",
+                "WARNING"
+            )
+            defaults = get_default_hyperparameters()
+            logger.info(f"   Using default hyperparameters: {defaults}")
+            return defaults
+
+        progress.add_success(
+            f"Hyperparameter tuning applied (CV score: {best_score:.3f})"
+            if best_score is not None else "Hyperparameter tuning applied"
+        )
         logger.info(f"   Best params: {best_params}")
-        
-        return True
-        
+        return best_params
+
     except Exception as e:
         progress.add_issue(
             "HYPERPARAMETER_LOAD_ERROR",
-            f"Failed to load hyperparameters: {str(e)}",
+            f"Failed to load hyperparameters: {str(e)}. Using defaults.",
             "WARNING"
         )
-        return False
+        defaults = get_default_hyperparameters()
+        logger.info(f"   Using default hyperparameters: {defaults}")
+        return defaults
+
 
 def validate_scenario_aware_splitting(df: pd.DataFrame, logger, progress) -> bool:
     """
@@ -498,6 +534,7 @@ def evaluate_model_performance(target_label: str, df: pd.DataFrame, logger, prog
 def evaluate_per_scenario_performance(target_label: str, df: pd.DataFrame, logger, progress) -> Dict:
     """
     FIXED: Issue #23 - Per-scenario performance analysis
+    Supports both RF and XGB models.
     """
     progress.start_stage(f"Per-Scenario Performance - {target_label}")
     
@@ -509,15 +546,27 @@ def evaluate_per_scenario_performance(target_label: str, df: pd.DataFrame, logge
         )
         return {}
     
-    # Load model and scaler
-    model_file = MODELS_DIR / f"step4_rf_{target_label}_FIXED.joblib"
+    # Try both RF and XGB model files
+    model_files = [
+        MODELS_DIR / f"step4_rf_{target_label}_FIXED.joblib",
+        MODELS_DIR / f"step4_xgb_{target_label}_FIXED.joblib"
+    ]
     scaler_file = MODELS_DIR / f"step4_scaler_{target_label}_FIXED.joblib"
     
-    if not model_file.exists() or not scaler_file.exists():
+    model = None
+    for mf in model_files:
+        if mf.exists():
+            try:
+                model = joblib.load(mf)
+                logger.info(f"   Loaded model: {mf.name}")
+                break
+            except:
+                continue
+    
+    if model is None or not scaler_file.exists():
         return {}
     
     try:
-        model = joblib.load(model_file)
         scaler = joblib.load(scaler_file)
     except:
         return {}
@@ -576,6 +625,7 @@ def evaluate_per_scenario_performance(target_label: str, df: pd.DataFrame, logge
         progress.add_success(f"Evaluated {len(scenario_results)} scenarios")
     
     return scenario_results
+
 
 def generate_visualizations(all_results: Dict, output_dir: Path, logger):
     """Generate comprehensive visualizations"""
