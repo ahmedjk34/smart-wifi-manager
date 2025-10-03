@@ -94,6 +94,13 @@ VALID_PHY_RATES = [
 ]
 VALID_CHANNEL_WIDTHS = [20, 40, 80, 160]
 
+# ================== EXPECTED COLUMNS ==================
+# PHASE 1B UPDATE (2025-10-03): Now expecting 29 columns from File 1b
+# - 4 metadata: time, stationId, rateIdx, phyRate
+# - 24 features: 7 SNR + 2 network + 6 Phase 1A + 4 Phase 1B + 5 outcome (to be removed)
+# - 1 scenario: scenario_file
+# Phase 1B NEW features: rssiVariance, interferenceLevel, distanceMetric, avgPacketSize
+
 # FIXED: Issue #28 - Define constant/useless features to remove early
 CONSTANT_USELESS_FEATURES = [
     'T1', 'T2', 'T3',
@@ -152,6 +159,11 @@ VALIDATION_RANGES = {
     'recentRateAvg': (0, 7),       # Rate index average (0-7)
     'rateStability': (0, 1),       # Stability metric (0-1)
     'sinceLastChange': (0, 1),     # Normalized time (0-1)
+    # 🚀 PHASE 1B: NEW FEATURES (validation ranges)
+    'rssiVariance': (0, 100),      # RSSI variance (0-100 dB²)
+    'interferenceLevel': (0, 1),   # Interference level (0-1, normalized)
+    'distanceMetric': (0, 200),    # Distance metric (0-200 meters)
+    'avgPacketSize': (0, 2500),    # Avg packet size (0-2500 bytes, max 2304 for WiFi)
 
 }
 
@@ -192,6 +204,7 @@ def setup_logging():
     logger.info("  ✅ Issue C6: Imbalance thresholds updated (15-30x expected)")
     logger.info("  ✅ Issue M5: Validation expectations corrected")
     logger.info("  ✅ Issue C3: OUTCOME FEATURES REMOVED (5 features)")
+    logger.info("  ✅ PHASE 1B: 4 new features added (rssiVariance, interferenceLevel, distanceMetric, avgPacketSize)")
     logger.info("="*80)
     logger.info("")
     logger.info("⚠️ IMPORTANT: This file does NOT balance classes!")
@@ -839,7 +852,7 @@ def main():
                    f"({(len(df_raw) - len(df_clean))/len(df_raw)*100:.1f}%)")
         logger.info(f"📁 Output file: {OUTPUT_CSV}")
         logger.info(f"📊 Final features: {len(df_clean.columns)} columns")
-        logger.info(f"   (20 features after removing 5 outcome features)")
+        logger.info(f"   (24 features: 20 old + 4 Phase 1B, after removing 5 outcome features)")
         logger.info(f"✅ Dataset ready for File 3 (oracle label generation)")
         
         print(f"\n✅ CLEANING COMPLETE (PHASE 1A)!")
