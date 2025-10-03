@@ -430,9 +430,9 @@ def main():
     
     print("\n🎉 SUCCESS! Your balanced dataset is ready.")
     print("\n💡 To change strategy, edit the script:")
-    print("   STRATEGY = 'power'  # or 'balanced', 'tiered'")
-    print("   POWER = 0.5         # 0.3-0.7 recommended")
-    print("   TARGET_TOTAL = 500_000")
+    print(f"   STRATEGY = {STRATEGY}")
+    print(f"   POWER = {POWER}         # 0.3-0.7 recommended")
+    print(f"   TARGET_TOTAL = {TARGET_TOTAL}")
     print("="*60)
 
 
