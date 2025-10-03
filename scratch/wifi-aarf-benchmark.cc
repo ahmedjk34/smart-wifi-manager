@@ -1,29 +1,18 @@
 /*
- * AARF WiFi Manager Benchmark - FULLY FIXED & EXPANDED
- * Matched Physical Environment with Smart-RF Benchmark
+ * AARF WiFi Manager Benchmark - ENVIRONMENT MATCHED TO MINSTREL BASELINE
+ * All physical parameters synchronized for fair comparison
  *
- * CRITICAL FIXES (2025-10-02 18:26:14 UTC):
+ * CRITICAL FIXES (2025-10-03):
  * ============================================================================
- * WHAT WE FIXED:
- * 1. Same SNR conversion: ConvertNS3ToRealisticSnr(SOFT_MODEL)
- * 2. Same channel model: YansWifiChannelHelper::Default()
- * 3. Same interference placement: 25m + (i × 15m) at 60° intervals
- * 4. Same mobility setup: ConstantVelocityMobilityModel (speed > 0)
- * 5. Same traffic patterns: UDP OnOff (3s-17s main, 3.5s-16.5s interferers)
- * 6. Expanded test cases: 72 → 144 tests (ML-biased scenarios)
- *
- * NEW TEST DIMENSIONS (144 total tests):
- * - Distances: 10m, 20m, 30m, 40m, 50m, 60m, 70m, 80m (8 values)
- * - Speeds: 0, 5, 10, 15 m/s (4 values)
- * - Interferers: 0, 1, 2, 3 (4 values)
- * - Packet Sizes: 256B, 1500B (2 values)
- * - Traffic Rates: 1Mbps, 11Mbps, 54Mbps (3 values)
- *
- * BUT we filter to ~144 meaningful scenarios (not all 768 combinations)
+ * 1. PHY parameters: TxPower=30dBm, RxSensitivity=-92dBm, category-based noise
+ * 2. Interferer placement: Circular distribution (30+i×15m) matching Minstrel
+ * 3. Mobility: Velocity calculation with Y-component for poor conditions
+ * 4. Traffic: 0.6× reduction for poor conditions, exponential interferer on/off
+ * 5. Category determination: Same logic as Minstrel baseline
  *
  * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-10-02 18:26:14 UTC
- * Version: 2.0 (FIXED & EXPANDED - Fair Comparison)
+ * Date: 2025-10-03
+ * Version: 3.0 (ENVIRONMENT MATCHED)
  * Baseline: AarfWifiManager (Auto Rate Fallback)
  */
 
@@ -45,7 +34,7 @@
 using namespace ns3;
 
 // ============================================================================
-// MATCHED: Realistic SNR conversion (IDENTICAL to Smart-RF)
+// MATCHED: Realistic SNR conversion (IDENTICAL to Minstrel)
 // ============================================================================
 enum SnrModel
 {
@@ -105,6 +94,20 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers,
 }
 
 // ============================================================================
+// MATCHED: Category determination (IDENTICAL to Minstrel)
+// ============================================================================
+std::string
+DetermineCategory(double distance, uint32_t interferers, double speed)
+{
+    if (distance >= 70.0 || (distance >= 50.0 && speed >= 10.0))
+        return "PoorPerformance";
+    else if (interferers >= 3 || (interferers >= 2 && distance >= 40.0))
+        return "HighInterference";
+    else
+        return "GoodConditions";
+}
+
+// ============================================================================
 // Test case structure
 // ============================================================================
 struct BenchmarkTestCase
@@ -152,7 +155,8 @@ RateTrace(std::string context, uint64_t rate, uint64_t oldRate)
 void
 PrintTestCaseSummary(const TestCaseStats& stats)
 {
-    std::cout << "\n[TEST " << stats.testCaseNumber << "] AARF BASELINE SUMMARY" << std::endl;
+    std::cout << "\n[TEST " << stats.testCaseNumber << "] AARF BASELINE SUMMARY (ENV MATCHED)"
+              << std::endl;
     std::cout << "Scenario=" << stats.scenario << " | Distance=" << stats.distance
               << "m | Speed=" << stats.speed << "m/s | Interferers=" << stats.interferers
               << std::endl;
@@ -178,6 +182,17 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     currentStats.simulationTime = 20.0;
     currentStats.statsValid = false;
 
+    // Determine category for environment adjustments
+    std::string category = DetermineCategory(tc.staDistance, tc.numInterferers, tc.staSpeed);
+
+    std::cout << "\n" << std::string(60, '=') << std::endl;
+    std::cout << "AARF TEST " << testCaseNumber << " | Category: " << category << std::endl;
+    std::cout << "Scenario: " << tc.scenarioName << std::endl;
+    std::cout << "Expected SNR: "
+              << ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL)
+              << " dB" << std::endl;
+    std::cout << std::string(60, '=') << std::endl;
+
     // Create nodes
     NodeContainer wifiStaNodes;
     wifiStaNodes.Create(1);
@@ -189,17 +204,41 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     interfererApNodes.Create(tc.numInterferers);
     interfererStaNodes.Create(tc.numInterferers);
 
-    // MATCHED: Same channel and PHY as Smart-RF
+    // ============================================================
+    // MATCHED PHY CONFIGURATION (IDENTICAL TO MINSTREL BASELINE)
+    // ============================================================
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
+
+    // MATCHED: Baseline PHY parameters
+    phy.Set("TxPowerStart", DoubleValue(30.0));
+    phy.Set("TxPowerEnd", DoubleValue(30.0));
+    phy.Set("RxNoiseFigure", DoubleValue(3.0)); // Base: 3dB
+    phy.Set("CcaEdThreshold", DoubleValue(-82.0));
+    phy.Set("RxSensitivity", DoubleValue(-92.0));
+
+    // MATCHED: Category-specific adjustments
+    if (category == "PoorPerformance")
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(5.0));
+    }
+    else if (category == "HighInterference")
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(4.0));
+    }
+
+    std::cout << "[PHY] Matched to baseline: TxPower=30dBm, RxNoise="
+              << (category == "PoorPerformance" ? "5.0"
+                                                : (category == "HighInterference" ? "4.0" : "3.0"))
+              << "dB" << std::endl;
 
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211a);
     wifi.SetRemoteStationManager("ns3::AarfWifiManager");
 
     WifiMacHelper mac;
-    Ssid ssid = Ssid("aarf-baseline");
+    Ssid ssid = Ssid("aarf-baseline-matched");
 
     mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
@@ -207,13 +246,22 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-    mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
-    NetDeviceContainer interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
+    // Interferer devices
+    NetDeviceContainer interfererStaDevices, interfererApDevices;
+    if (tc.numInterferers > 0)
+    {
+        mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
+        interfererStaDevices = wifi.Install(phy, mac, interfererStaNodes);
 
-    mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
-    NetDeviceContainer interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
+        mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(Ssid("interferer-ssid")));
+        interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
+    }
 
-    // MATCHED: Same mobility setup as Smart-RF
+    // ============================================================
+    // MATCHED MOBILITY (IDENTICAL TO MINSTREL BASELINE)
+    // ============================================================
+
+    // AP at origin
     MobilityHelper apMobility;
     Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
     apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -221,50 +269,68 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     apMobility.Install(wifiApNode);
 
+    // STA mobility - MATCHED
+    MobilityHelper staMobility;
     if (tc.staSpeed > 0.0)
     {
-        MobilityHelper mobMove;
-        mobMove.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-        Ptr<ListPositionAllocator> movingAlloc = CreateObject<ListPositionAllocator>();
-        movingAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
-        mobMove.SetPositionAllocator(movingAlloc);
-        mobMove.Install(wifiStaNodes);
-        wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(
-            Vector(tc.staSpeed, 0.0, 0.0));
+        // Mobile scenario
+        staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
+        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+        staPositionAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
+        staMobility.SetPositionAllocator(staPositionAlloc);
+        staMobility.Install(wifiStaNodes);
+
+        // MATCHED: Minstrel velocity calculation
+        Vector velocity(tc.staSpeed * 0.5, 0.0, 0.0);
+        if (category == "PoorPerformance" || category == "HighInterference")
+        {
+            velocity.y = tc.staSpeed * 0.05 * ((tc.staDistance > 50) ? 1 : -1);
+        }
+
+        wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
+        std::cout << "[MOBILITY] Speed=" << tc.staSpeed << "m/s, Velocity=(" << velocity.x << ","
+                  << velocity.y << ",0)" << std::endl;
     }
     else
     {
-        MobilityHelper mobStill;
-        mobStill.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-        Ptr<ListPositionAllocator> stillAlloc = CreateObject<ListPositionAllocator>();
-        stillAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
-        mobStill.SetPositionAllocator(stillAlloc);
-        mobStill.Install(wifiStaNodes);
+        // Static scenario
+        staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+        staPositionAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
+        staMobility.SetPositionAllocator(staPositionAlloc);
+        staMobility.Install(wifiStaNodes);
     }
 
-    // MATCHED: Same interferer placement as Smart-RF
-    MobilityHelper interfererMobility;
-    Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
-    Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
-
-    for (uint32_t i = 0; i < tc.numInterferers; ++i)
+    // ============================================================
+    // MATCHED INTERFERER PLACEMENT (CIRCULAR DISTRIBUTION)
+    // ============================================================
+    if (tc.numInterferers > 0)
     {
-        double interfererDistance = 25.0 + (i * 15.0);
-        double angle = (i * 60.0) * M_PI / 180.0;
-        Vector apPos(interfererDistance * cos(angle), interfererDistance * sin(angle), 0.0);
-        Vector staPos((interfererDistance + 8) * cos(angle),
-                      (interfererDistance + 8) * sin(angle),
-                      0.0);
-        interfererApAlloc->Add(apPos);
-        interfererStaAlloc->Add(staPos);
-    }
+        MobilityHelper interfererMobility;
+        interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
 
-    interfererMobility.SetPositionAllocator(interfererApAlloc);
-    interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    interfererMobility.Install(interfererApNodes);
-    interfererMobility.SetPositionAllocator(interfererStaAlloc);
-    interfererMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    interfererMobility.Install(interfererStaNodes);
+        Ptr<ListPositionAllocator> interfererApAlloc = CreateObject<ListPositionAllocator>();
+        Ptr<ListPositionAllocator> interfererStaAlloc = CreateObject<ListPositionAllocator>();
+
+        for (uint32_t i = 0; i < tc.numInterferers; ++i)
+        {
+            double angle = 2.0 * M_PI * i / std::max<uint32_t>(tc.numInterferers, 1);
+            double radius = 30.0 + i * 15.0; // MATCHED: staggered
+
+            interfererApAlloc->Add(Vector(radius * std::cos(angle), radius * std::sin(angle), 0.0));
+            interfererStaAlloc->Add(
+                Vector((radius + 10.0) * std::cos(angle), (radius + 10.0) * std::sin(angle), 0.0));
+        }
+
+        interfererMobility.SetPositionAllocator(interfererApAlloc);
+        interfererMobility.Install(interfererApNodes);
+
+        interfererMobility.SetPositionAllocator(interfererStaAlloc);
+        interfererMobility.Install(interfererStaNodes);
+
+        std::cout << "[INTERFERERS] Circular placement: " << tc.numInterferers << " nodes at 30-"
+                  << (30 + (tc.numInterferers - 1) * 15) << "m" << std::endl;
+    }
 
     // Internet stack
     InternetStackHelper stack;
@@ -289,11 +355,28 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
         interfererStaInterface = address.Assign(interfererStaDevices);
     }
 
-    // MATCHED: Same traffic pattern as Smart-RF
+    // ============================================================
+    // MATCHED TRAFFIC CONFIGURATION
+    // ============================================================
     uint16_t port = 4000;
+
+    // MATCHED: Category-based traffic adjustment
+    std::string adjustedRate = tc.trafficRate;
+    if (category == "PoorPerformance" || category == "HighInterference")
+    {
+        double rateValue = std::stod(tc.trafficRate.substr(0, tc.trafficRate.length() - 4));
+        rateValue *= 0.6;                     // MATCHED: 60% reduction
+        rateValue = std::max(0.5, rateValue); // Ensure minimum 0.5 Mbps
+        adjustedRate = std::to_string(static_cast<int>(std::ceil(rateValue))) + "Mbps";
+        std::cout << "[TRAFFIC] Adjusted rate: " << tc.trafficRate << " -> " << adjustedRate
+                  << " (poor conditions)" << std::endl;
+    }
+
     OnOffHelper onoff("ns3::UdpSocketFactory", InetSocketAddress(apInterface.GetAddress(0), port));
-    onoff.SetAttribute("DataRate", DataRateValue(DataRate(tc.trafficRate)));
+    onoff.SetAttribute("DataRate", DataRateValue(DataRate(adjustedRate)));
     onoff.SetAttribute("PacketSize", UintegerValue(tc.packetSize));
+    onoff.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
+    onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0.0]"));
     onoff.SetAttribute("StartTime", TimeValue(Seconds(3.0)));
     onoff.SetAttribute("StopTime", TimeValue(Seconds(17.0)));
     ApplicationContainer clientApps = onoff.Install(wifiStaNodes.Get(0));
@@ -303,21 +386,32 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     serverApps.Start(Seconds(2.0));
     serverApps.Stop(Seconds(18.0));
 
-    // MATCHED: Same interferer traffic as Smart-RF
-    for (uint32_t i = 0; i < tc.numInterferers; ++i)
+    // MATCHED: Interferer traffic
+    if (tc.numInterferers > 0)
     {
-        OnOffHelper interfererOnOff(
-            "ns3::UdpSocketFactory",
-            InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
-        interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate("2Mbps")));
-        interfererOnOff.SetAttribute("PacketSize", UintegerValue(512));
-        interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(3.5)));
-        interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(16.5)));
-        interfererOnOff.Install(interfererStaNodes.Get(i));
+        for (uint32_t i = 0; i < tc.numInterferers; ++i)
+        {
+            std::string interfererRate = "1Mbps";
+            if (category == "HighInterference")
+                interfererRate = "2Mbps"; // MATCHED
 
-        PacketSinkHelper interfererSink("ns3::UdpSocketFactory",
-                                        InetSocketAddress(Ipv4Address::GetAny(), port + 1 + i));
-        interfererSink.Install(interfererApNodes.Get(i));
+            OnOffHelper interfererOnOff(
+                "ns3::UdpSocketFactory",
+                InetSocketAddress(interfererApInterface.GetAddress(i), port + 1 + i));
+            interfererOnOff.SetAttribute("DataRate", DataRateValue(DataRate(interfererRate)));
+            interfererOnOff.SetAttribute("PacketSize", UintegerValue(256)); // MATCHED: 256
+            interfererOnOff.SetAttribute("OnTime",
+                                         StringValue("ns3::ExponentialRandomVariable[Mean=0.5]"));
+            interfererOnOff.SetAttribute("OffTime",
+                                         StringValue("ns3::ExponentialRandomVariable[Mean=0.5]"));
+            interfererOnOff.SetAttribute("StartTime", TimeValue(Seconds(3.5)));
+            interfererOnOff.SetAttribute("StopTime", TimeValue(Seconds(16.5)));
+            interfererOnOff.Install(interfererStaNodes.Get(i));
+
+            PacketSinkHelper interfererSink("ns3::UdpSocketFactory",
+                                            InetSocketAddress(Ipv4Address::GetAny(), port + 1 + i));
+            interfererSink.Install(interfererApNodes.Get(i));
+        }
     }
 
     // Flow monitoring
@@ -328,6 +422,7 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
                     MakeCallback(&RateTrace));
 
     Simulator::Stop(Seconds(20.0));
+    std::cout << "Starting simulation (20 seconds - ENVIRONMENT MATCHED)..." << std::endl;
     Simulator::Run();
 
     // Collect results
@@ -365,7 +460,7 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
         }
     }
 
-    // MATCHED: Same SNR calculation as Smart-RF
+    // MATCHED: Same SNR calculation
     double avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL);
     currentStats.avgSNR = avgSnr;
     currentStats.minSNR = avgSnr - 3.0;
@@ -397,17 +492,12 @@ main(int argc, char* argv[])
 {
     std::vector<BenchmarkTestCase> testCases;
 
-    // EXPANDED: More comprehensive test matrix (144 meaningful scenarios)
-    // Strategy: Cover edge cases, boundaries, and ML-sensitive regions
-
-    std::vector<double> distances = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0}; // 8
-    std::vector<double> speeds = {0.0, 5.0, 10.0, 15.0};                              // 4
-    std::vector<uint32_t> interferers = {0, 1, 2, 3};                                 // 4
-    std::vector<uint32_t> packetSizes = {256, 1500};                                  // 2
-    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};            // 3
-
-    // ML-BIASED SCENARIO SELECTION (144 meaningful tests)
-    // Filter strategy: Skip redundant scenarios, focus on boundaries
+    // Same test matrix as before
+    std::vector<double> distances = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0};
+    std::vector<double> speeds = {0.0, 5.0, 10.0, 15.0};
+    std::vector<uint32_t> interferers = {0, 1, 2, 3};
+    std::vector<uint32_t> packetSizes = {256, 1500};
+    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};
 
     for (double d : distances)
     {
@@ -419,17 +509,10 @@ main(int argc, char* argv[])
                 {
                     for (const std::string& r : trafficRates)
                     {
-                        // FILTER LOGIC: Skip some redundant combinations
-
-                        // Skip high speed + high distance (100% loss anyway)
                         if (s >= 10.0 && d >= 60.0)
                             continue;
-
-                        // Skip low traffic + large packets at far distance (boring)
                         if (r == "1Mbps" && p == 1500 && d >= 70.0)
                             continue;
-
-                        // Skip high interference + high mobility (redundant failure)
                         if (i >= 3 && s >= 15.0)
                             continue;
 
@@ -451,12 +534,12 @@ main(int argc, char* argv[])
         }
     }
 
-    std::cout << "AARF Baseline Benchmark v2.0 (FIXED & EXPANDED)" << std::endl;
-    std::cout << "Total test cases: " << testCases.size() << " (filtered from 768)" << std::endl;
-    std::cout << "Physical environment: MATCHED to Smart-RF" << std::endl;
-    std::cout << "SNR model: SOFT_MODEL (identical)" << std::endl;
+    std::cout << "AARF Baseline Benchmark v3.0 (ENVIRONMENT MATCHED TO MINSTREL)" << std::endl;
+    std::cout << "Total test cases: " << testCases.size() << std::endl;
+    std::cout << "Physical environment: MATCHED (PHY, mobility, interferers, traffic)" << std::endl;
+    std::cout << "Category-based adjustments: ENABLED" << std::endl;
 
-    std::ofstream csv("aarf-benchmark-fixed-expanded.csv");
+    std::ofstream csv("aarf-benchmark-environment-matched.csv");
     csv << "Scenario,Distance,Speed,Interferers,PacketSize,TrafficRate,Throughput(Mbps),"
         << "PacketLoss(%),AvgDelay(s),Jitter(s),RxPackets,TxPackets,AvgSNR,StatsValid\n";
 
@@ -470,6 +553,7 @@ main(int argc, char* argv[])
     }
 
     csv.close();
-    std::cout << "\nAll tests complete. Results in aarf-benchmark-fixed-expanded.csv\n";
+    std::cout << "\nAll tests complete. Results in aarf-benchmark-environment-matched.csv\n";
+    std::cout << "Environment now IDENTICAL to Minstrel baseline for fair comparison.\n";
     return 0;
 }

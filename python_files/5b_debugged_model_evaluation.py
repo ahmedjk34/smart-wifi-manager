@@ -45,7 +45,6 @@ BASE_DIR = Path(__file__).parent
 PARENT_DIR = BASE_DIR.parent
 CSV_FILE = PARENT_DIR / "smart-v3-ml-enriched.csv"
 MODELS_DIR = BASE_DIR / "trained_models"
-HYPERPARAMS_FILE = BASE_DIR / "hyperparameter_results" / "hyperparameter_tuning_results.json"
 OUTPUT_DIR = BASE_DIR / "evaluation_results"
 
 # Target labels to evaluate
@@ -60,14 +59,39 @@ CORRELATION_THRESHOLD_MODERATE = 0.4
 CORRELATION_THRESHOLD_HIGH = 0.7
 
 # Safe features (no temporal leakage)
+# 🚀 PHASE 1A + 5: Safe features (15 features, no outcome leakage)
+# 🚀 PHASE 1B: Safe features (14 features, no temporal leakage)
 SAFE_FEATURES = [
-    "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
+    # SNR features (7)
+    "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    "shortSuccRatio", "medSuccRatio",
-    "packetLossRate",
-    "channelWidth", "mobilityMetric",
-    "severity", "confidence"
-]
+    
+    # Network state (1 - removed channelWidth, always 20)
+    "mobilityMetric",
+    
+    # 🚀 PHASE 1A: SAFE ONLY (2 features - removed channelBusyRatio, always 0)
+    "retryRate",          # ✅ Past retry rate (not current)
+    "frameErrorRate",     # ✅ Past error rate (not current)
+    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
+    
+    # 🚀 PHASE 1B: NEW FEATURES (4)
+    "rssiVariance",       # ✅ RSSI variance (signal stability)
+    "interferenceLevel",  # ✅ Interference level (collision tracking)
+    "distanceMetric",     # ✅ Distance metric (from scenario)
+    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
+    # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
+    # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
+]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
+
+# ❌ REMOVED (Issue C3): Outcome features
+# These were removed by File 2 and NOT used by File 4:
+# - shortSuccRatio (outcome of CURRENT rate)
+# - medSuccRatio (outcome of CURRENT rate)
+# - packetLossRate (outcome of CURRENT rate)
+# - severity (derived from packetLossRate)
+# - confidence (derived from shortSuccRatio)
 
 # Temporal leakage features (should be ABSENT)
 TEMPORAL_LEAKAGE_FEATURES = [
@@ -76,12 +100,12 @@ TEMPORAL_LEAKAGE_FEATURES = [
     "packetSuccess"
 ]
 
-# FIXED: Issue #17 - Realistic performance expectations
+# 🚀 PHASE 1A + 5: Updated performance expectations (15 features)
 PERFORMANCE_EXPECTATIONS = {
-    'excellent': 0.75,      # >75% is excellent (no leakage)
-    'good': 0.65,           # 65-75% is good
-    'acceptable': 0.55,     # 55-65% is acceptable
-    'needs_improvement': 0.55  # <55% needs work
+    'excellent': 0.72,   # >72% is excellent for 14 features (Phase 1B target!)
+    'good': 0.68,        # 68-72% is good
+    'acceptable': 0.63,  # 63-68% is acceptable
+    'needs_improvement': 0.62  # <63% needs work (worse than baseline 62.8%)
 }
 
 CONTEXT_LABEL = "network_context"
@@ -115,6 +139,58 @@ def setup_logging_and_output():
     logger.info("="*80)
     
     return logger
+
+# Auto-detect hyperparameter file
+def find_hyperparameter_file() -> Path:
+    """Find the most recent hyperparameter tuning file (auto-detect mode)"""
+    hyperparams_dir = BASE_DIR / "hyperparameter_results"
+    
+    if not hyperparams_dir.exists():
+        return None
+    
+    # Find all JSON files with FIXED suffix (prioritize fixed versions)
+    json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*_FIXED.json"))
+    
+    if len(json_files) == 0:
+        # Try without FIXED suffix
+        json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*.json"))
+    
+    if len(json_files) == 0:
+        return None
+    
+    # If multiple files, use most recent
+    if len(json_files) > 1:
+        json_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        return json_files[0]
+    
+    return json_files[0]
+
+HYPERPARAMS_FILE = find_hyperparameter_file()
+
+
+# ✅Check for both RF and XGBoost models
+def find_model_files(target_label: str, models_dir: Path):
+    """Find model and scaler files (RF or XGBoost)"""
+    # Check XGBoost first (higher priority)
+    xgb_model = models_dir / f"step4_xgb_{target_label}_FIXED.joblib"
+    if xgb_model.exists():
+        model_file = xgb_model
+        model_type = "XGBoost"
+    else:
+        # Check RandomForest
+        rf_model = models_dir / f"step4_rf_{target_label}_FIXED.joblib"
+        if rf_model.exists():
+            model_file = rf_model
+            model_type = "RandomForest"
+        else:
+            return None, None, None
+    
+    scaler_file = models_dir / f"step4_scaler_{target_label}_FIXED.joblib"
+    results_file = models_dir / f"step4_results_{target_label}.json"
+    
+    return model_file, scaler_file, model_type
+
+
 
 class EvaluationProgress:
     """Track evaluation progress and issues"""
@@ -165,21 +241,40 @@ class EvaluationProgress:
             'successes': self.successes
         }
 
+def get_default_hyperparameters() -> Dict:
+    """
+    🚀 PHASE 5B: Default hyperparameters optimized for 15 features
+    """
+    return {
+        'n_estimators': 300,       # More trees for 15 features (was 200)
+        'max_depth': 25,           # Deeper for 15 features (was 15)
+        'min_samples_split': 10,   # Balanced
+        'min_samples_leaf': 5,     # Balanced
+        'max_features': 'sqrt',    # sqrt(15) ≈ 4 features per split
+        'class_weight': 'balanced',
+        'source': 'default_phase5_enhanced'
+    }
+
+
 # ================== VALIDATION FUNCTIONS ==================
 
-def validate_hyperparameter_optimization(target_label: str, logger, progress) -> bool:
+def validate_hyperparameter_optimization(target_label: str, logger, progress) -> Dict:
     """
-    FIXED: Issue #20 - Validate that optimized hyperparameters were used
+    FIXED: Issue #20 - Validate that optimized hyperparameters were used,
+    with fallback to defaults if missing or invalid.
+    Returns the hyperparameters dict.
     """
     progress.start_stage(f"Hyperparameter Optimization Validation - {target_label}")
     
-    if not HYPERPARAMS_FILE.exists():
+    if not HYPERPARAMS_FILE or not HYPERPARAMS_FILE.exists():
         progress.add_issue(
             "NO_HYPERPARAMETER_TUNING",
-            f"Hyperparameter tuning results not found (Step 3c not run)",
+            f"Hyperparameter tuning results not found (Step 3c not run). Using defaults.",
             "WARNING"
         )
-        return False
+        defaults = get_default_hyperparameters()
+        logger.info(f"   Using default hyperparameters: {defaults}")
+        return defaults
     
     try:
         with open(HYPERPARAMS_FILE, 'r') as f:
@@ -188,27 +283,44 @@ def validate_hyperparameter_optimization(target_label: str, logger, progress) ->
         if target_label not in hyperparams:
             progress.add_issue(
                 "MISSING_TARGET_HYPERPARAMS",
-                f"No hyperparameters found for {target_label}",
+                f"No hyperparameters found for {target_label}. Using defaults.",
                 "WARNING"
             )
-            return False
+            defaults = get_default_hyperparameters()
+            logger.info(f"   Using default hyperparameters: {defaults}")
+            return defaults
         
         target_params = hyperparams[target_label]
-        best_score = target_params['best_score']
-        best_params = target_params['best_params']
-        
-        progress.add_success(f"Hyperparameter tuning applied (CV score: {best_score:.3f})")
+        best_score = target_params.get('best_score', None)
+        best_params = target_params.get('best_params', None)
+
+        if best_params is None:
+            progress.add_issue(
+                "INVALID_HYPERPARAMS_FORMAT",
+                f"Hyperparameters file missing best_params field for {target_label}. Using defaults.",
+                "WARNING"
+            )
+            defaults = get_default_hyperparameters()
+            logger.info(f"   Using default hyperparameters: {defaults}")
+            return defaults
+
+        progress.add_success(
+            f"Hyperparameter tuning applied (CV score: {best_score:.3f})"
+            if best_score is not None else "Hyperparameter tuning applied"
+        )
         logger.info(f"   Best params: {best_params}")
-        
-        return True
-        
+        return best_params
+
     except Exception as e:
         progress.add_issue(
             "HYPERPARAMETER_LOAD_ERROR",
-            f"Failed to load hyperparameters: {str(e)}",
+            f"Failed to load hyperparameters: {str(e)}. Using defaults.",
             "WARNING"
         )
-        return False
+        defaults = get_default_hyperparameters()
+        logger.info(f"   Using default hyperparameters: {defaults}")
+        return defaults
+
 
 def validate_scenario_aware_splitting(df: pd.DataFrame, logger, progress) -> bool:
     """
@@ -287,8 +399,7 @@ def evaluate_model_performance(target_label: str, df: pd.DataFrame, logger, prog
     progress.start_stage(f"Model Performance Evaluation - {target_label}")
     
     # Load model and scaler
-    model_file = MODELS_DIR / f"step4_rf_{target_label}_FIXED.joblib"
-    scaler_file = MODELS_DIR / f"step4_scaler_{target_label}_FIXED.joblib"
+    model_file, scaler_file, model_type = find_model_files(target_label, MODELS_DIR)
     results_file = MODELS_DIR / f"step4_results_{target_label}.json"
     
     if not model_file.exists() or not scaler_file.exists():
@@ -423,6 +534,7 @@ def evaluate_model_performance(target_label: str, df: pd.DataFrame, logger, prog
 def evaluate_per_scenario_performance(target_label: str, df: pd.DataFrame, logger, progress) -> Dict:
     """
     FIXED: Issue #23 - Per-scenario performance analysis
+    Supports both RF and XGB models.
     """
     progress.start_stage(f"Per-Scenario Performance - {target_label}")
     
@@ -434,15 +546,27 @@ def evaluate_per_scenario_performance(target_label: str, df: pd.DataFrame, logge
         )
         return {}
     
-    # Load model and scaler
-    model_file = MODELS_DIR / f"step4_rf_{target_label}_FIXED.joblib"
+    # Try both RF and XGB model files
+    model_files = [
+        MODELS_DIR / f"step4_rf_{target_label}_FIXED.joblib",
+        MODELS_DIR / f"step4_xgb_{target_label}_FIXED.joblib"
+    ]
     scaler_file = MODELS_DIR / f"step4_scaler_{target_label}_FIXED.joblib"
     
-    if not model_file.exists() or not scaler_file.exists():
+    model = None
+    for mf in model_files:
+        if mf.exists():
+            try:
+                model = joblib.load(mf)
+                logger.info(f"   Loaded model: {mf.name}")
+                break
+            except:
+                continue
+    
+    if model is None or not scaler_file.exists():
         return {}
     
     try:
-        model = joblib.load(model_file)
         scaler = joblib.load(scaler_file)
     except:
         return {}
@@ -501,6 +625,7 @@ def evaluate_per_scenario_performance(target_label: str, df: pd.DataFrame, logge
         progress.add_success(f"Evaluated {len(scenario_results)} scenarios")
     
     return scenario_results
+
 
 def generate_visualizations(all_results: Dict, output_dir: Path, logger):
     """Generate comprehensive visualizations"""

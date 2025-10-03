@@ -298,6 +298,43 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
 
     double CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState* station,
                                                 WifiContextType context) const;
+
+    // 🚀 PHASE 2: Scenario-aware selection
+    bool m_enableScenarioAwareSelection;
+    mutable std::string m_currentModelName;
+
+    // 🚀 PHASE 3: Hysteresis configuration
+    uint32_t m_hysteresisStreak;
+
+    // Add to SmartWifiManagerRf class private methods (around line 300-400):
+
+    // 🚀 PHASE 1A
+    void UpdateEnhancedFeatures(SmartWifiManagerRfState* station);
+
+    // 🚀 PHASE 2
+    std::string SelectBestModel(SmartWifiManagerRfState* station) const;
+
+    // 🚀 PHASE 3
+    uint8_t ApplyHysteresis(SmartWifiManagerRfState* station,
+                            uint8_t currentRate,
+                            uint8_t predictedRate) const;
+
+    // 🚀 PHASE 4
+    double CalculateAdaptiveTrust(double mlConfidence, SmartWifiManagerRfState* station) const;
+    uint32_t AdaptiveFusion(uint8_t mlRate,
+                            uint8_t ruleRate,
+                            double mlConfidence,
+                            SmartWifiManagerRfState* station) const;
+
+    // Update signature of RunMLInference:
+    InferenceResult RunMLInference(const std::vector<double>& features,
+                                   const std::string& modelName = "") const;
+
+    // 🚀 ATTRIBUTE SETTERS/GETTERS (for guaranteed sync)
+    void SetBenchmarkDistanceAttribute(double dist);
+    double GetBenchmarkDistanceAttribute() const;
+    void SetInterferersAttribute(uint32_t count);
+    uint32_t GetInterferersAttribute() const;
 };
 
 /**
@@ -364,6 +401,29 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     Time lastMLPerformanceUpdate;
 
     static constexpr uint32_t WINDOW_SIZE = 50;
+
+    // 🚀 PHASE 1B: NEW FEATURE TRACKING (4 features)
+    double rssiVariance;      // RSSI variance (dB²)
+    double interferenceLevel; // Interference level (0-1)
+    double distanceMetric;    // Distance from AP (meters)
+    double avgPacketSize;     // Average packet size (bytes)
+
+    double retryRate{0.0};
+    double frameErrorRate{0.0};
+
+    uint32_t packetsSinceRateChange{0};
+    uint32_t successfulPackets{0};
+    uint32_t failedPackets{0};
+    std::deque<uint32_t> recentRateHistory;
+
+    // 🚀 PHASE 3: Hysteresis tracking
+    uint32_t ratePredictionStreak{0};
+    uint8_t lastPredictedRate{3};
+    uint32_t rateStableCount{0};
+
+    // In SmartWifiManagerRfState struct:
+    uint32_t consecutiveFailures = 0;  // Track consecutive failures (AARF-style)
+    uint32_t consecutiveSuccesses = 0; // Track consecutive successes (AARF-style)
 
     SmartWifiManagerRfState()
         : stationId(0),

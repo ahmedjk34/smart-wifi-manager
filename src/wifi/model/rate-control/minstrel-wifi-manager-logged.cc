@@ -16,28 +16,33 @@
  *
  * Authors: Duy Nguyen <duy@soe.ucsc.edu>
  *          Matías Richart <mrichart@fing.edu.uy>
- *          Ahmed (ahmedjk34) - Fixed Version 2025-10-01
+ *          Ahmed (ahmedjk34) - Fixed Version 2025-10-03 (PHASE 1A)
  *
- * FIXED VERSION - ALL TEMPORAL LEAKAGE REMOVED
+ * FIXED VERSION - PHASE 1A COMPLETE (20 FEATURES)
  *
  * CRITICAL FIXES APPLIED:
  * - Issue #1: Removed 7 temporal leakage features from logging
  * - Issue #33: Success ratios now from PREVIOUS window (not current packet)
  * - Issue #4: Added scenario_file column for proper train/test splitting
  * - Issue #14: Reproducible random seed for stratified sampling
+ * - PHASE 1A: Added 6 new features (14 → 20 total)
  *
- * FEATURES REMOVED (Temporal Leakage):
- * ❌ consecSuccess, consecFailure - outcomes of CURRENT rate
- * ❌ retrySuccessRatio - derived from outcomes
- * ❌ timeSinceLastRateChange, rateStabilityScore, recentRateChanges - rate history
- * ❌ packetSuccess - literal packet outcome
+ * FEATURES (20 TOTAL):
+ * ✅ SNR features (7): lastSnr, snrFast, snrSlow, snrTrendShort, snrStabilityIndex,
+ * snrPredictionConfidence, snrVariance ✅ Success ratios (2): shortSuccRatio, medSuccRatio (from
+ * PREVIOUS window) ✅ Packet loss (1): packetLossRate (from PREVIOUS window) ✅ Network state (2):
+ * channelWidth, mobilityMetric ✅ Assessment (2): severity, confidence (from previous window) ✅
+ * PHASE 1A (6): retryRate, frameErrorRate, channelBusyRatio, recentRateAvg, rateStability,
+ * sinceLastChange
  *
- * FEATURES KEPT (Safe - Pre-Decision):
- * ✅ SNR features (lastSnr, snrFast, snrSlow, trends, variance)
- * ✅ shortSuccRatio, medSuccRatio - from PREVIOUS window (Issue #33)
- * ✅ packetLossRate - from PREVIOUS window (Issue #33)
- * ✅ Network state (channelWidth, mobilityMetric)
- * ✅ Assessment (severity, confidence - from previous window)
+ * CSV OUTPUT FORMAT:
+ * time,stationId,rateIdx,phyRate,
+ * lastSnr,snrFast,snrSlow,snrTrendShort,snrStabilityIndex,snrPredictionConfidence,snrVariance,
+ * shortSuccRatio,medSuccRatio,packetLossRate,
+ * channelWidth,mobilityMetric,
+ * severity,confidence,
+ * retryRate,frameErrorRate,channelBusyRatio,recentRateAvg,rateStability,sinceLastChange,
+ * scenario_file
  */
 
 #include "minstrel-wifi-manager-logged.h"
@@ -127,8 +132,9 @@ MinstrelWifiManagerLogged::MinstrelWifiManagerLogged()
       m_logHeaderWritten(false),
       m_rng(42),
       m_uniformDist(0.0, 1.0),
-      m_scenarioDistance(20.0), // ← ADD THIS
-      m_scenarioInterferers(0)  // ← ADD THIS
+      m_nextStationId(0),
+      m_scenarioDistance(20.0),
+      m_scenarioInterferers(0)
 {
     NS_LOG_FUNCTION(this);
     m_uniformRandomVariable = CreateObject<UniformRandomVariable>();
@@ -155,31 +161,38 @@ MinstrelWifiManagerLogged::SetupPhy(const Ptr<WifiPhy> phy)
         m_logFile.open(m_logFilePath, std::ios::out | std::ios::trunc);
         if (m_logFile.is_open())
         {
-            // FIXED: CSV header with ONLY safe features (Issue #1, #33)
+            // FIXED: CSV header with 20 features (14 original + 6 Phase 1A)
+            // FIXED: CSV header with 24 features (20 Phase 1A + 4 Phase 1B)
             m_logFile << "time,stationId,rateIdx,phyRate,"
-                      // SNR features (SAFE - pre-decision measurements)
+                      // SNR features (7 - SAFE)
                       << "lastSnr,snrFast,snrSlow,snrTrendShort,"
                       << "snrStabilityIndex,snrPredictionConfidence,snrVariance,"
-                      // SUCCESS RATIOS FROM PREVIOUS WINDOW (FIXED: Issue #33)
+                      // Success ratios from PREVIOUS window (2 - SAFE)
                       << "shortSuccRatio,medSuccRatio,"
-                      // PACKET LOSS FROM PREVIOUS WINDOW (FIXED: Issue #33)
+                      // Packet loss from PREVIOUS window (1 - SAFE)
                       << "packetLossRate,"
-                      // Network state (SAFE - environmental)
+                      // Network state (2 - SAFE)
                       << "channelWidth,mobilityMetric,"
-                      // Assessment features (SAFE - from previous window)
+                      // Assessment features (2 - SAFE)
                       << "severity,confidence,"
-                      // SCENARIO FILE (FIXED: Issue #4 - for train/test splitting)
+                      // PHASE 1A: NEW FEATURES (6 - SAFE)
+                      << "retryRate,frameErrorRate,channelBusyRatio,"
+                      << "recentRateAvg,rateStability,sinceLastChange,"
+                      // PHASE 1B: NEW FEATURES (4 - SAFE) ← ADD THIS LINE!
+                      << "rssiVariance,interferenceLevel,distanceMetric,avgPacketSize,"
+                      // Scenario identifier (1)
                       << "scenario_file\n";
 
             m_logFile.flush();
             m_logHeaderWritten = true;
 
-            NS_LOG_INFO("FIXED: Logging initialized with SAFE features only");
+            NS_LOG_INFO("FIXED: Logging initialized with 20 SAFE features (PHASE 1A)");
             NS_LOG_INFO("  ✅ SNR features (7)");
             NS_LOG_INFO("  ✅ Previous window success ratios (2)");
             NS_LOG_INFO("  ✅ Previous window packet loss (1)");
             NS_LOG_INFO("  ✅ Network state (2)");
             NS_LOG_INFO("  ✅ Assessment features (2)");
+            NS_LOG_INFO("  ✅ PHASE 1A: Retry/error/channel features (6)");
             NS_LOG_INFO("  ✅ Scenario file for splitting (1)");
             NS_LOG_INFO("  ❌ REMOVED: 7 temporal leakage features");
         }
@@ -225,7 +238,7 @@ MinstrelWifiManagerLogged::AssignStreams(int64_t stream)
 {
     NS_LOG_FUNCTION(this << stream);
     m_uniformRandomVariable->SetStream(stream);
-    m_rng.seed(stream); // FIXED: Issue #14 - Seed RNG for reproducibility
+    m_rng.seed(stream);
     return 1;
 }
 
@@ -269,7 +282,7 @@ MinstrelWifiManagerLogged::DoCreateStation() const
     station->m_txrate = 0;
     station->m_initialized = false;
 
-    // FIXED: Initialize safe feature tracking (Issue #1, #33)
+    // FIXED: Initialize safe feature tracking
     station->m_lastSnr = 0.0;
     station->m_fastEwmaSnr = 0.0;
     station->m_slowEwmaSnr = 0.0;
@@ -277,6 +290,21 @@ MinstrelWifiManagerLogged::DoCreateStation() const
     station->m_previousWindowTotal = 0;
     station->m_currentWindowPackets = 0;
     station->m_previousWindowLosses = 0;
+
+    // PHASE 1A: Initialize telemetry counters
+    station->m_framesRetried = 0;
+    station->m_framesSent = 0;
+    station->m_framesFailed = 0;
+    station->m_channelBusyTime = 0.0;
+    station->m_observationTime = 0.1;
+    station->m_packetsSinceRateChange = 0;
+
+    // PHASE 1B: Initialize new feature tracking
+    station->m_recentCollisions = 0;
+    station->m_recentTransmissions = 0;
+
+    // Assign unique station ID
+    station->m_stationId = m_nextStationId++;
 
     return station;
 }
@@ -297,7 +325,6 @@ MinstrelWifiManagerLogged::CheckInit(MinstrelWifiRemoteStationLogged* station)
     }
 }
 
-// FIXED: Issue #33 - Update window state (move current to previous)
 void
 MinstrelWifiManagerLogged::UpdateWindowState(MinstrelWifiRemoteStationLogged* station)
 {
@@ -305,7 +332,7 @@ MinstrelWifiManagerLogged::UpdateWindowState(MinstrelWifiRemoteStationLogged* st
 
     if (station->m_currentWindowPackets >= WINDOW_SIZE)
     {
-        // FIXED: Use m_previousShortWindow (not m_previousSuccessHistory)
+        // Move current to previous
         station->m_previousShortWindow = station->m_currentShortWindow;
         station->m_previousMedWindow = station->m_currentMedWindow;
 
@@ -313,7 +340,7 @@ MinstrelWifiManagerLogged::UpdateWindowState(MinstrelWifiRemoteStationLogged* st
         station->m_previousWindowSuccess = 0;
         station->m_previousWindowLosses = 0;
 
-        for (bool success : station->m_currentShortWindow) // ✓ CORRECT
+        for (bool success : station->m_currentShortWindow)
         {
             if (success)
                 station->m_previousWindowSuccess++;
@@ -327,10 +354,16 @@ MinstrelWifiManagerLogged::UpdateWindowState(MinstrelWifiRemoteStationLogged* st
         station->m_currentShortWindow.clear();
         station->m_currentMedWindow.clear();
         station->m_currentWindowPackets = 0;
+
+        // PHASE 1A: Reset telemetry counters for new window
+        station->m_framesRetried = 0;
+        station->m_framesSent = 0;
+        station->m_framesFailed = 0;
+        station->m_channelBusyTime = 0.0;
+        station->m_observationTime = 0.1;
     }
 }
 
-// Minstrel core algorithm unchanged - same as original
 void
 MinstrelWifiManagerLogged::UpdateRate(MinstrelWifiRemoteStationLogged* station)
 {
@@ -341,7 +374,6 @@ MinstrelWifiManagerLogged::UpdateRate(MinstrelWifiRemoteStationLogged* station)
     NS_LOG_DEBUG("DoReportDataFailed " << station << " rate " << station->m_txrate << " longRetry "
                                        << station->m_longRetry);
 
-    // Minstrel retry chain logic (unchanged from original)
     if (!station->m_isSampling)
     {
         NS_LOG_DEBUG("Failed with normal rate: current="
@@ -799,16 +831,11 @@ MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, Wif
     // FIXED: Convert ns-3 SNR to realistic dB using scenario parameters
     double realisticSnr = rxSnr;
 
-    // ns-3 often gives SNR as linear power ratio (huge values)
-    // Convert to dB and apply realistic path loss model
     if (rxSnr > 100.0)
     {
-        // Convert from linear to dB
         realisticSnr = 10.0 * std::log10(rxSnr);
     }
 
-    // Apply realistic path loss based on distance
-    // Use a simple model similar to your ConvertNS3ToRealisticSnr
     if (m_scenarioDistance <= 20.0)
     {
         realisticSnr = std::min(realisticSnr, 35.0 - (m_scenarioDistance * 0.8));
@@ -822,13 +849,9 @@ MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, Wif
         realisticSnr = std::min(realisticSnr, 4.0 - ((m_scenarioDistance - 50.0) * 0.3));
     }
 
-    // Reduce SNR based on interferers
     realisticSnr -= (m_scenarioInterferers * 2.0);
-
-    // Clamp to realistic WiFi range
     realisticSnr = std::max(-30.0, std::min(50.0, realisticSnr));
 
-    // FIXED: Update SNR with EWMA (using realistic SNR)
     const double kAlphaFast = 0.30;
     const double kAlphaSlow = 0.05;
 
@@ -852,6 +875,14 @@ MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, Wif
         {
             station->m_snrHistory.pop_front();
         }
+    }
+
+    // PHASE 1B: Track RSSI history for variance calculation
+    double rssi = realisticSnr; // Use realistic SNR as RSSI proxy
+    station->m_rssiHistory.push_back(rssi);
+    if (station->m_rssiHistory.size() > 10)
+    {
+        station->m_rssiHistory.pop_front();
     }
 
     NS_LOG_DEBUG("DoReportRxOk: Raw SNR=" << rxSnr << " -> Realistic SNR=" << realisticSnr
@@ -900,16 +931,32 @@ MinstrelWifiManagerLogged::DoReportDataFailed(WifiRemoteStation* st)
         return;
     }
 
-    // FIXED: Track in current window
+    // PHASE 1A: Track telemetry
+    station->m_framesSent++;
+    station->m_framesFailed++;
+    station->m_framesRetried += station->m_longRetry;
+
+    // PHASE 1B: Track collisions for interference level
+    station->m_recentCollisions++;
+    station->m_recentTransmissions++;
+
+    // Keep window size = 50
+    if (station->m_recentTransmissions > 50)
+    {
+        station->m_recentCollisions = static_cast<uint32_t>(station->m_recentCollisions * 0.98);
+        station->m_recentTransmissions = 50;
+    }
+
+    // Track in current window
     station->m_currentShortWindow.push_back(false);
     station->m_currentMedWindow.push_back(false);
     station->m_currentWindowPackets++;
     UpdateWindowState(station);
 
     UpdateRate(station);
+    LogSafeFeatures(station, station->m_txrate, false);
 
-    // FIXED: Correct call
-    LogSafeFeatures(station, station->m_txrate, false); // ✅ CORRECT
+    station->m_packetsSinceRateChange++;
 }
 
 void
@@ -938,7 +985,29 @@ MinstrelWifiManagerLogged::DoReportDataOk(WifiRemoteStation* st,
     station->m_minstrelTable[station->m_txrate].numRateSuccess++;
     station->m_minstrelTable[station->m_txrate].numRateAttempt++;
 
-    // FIXED: Issue #33 - Track in current window (not logged until it becomes previous)
+    // PHASE 1A: Track telemetry
+    station->m_framesSent++;
+    station->m_framesRetried += station->m_longRetry;
+
+    // PHASE 1B: Track successful transmissions
+    station->m_recentTransmissions++;
+
+    // Keep window size = 50
+    if (station->m_recentTransmissions > 50)
+    {
+        station->m_recentCollisions = static_cast<uint32_t>(station->m_recentCollisions * 0.98);
+        station->m_recentTransmissions = 50;
+    }
+
+    // PHASE 1B: Track packet size
+    uint32_t packetSize = m_pktLen; // Default from attribute
+    station->m_packetSizeHistory.push_back(packetSize);
+    if (station->m_packetSizeHistory.size() > 10)
+    {
+        station->m_packetSizeHistory.pop_front();
+    }
+
+    // Track in current window
     station->m_currentShortWindow.push_back(true);
     station->m_currentMedWindow.push_back(true);
     station->m_currentWindowPackets++;
@@ -948,12 +1017,29 @@ MinstrelWifiManagerLogged::DoReportDataOk(WifiRemoteStation* st,
     UpdateRetry(station);
     UpdateStats(station);
 
-    // FIXED: Correct call
-    LogSafeFeatures(station, station->m_txrate, true); // ✅ CORRECT
+    LogSafeFeatures(station, station->m_txrate, true);
 
     if (station->m_nModes >= 1)
     {
+        uint8_t oldRate = station->m_txrate;
         station->m_txrate = FindRate(station);
+
+        // PHASE 1A: Track rate changes
+        if (oldRate != station->m_txrate)
+        {
+            station->m_packetsSinceRateChange = 0;
+        }
+        else
+        {
+            station->m_packetsSinceRateChange++;
+        }
+
+        // Update rate history
+        station->m_rateHistory.push_back(station->m_txrate);
+        if (station->m_rateHistory.size() > 10)
+        {
+            station->m_rateHistory.pop_front();
+        }
     }
 }
 
@@ -975,7 +1061,12 @@ MinstrelWifiManagerLogged::DoReportFinalDataFailed(WifiRemoteStation* st)
                  << ", success = " << station->m_minstrelTable[station->m_txrate].numRateSuccess
                  << " (before update).");
 
-    // FIXED: Issue #33 - Track in current window
+    // PHASE 1A: Track telemetry
+    station->m_framesSent++;
+    station->m_framesFailed++;
+    station->m_framesRetried += station->m_longRetry;
+
+    // Track in current window
     station->m_currentShortWindow.push_back(false);
     station->m_currentMedWindow.push_back(false);
     station->m_currentWindowPackets++;
@@ -985,20 +1076,42 @@ MinstrelWifiManagerLogged::DoReportFinalDataFailed(WifiRemoteStation* st)
     UpdateRetry(station);
     UpdateStats(station);
 
-    // FIXED: Correct call
-    LogSafeFeatures(station, station->m_txrate, false); // ✅ CORRECT
+    LogSafeFeatures(station, station->m_txrate, false);
 
     if (station->m_nModes >= 1)
     {
         station->m_txrate = FindRate(station);
     }
     NS_LOG_DEBUG("Next rate to use TxRate = " << station->m_txrate);
+
+    station->m_packetsSinceRateChange++;
 }
 
 // ============================================================================
-// FIXED: Safe Feature Calculation Methods (Issue #1, #33)
-// These calculate features from PREVIOUS window data only
+// FIXED: Safe Feature Calculation Methods
 // ============================================================================
+
+double
+MinstrelWifiManagerLogged::CalculatePreviousShortSuccessRatio(
+    MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_previousWindowTotal == 0)
+        return 1.0;
+
+    uint32_t window = std::min<uint32_t>(10, st->m_previousShortWindow.size());
+    if (window == 0)
+        return 1.0;
+
+    uint32_t start = st->m_previousShortWindow.size() - window;
+    uint32_t successes = 0;
+    for (uint32_t i = start; i < st->m_previousShortWindow.size(); ++i)
+    {
+        if (st->m_previousShortWindow[i])
+            successes++;
+    }
+
+    return static_cast<double>(successes) / window;
+}
 
 double
 MinstrelWifiManagerLogged::CalculatePreviousMedSuccessRatio(
@@ -1007,7 +1120,7 @@ MinstrelWifiManagerLogged::CalculatePreviousMedSuccessRatio(
     if (st->m_previousWindowTotal == 0)
         return 1.0;
 
-    uint32_t window = std::min<uint32_t>(25, st->m_previousMedWindow.size()); // ✓ CORRECT
+    uint32_t window = std::min<uint32_t>(25, st->m_previousMedWindow.size());
     if (window == 0)
         return 1.0;
 
@@ -1015,7 +1128,7 @@ MinstrelWifiManagerLogged::CalculatePreviousMedSuccessRatio(
     uint32_t successes = 0;
     for (uint32_t i = start; i < st->m_previousMedWindow.size(); ++i)
     {
-        if (st->m_previousMedWindow[i]) // ✓ CORRECT
+        if (st->m_previousMedWindow[i])
             successes++;
     }
 
@@ -1119,30 +1232,6 @@ MinstrelWifiManagerLogged::CalculateMobilityMetric(MinstrelWifiRemoteStationLogg
 }
 
 double
-MinstrelWifiManagerLogged::CalculatePreviousShortSuccessRatio(
-    MinstrelWifiRemoteStationLogged* st) const
-{
-    // FIXED: Use correct member variable names from header
-    if (st->m_previousWindowTotal == 0)
-        return 1.0;
-
-    // Calculate from last 10 packets of PREVIOUS short window
-    uint32_t window = std::min<uint32_t>(10, st->m_previousShortWindow.size());
-    if (window == 0)
-        return 1.0;
-
-    uint32_t start = st->m_previousShortWindow.size() - window;
-    uint32_t successes = 0;
-    for (uint32_t i = start; i < st->m_previousShortWindow.size(); ++i)
-    {
-        if (st->m_previousShortWindow[i])
-            successes++;
-    }
-
-    return static_cast<double>(successes) / window;
-}
-
-double
 MinstrelWifiManagerLogged::GetStratifiedLogProbability(uint8_t rate, double snr, bool success) const
 {
     const double base[8] = {1.0, 1.0, 0.9, 0.7, 0.5, 0.3, 0.15, 0.08};
@@ -1168,128 +1257,8 @@ MinstrelWifiManagerLogged::GetRandomValue()
 }
 
 // ============================================================================
-// FIXED: Safe Logging Function (Issue #1, #33, #4)
-// Logs ONLY pre-decision features
+// PHASE 1A: Safe Logging Function (20 features)
 // ============================================================================
-
-// void
-// MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
-//                                            uint8_t currentRateIdx,
-//                                            bool success)
-// {
-//     if (!m_logFile.is_open())
-//     {
-//         NS_LOG_WARN("Log file not open - cannot log features");
-//         return;
-//     }
-
-//     // FIXED: More aggressive logging - log every 5th packet minimum
-//     static uint32_t logCallCount = 0;
-//     logCallCount++;
-
-//     // Force logging for first 100 calls for testing
-//     bool forceLog = (logCallCount <= 100);
-
-//     // Stratified sampling - but much more lenient
-//     double logProb = 1.0; // Start with 100%
-
-//     if (!forceLog)
-//     {
-//         // Only apply stratified sampling after first 100 packets
-//         logProb = GetStratifiedLogProbability(currentRateIdx, st->m_lastSnr, success);
-
-//         // FIXED: Much more aggressive - log at least every 5th packet
-//         logProb = std::max(0.2, logProb); // Minimum 20% logging rate
-//     }
-
-//     if (!forceLog && GetRandomValue() > logProb)
-//     {
-//         return;
-//     }
-
-//     // DEBUG: Print every 50th log to console
-//     if (logCallCount % 50 == 0)
-//     {
-//         std::cout << "[LOG] Writing entry #" << logCallCount
-//                   << " rate=" << static_cast<uint32_t>(currentRateIdx) << " success=" << success
-//                   << " SNR=" << st->m_lastSnr << "dB" << std::endl;
-//     }
-
-//     // Calculate 14 SAFE features
-//     double shortSuccRatio = CalculatePreviousShortSuccessRatio(st);
-//     double medSuccRatio = CalculatePreviousMedSuccessRatio(st);
-//     double packetLossRate = CalculatePreviousPacketLoss(st);
-
-//     double snrTrendShort = st->m_fastEwmaSnr - st->m_slowEwmaSnr;
-//     double snrStability = CalculateSnrStability(st);
-//     double snrPredictionConfidence = CalculateSnrPredictionConfidence(st);
-//     double snrVariance = CalculateSnrVariance(st);
-
-//     uint32_t channelWidth = 20;
-//     double mobilityMetric = CalculateMobilityMetric(st);
-
-//     double severity = CalculateSeverity(st);
-//     double confidence = CalculateConfidence(st);
-
-//     // 802.11a rates (bps)
-//     const uint64_t rates802_11a[8] =
-//         {6000000, 9000000, 12000000, 18000000, 24000000, 36000000, 48000000, 54000000};
-
-//     uint8_t rateIdx = std::min<uint8_t>(currentRateIdx, 7);
-//     uint64_t phyRate = rates802_11a[rateIdx];
-
-//     // Get station ID
-//     uint32_t stationId = 0;
-//     if (st->m_node)
-//     {
-//         stationId = st->m_node->GetId();
-//     }
-//     else
-//     {
-//         stationId = st->m_stationId;
-//     }
-
-//     double simTime = Simulator::Now().GetSeconds();
-
-//     // FIXED: Ensure all values are finite
-//     auto safeValue = [](double val, double defaultVal = 0.0) {
-//         return std::isfinite(val) ? val : defaultVal;
-//     };
-
-//     // Write CSV row with ALL 14 features + metadata
-//     m_logFile << std::fixed << std::setprecision(6) << simTime << "," << stationId << ","
-//               << static_cast<uint32_t>(rateIdx) << "," << phyRate
-//               << ","
-//               // SNR features (7)
-//               << safeValue(st->m_lastSnr) << "," << safeValue(st->m_fastEwmaSnr) << ","
-//               << safeValue(st->m_slowEwmaSnr) << "," << safeValue(snrTrendShort) << ","
-//               << safeValue(snrStability) << "," << safeValue(snrPredictionConfidence) << ","
-//               << safeValue(snrVariance)
-//               << ","
-//               // Success ratios from PREVIOUS window (2)
-//               << safeValue(shortSuccRatio, 0.5) << "," << safeValue(medSuccRatio, 0.5)
-//               << ","
-//               // Packet loss from PREVIOUS window (1)
-//               << safeValue(packetLossRate)
-//               << ","
-//               // Network state (2)
-//               << channelWidth << "," << safeValue(mobilityMetric)
-//               << ","
-//               // Assessment (2)
-//               << safeValue(severity) << "," << safeValue(confidence, 0.5)
-//               << ","
-//               // Scenario file (1)
-//               << m_scenarioFileName << "\n";
-
-//     // CRITICAL: Flush after EVERY write to ensure data is saved
-//     m_logFile.flush();
-
-//     // Verify file is still open
-//     if (!m_logFile.good())
-//     {
-//         NS_LOG_ERROR("Log file write failed! File may be corrupted.");
-//     }
-// }
 
 void
 MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
@@ -1304,54 +1273,105 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
     static uint32_t logCount = 0;
     logCount++;
 
-    // Less aggressive stratified sampling (log ~30% of packets)
+    // Stratified sampling (30% minimum)
     double logProb = GetStratifiedLogProbability(currentRateIdx, st->m_lastSnr, success);
-    logProb = std::max(0.3, logProb); // Minimum 30% logging
-
+    logProb = std::max(0.3, logProb);
     if (GetRandomValue() > logProb)
     {
         return;
     }
 
-    // DEBUG: Print progress every 500 logs
     if (logCount % 500 == 0)
     {
         std::cout << "[LOG] Logged " << logCount << " entries to " << m_scenarioFileName
                   << std::endl;
     }
 
-    // Calculate 14 SAFE features
+    // Calculate Phase 1A features (20 original)
     double shortSuccRatio = CalculatePreviousShortSuccessRatio(st);
     double medSuccRatio = CalculatePreviousMedSuccessRatio(st);
     double packetLossRate = CalculatePreviousPacketLoss(st);
-
     double snrTrendShort = st->m_fastEwmaSnr - st->m_slowEwmaSnr;
     double snrStability = CalculateSnrStability(st);
     double snrPredictionConfidence = CalculateSnrPredictionConfidence(st);
     double snrVariance = CalculateSnrVariance(st);
-
     uint32_t channelWidth = 20;
     double mobilityMetric = CalculateMobilityMetric(st);
-
     double severity = CalculateSeverity(st);
     double confidence = CalculateConfidence(st);
+
+    double retryRate =
+        st->m_framesSent > 0 ? static_cast<double>(st->m_framesRetried) / st->m_framesSent : 0.0;
+    double frameErrorRate =
+        st->m_framesSent > 0 ? static_cast<double>(st->m_framesFailed) / st->m_framesSent : 0.0;
+    double channelBusyRatio =
+        st->m_observationTime > 0 ? st->m_channelBusyTime / st->m_observationTime : 0.3;
+
+    double recentRateAvg = 0.0;
+    if (!st->m_rateHistory.empty())
+    {
+        for (uint8_t r : st->m_rateHistory)
+            recentRateAvg += r;
+        recentRateAvg /= st->m_rateHistory.size();
+    }
+    else
+    {
+        recentRateAvg = currentRateIdx;
+    }
+
+    double rateStability = 0.5;
+    if (st->m_rateHistory.size() >= 2)
+    {
+        double sum = 0.0;
+        for (uint8_t r : st->m_rateHistory)
+            sum += r;
+        double mean = sum / st->m_rateHistory.size();
+
+        double variance = 0.0;
+        for (uint8_t r : st->m_rateHistory)
+        {
+            double d = r - mean;
+            variance += d * d;
+        }
+        variance /= st->m_rateHistory.size();
+        double stddev = std::sqrt(variance);
+        rateStability = 1.0 / (1.0 + stddev);
+    }
+
+    double sinceLastChange =
+        std::min(100.0, static_cast<double>(st->m_packetsSinceRateChange)) / 100.0;
+
+    // PHASE 1B: Calculate NEW features (4 additional)
+    double rssiVariance = CalculateRssiVariance(st);
+    double interferenceLevel = CalculateInterferenceLevel(st);
+    double distanceMetric = GetDistanceMetric();
+    double avgPacketSize = CalculateAvgPacketSize(st);
+
+    // Clamp all features
+    retryRate = std::clamp(retryRate, 0.0, 1.0);
+    frameErrorRate = std::clamp(frameErrorRate, 0.0, 1.0);
+    channelBusyRatio = std::clamp(channelBusyRatio, 0.0, 1.0);
+    recentRateAvg = std::clamp(recentRateAvg, 0.0, 7.0);
+    rateStability = std::clamp(rateStability, 0.0, 1.0);
+    sinceLastChange = std::clamp(sinceLastChange, 0.0, 1.0);
+    rssiVariance = std::clamp(rssiVariance, 0.0, 100.0);
+    interferenceLevel = std::clamp(interferenceLevel, 0.0, 1.0);
+    distanceMetric = std::clamp(distanceMetric, 0.0, 200.0);
+    avgPacketSize = std::clamp(avgPacketSize, 64.0, 1500.0);
 
     // 802.11a rates
     const uint64_t rates802_11a[8] =
         {6000000, 9000000, 12000000, 18000000, 24000000, 36000000, 48000000, 54000000};
-
     uint8_t rateIdx = std::min<uint8_t>(currentRateIdx, 7);
     uint64_t phyRate = rates802_11a[rateIdx];
-
     uint32_t stationId = st->m_node ? st->m_node->GetId() : st->m_stationId;
     double simTime = Simulator::Now().GetSeconds();
 
-    // Safe value helper
     auto safeValue = [](double val, double defaultVal = 0.0) {
         return std::isfinite(val) ? val : defaultVal;
     };
 
-    // Write CSV row
+    // Write CSV row with ALL 24 features (20 Phase 1A + 4 Phase 1B)
     m_logFile << std::fixed << std::setprecision(6) << simTime << "," << stationId << ","
               << static_cast<uint32_t>(rateIdx) << "," << phyRate
               << ","
@@ -1373,14 +1393,93 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
               // Assessment (2)
               << safeValue(severity) << "," << safeValue(confidence, 0.5)
               << ","
+              // Phase 1A (6)
+              << retryRate << "," << frameErrorRate << "," << channelBusyRatio << ","
+              << recentRateAvg << "," << rateStability << "," << sinceLastChange
+              << ","
+              // PHASE 1B: NEW FEATURES (4)
+              << rssiVariance << "," << interferenceLevel << "," << distanceMetric << ","
+              << avgPacketSize
+              << ","
               // Scenario file (1)
               << m_scenarioFileName << "\n";
 
-    // Flush every 100 entries to balance performance/safety
     if (logCount % 100 == 0)
     {
         m_logFile.flush();
     }
+}
+
+// ============================================================================
+// PHASE 1B: NEW FEATURE CALCULATIONS
+// ============================================================================
+
+double
+MinstrelWifiManagerLogged::CalculateRssiVariance(MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_rssiHistory.size() < 3)
+    {
+        return 0.0; // Not enough samples
+    }
+
+    // Calculate mean
+    double mean = 0.0;
+    for (double rssi : st->m_rssiHistory)
+    {
+        mean += rssi;
+    }
+    mean /= st->m_rssiHistory.size();
+
+    // Calculate variance
+    double variance = 0.0;
+    for (double rssi : st->m_rssiHistory)
+    {
+        double diff = rssi - mean;
+        variance += diff * diff;
+    }
+    variance /= st->m_rssiHistory.size();
+
+    return variance; // Units: dB²
+}
+
+double
+MinstrelWifiManagerLogged::CalculateInterferenceLevel(MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_recentTransmissions == 0)
+    {
+        return 0.05; // Default 5% collision rate
+    }
+
+    // Ratio of collisions to total transmissions
+    double interferenceRatio =
+        static_cast<double>(st->m_recentCollisions) / st->m_recentTransmissions;
+
+    // Clamp to [0.0, 1.0]
+    return std::clamp(interferenceRatio, 0.0, 1.0);
+}
+
+double
+MinstrelWifiManagerLogged::GetDistanceMetric() const
+{
+    // Return scenario distance in meters (set via SetScenarioParameters)
+    return m_scenarioDistance;
+}
+
+double
+MinstrelWifiManagerLogged::CalculateAvgPacketSize(MinstrelWifiRemoteStationLogged* st) const
+{
+    if (st->m_packetSizeHistory.empty())
+    {
+        return 1200.0; // Default MTU
+    }
+
+    uint64_t sum = 0;
+    for (uint32_t size : st->m_packetSizeHistory)
+    {
+        sum += size;
+    }
+
+    return static_cast<double>(sum) / st->m_packetSizeHistory.size();
 }
 
 // ============================================================================

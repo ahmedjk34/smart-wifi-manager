@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
 """
 Enhanced ML Client - Test client for WiFi rate adaptation inference server
-FULLY UPDATED FOR NEW PIPELINE (9 safe features, oracle_aggressive default)
+🚀 FULLY UPDATED FOR PHASE 1A (15 safe features, oracle_aggressive default)
+
+CRITICAL UPDATES (2025-10-02 20:18:13 UTC):
+- PHASE 1A: Now sends 15 features (was 9)
+- Added 6 new features: retryRate, frameErrorRate, channelBusyRatio, 
+  recentRateAvg, rateStability, sinceLastChange
+- Updated help text and examples for 15 features
 
 Author: ahmedjk34 (https://github.com/ahmedjk34)
-Date: 2025-10-02
+Date: 2025-10-02 20:18:13 UTC
 Usage: 
+  # Get server info
   python3 python_files/6b_ml_client.py --info
-  python3 python_files/6b_ml_client.py --stats
-  python3 python_files/6b_ml_client.py --models
-  python3 python_files/6b_ml_client.py --predict 25 25 25 0 0.01 0.99 0.5 20 0.5
-  python3 python_files/6b_ml_client.py --predict 25 25 25 0 0.01 0.99 0.5 20 0.5 oracle_balanced
-  python3 python_files/6b_ml_client.py --batch test_features.txt
+  
+  # Make prediction with 15 features (Phase 1A)
+  python3 python_files/6b_ml_client.py --predict \\
+    25 25 25 0 0.01 0.99 0.5 20 0.5 \\
+    0.1 0.05 0.3 4.0 0.9 0.5
+  
+  # With specific model
+  python3 python_files/6b_ml_client.py --predict \\
+    25 25 25 0 0.01 0.99 0.5 20 0.5 \\
+    0.1 0.05 0.3 4.0 0.9 0.5 \\
+    oracle_balanced
 """
 
 import socket
@@ -93,9 +106,9 @@ class MLClient:
 # ================== PRETTY PRINTING ==================
 def print_prediction(result: Dict[str, Any], features: List[float], model_name: Optional[str] = None):
     """Pretty print a prediction result."""
-    print("\n" + "="*70)
-    print("PREDICTION RESULT")
-    print("="*70)
+    print("\n" + "="*80)
+    print("PREDICTION RESULT (PHASE 1A - 15 FEATURES)")
+    print("="*80)
     
     if result.get("success", False):
         print(f"✅ Status: SUCCESS")
@@ -103,11 +116,14 @@ def print_prediction(result: Dict[str, Any], features: List[float], model_name: 
         print(f"⏱️  Latency: {result['latencyMs']:.2f} ms")
         print(f"🔮 Confidence: {result.get('confidence', 0.0):.3f}")
         print(f"🤖 Model: {result.get('model', 'unknown')}")
+        print(f"🔢 Features Used: {result.get('featuresCount', len(features))}")
         
         if result.get('clampWarnings'):
             print(f"⚠️  Clamping: {len(result['clampWarnings'])} features adjusted")
-            for warning in result['clampWarnings']:
+            for warning in result['clampWarnings'][:5]:  # Show first 5
                 print(f"   • {warning}")
+            if len(result['clampWarnings']) > 5:
+                print(f"   ... and {len(result['clampWarnings']) - 5} more")
         
         if result.get('classProbabilities'):
             print(f"📊 Class Probabilities:")
@@ -121,22 +137,35 @@ def print_prediction(result: Dict[str, Any], features: List[float], model_name: 
         print(f"🔄 Fallback Rate Index: {result.get('rateIdx', 3)}")
         print(f"🤖 Model: {result.get('model', 'unknown')}")
     
-    print("\n📝 Input Features (9):")
+    print("\n📝 Input Features (15 - Phase 1A):")
+    
+    # 🚀 PHASE 1B: Updated feature names (14 features)
     feature_names = [
+        # SNR features (7)
         "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
         "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-        "channelWidth", "mobilityMetric"
+        
+        # Network state (1)
+        "mobilityMetric",
+        
+        # Phase 1A features (2)
+        "retryRate", "frameErrorRate",
+        
+        # Phase 1B features (4)
+        "rssiVariance", "interferenceLevel", "distanceMetric", "avgPacketSize"
     ]
+
     for i, (name, val) in enumerate(zip(feature_names, features)):
-        print(f"   {i}: {name:25s} = {val:10.4f}")
+        marker = "🚀" if i >= 10 else "  "  # Mark Phase 1B features
+        print(f" {marker} {i:2d}: {name:30s} = {val:10.4f}")
     
-    print("="*70 + "\n")
+    print("="*80 + "\n")
 
 def print_info(info: Dict[str, Any]):
     """Pretty print server info."""
-    print("\n" + "="*70)
-    print("SERVER INFORMATION")
-    print("="*70)
+    print("\n" + "="*80)
+    print("SERVER INFORMATION (PHASE 1A)")
+    print("="*80)
     
     if "error" in info:
         print(f"❌ Error: {info['error']}")
@@ -144,6 +173,7 @@ def print_info(info: Dict[str, Any]):
     
     server = info.get("server", {})
     print(f"📦 Version: {server.get('version', 'unknown')}")
+    print(f"🚀 Phase: {server.get('phase', 'unknown')}")
     print(f"👤 Author: {server.get('author', 'unknown')}")
     print(f"🔗 GitHub: {server.get('github', 'unknown')}")
     print(f"📅 Pipeline Date: {server.get('pipeline_date', 'unknown')}")
@@ -155,10 +185,11 @@ def print_info(info: Dict[str, Any]):
         is_default = "⭐" if model_info.get("is_default") else "  "
         print(f"   {is_default} {name}")
         print(f"      {model_info.get('description', 'No description')}")
+        print(f"      Features: {model_info.get('features_count', '?')}")
     
     features = info.get("features", {})
     print(f"\n🔢 Features:")
-    print(f"   Count: {features.get('count', 0)}")
+    print(f"   Count: {features.get('count', 0)} ({features.get('phase_1a', 'unknown')})")
     print(f"   Safe features only: {features.get('safe_features_only', False)}")
     print(f"   No outcome features: {features.get('no_outcome_features', False)}")
     
@@ -174,13 +205,13 @@ def print_info(info: Dict[str, Any]):
             print(f"   Latency (ms): mean={latency.get('mean', 0):.2f} "
                   f"p95={latency.get('p95', 0):.2f} p99={latency.get('p99', 0):.2f}")
     
-    print("="*70 + "\n")
+    print("="*80 + "\n")
 
 def print_stats(stats: Dict[str, Any]):
     """Pretty print server statistics."""
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("SERVER STATISTICS")
-    print("="*70)
+    print("="*80)
     
     if "error" in stats:
         print(f"❌ Error: {stats['error']}")
@@ -215,13 +246,13 @@ def print_stats(stats: Dict[str, Any]):
         for error, count in sorted(error_counts.items(), key=lambda x: x[1], reverse=True):
             print(f"   {error[:50]:50s}: {count:4d}")
     
-    print("="*70 + "\n")
+    print("="*80 + "\n")
 
 def print_models(models_info: Dict[str, Any]):
     """Pretty print available models."""
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("AVAILABLE MODELS")
-    print("="*70)
+    print("="*80)
     
     if "error" in models_info:
         print(f"❌ Error: {models_info['error']}")
@@ -235,7 +266,7 @@ def print_models(models_info: Dict[str, Any]):
         print(f"   {description}")
         print()
     
-    print("="*70 + "\n")
+    print("="*80 + "\n")
 
 # ================== BATCH PROCESSING ==================
 def run_batch(client: MLClient, batch_file: str):
@@ -254,7 +285,7 @@ def run_batch(client: MLClient, batch_file: str):
             
             # Parse features and optional model name
             model_name = None
-            if len(parts) > 9 and not is_float(parts[-1]):
+            if len(parts) > 14 and not is_float(parts[-1]):
                 model_name = parts[-1]
                 features = [float(x) for x in parts[:-1]]
             else:
@@ -270,9 +301,9 @@ def run_batch(client: MLClient, batch_file: str):
                 print(f"   ❌ Error: {result.get('error', 'unknown')}")
         
         # Summary
-        print("\n" + "="*70)
+        print("\n" + "="*80)
         print("BATCH SUMMARY")
-        print("="*70)
+        print("="*80)
         successful = sum(1 for _, _, r in results if r.get("success"))
         print(f"Total: {len(results)}")
         print(f"Successful: {successful}")
@@ -281,7 +312,7 @@ def run_batch(client: MLClient, batch_file: str):
         
         avg_latency = sum(r['latencyMs'] for _, _, r in results if r.get('success')) / max(successful, 1)
         print(f"Average Latency: {avg_latency:.2f} ms")
-        print("="*70 + "\n")
+        print("="*80 + "\n")
         
     except FileNotFoundError:
         print(f"❌ Batch file not found: {batch_file}")
@@ -299,42 +330,53 @@ def is_float(s: str) -> bool:
 # ================== MAIN ==================
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced ML Client v3.0 (New Pipeline)",
+        description="Enhanced ML Client v4.0 (Phase 1A - 15 Features)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+🚀 PHASE 1B: 14 FEATURES (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
+
 Examples:
   # Get server info
   python3 6b_ml_client.py --info
   
-  # Get server statistics
-  python3 6b_ml_client.py --stats
+  # Make prediction (14 features, default model = oracle_aggressive)
+  python3 6b_ml_client.py --predict \\
+    25 25 25 0 0.01 0.99 0.5 \\
+    0.5 \\
+    0.1 0.05 \\
+    0.5 0.3 20.0 1200.0
   
-  # List available models
-  python3 6b_ml_client.py --models
-  
-  # Make prediction (default model = oracle_aggressive)
-  python3 6b_ml_client.py --predict 25 25 25 0 0.01 0.99 0.5 20 0.5
-  
-  # Make prediction with specific model
-  python3 6b_ml_client.py --predict 25 25 25 0 0.01 0.99 0.5 20 0.5 oracle_balanced
-  
-  # Batch predictions from file
-  python3 6b_ml_client.py --batch test_features.txt
-  
-  # Shutdown server
-  python3 6b_ml_client.py --shutdown
+  # With specific model
+  python3 6b_ml_client.py --predict \\
+    25 25 25 0 0.01 0.99 0.5 \\
+    0.5 \\
+    0.1 0.05 \\
+    0.5 0.3 20.0 1200.0 \\
+    oracle_balanced
 
-Feature order (9 features):
-  1. lastSnr (dB)
-  2. snrFast (dB)
-  3. snrSlow (dB)
-  4. snrTrendShort
-  5. snrStabilityIndex
-  6. snrPredictionConfidence
-  7. snrVariance
-  8. channelWidth (MHz)
-  9. mobilityMetric
-        """
+Feature order (14 features - Phase 1B):
+  SNR FEATURES (7):
+   1. lastSnr (dB)
+   2. snrFast (dB)
+   3. snrSlow (dB)
+   4. snrTrendShort
+   5. snrStabilityIndex
+   6. snrPredictionConfidence
+   7. snrVariance
+  
+  NETWORK STATE (1):
+   8. mobilityMetric
+  
+  PHASE 1A (2):
+   9. retryRate (0-1)
+  10. frameErrorRate (0-1)
+  
+  🚀 PHASE 1B (4):
+  11. rssiVariance (dB²)
+  12. interferenceLevel (0-1)
+  13. distanceMetric (m)
+  14. avgPacketSize (bytes)
+"""
     )
     
     # Connection options
@@ -347,7 +389,7 @@ Feature order (9 features):
     group.add_argument("--info", action="store_true", help="Get server information")
     group.add_argument("--stats", action="store_true", help="Get server statistics")
     group.add_argument("--models", action="store_true", help="List available models")
-    group.add_argument("--predict", nargs='+', help="Make prediction (9 features + optional model name)")
+    group.add_argument("--predict", nargs='+', help="Make prediction (14 features + optional model name)")
     group.add_argument("--batch", help="Run batch predictions from file")
     group.add_argument("--shutdown", action="store_true", help="Shutdown server")
     
@@ -372,17 +414,17 @@ Feature order (9 features):
         elif args.predict:
             # Parse features and optional model name
             model_name = None
-            if len(args.predict) > 9 and not is_float(args.predict[-1]):
+            if len(args.predict) > 15 and not is_float(args.predict[-1]):
                 model_name = args.predict[-1]
                 features = [float(x) for x in args.predict[:-1]]
             else:
                 features = [float(x) for x in args.predict]
             
-            if len(features) != 9:
-                print(f"❌ Expected 9 features, got {len(features)}")
+            if len(features) != 14:
+                print(f"❌ Expected 14 features (Phase 1B), got {len(features)}")
                 print(f"💡 Use --help to see feature order")
                 sys.exit(1)
-            
+
             result = client.predict(features, model_name)
             print_prediction(result, features, model_name)
         

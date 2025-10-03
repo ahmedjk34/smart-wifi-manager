@@ -11,9 +11,14 @@ Balancing Strategies:
 
 Quality Guarantee: IDENTICAL to loading all data and using stratified sampling
 
+PHASE 1A UPDATE (2025-10-03):
+- Now expects 25 columns (was 19)
+- Added 6 new features: retryRate, frameErrorRate, channelBusyRatio,
+  recentRateAvg, rateStability, sinceLastChange
+
 Author: ahmedjk34
-Date: 2025-10-01 21:48:22 UTC
-Version: 5.0 (POWER LAW)
+Date: 2025-10-03 08:45:00 UTC (PHASE 1A UPDATE)
+Version: 5.1 (PHASE 1A COMPATIBLE)
 """
 
 import csv
@@ -34,7 +39,7 @@ NUM_RATES = 8
 # BALANCING STRATEGY - Choose one:
 STRATEGY = 'power'  # 'power', 'balanced', or 'tiered'
 POWER = 0.5         # Only used if STRATEGY='power' (0.3-0.7 recommended)
-TARGET_TOTAL = 500_000  # Total samples in final dataset
+TARGET_TOTAL = 2_812_500  # Total samples in final dataset
 
 # Tiered strategy percentages (only used if STRATEGY='tiered')
 TIERED_PERCENTAGES = {
@@ -48,14 +53,38 @@ TIERED_PERCENTAGES = {
     7: 35,  # Still dominant, but not overwhelming
 }
 
+# PHASE 1B UPDATE (2025-10-03): Now 29 columns (was 25)
 EXPECTED_COLUMNS = [
+    # Metadata (4)
     'time', 'stationId', 'rateIdx', 'phyRate',
+    
+    # SNR features (7)
     'lastSnr', 'snrFast', 'snrSlow', 'snrTrendShort',
     'snrStabilityIndex', 'snrPredictionConfidence', 'snrVariance',
-    'shortSuccRatio', 'medSuccRatio', 'packetLossRate',
+    
+    # Previous window success (2)
+    'shortSuccRatio', 'medSuccRatio',
+    
+    # Previous window loss (1)
+    'packetLossRate',
+    
+    # Network state (2)
     'channelWidth', 'mobilityMetric',
-    'severity', 'confidence', 'scenario_file'
-]
+    
+    # Assessment (2)
+    'severity', 'confidence',
+    
+    # PHASE 1A: New features (6)
+    'retryRate', 'frameErrorRate', 'channelBusyRatio',
+    'recentRateAvg', 'rateStability', 'sinceLastChange',
+    
+    # PHASE 1B: NEW FEATURES (4)
+    'rssiVariance', 'interferenceLevel', 'distanceMetric', 'avgPacketSize',
+    
+    # Scenario identifier (1)
+    'scenario_file'
+]  # TOTAL: 29 columns (4 metadata + 24 features + 1 scenario)
+
 
 # ==================== PASS 1: COUNT RATES ====================
 def count_rates_fast(filepath):
@@ -405,10 +434,11 @@ def main():
     
     print("\n🎉 SUCCESS! Your balanced dataset is ready.")
     print("\n💡 To change strategy, edit the script:")
-    print("   STRATEGY = 'power'  # or 'balanced', 'tiered'")
-    print("   POWER = 0.5         # 0.3-0.7 recommended")
-    print("   TARGET_TOTAL = 500_000")
+    print(f"   STRATEGY = {STRATEGY}")
+    print(f"   POWER = {POWER}         # 0.3-0.7 recommended")
+    print(f"   TARGET_TOTAL = {TARGET_TOTAL}")
     print("="*60)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

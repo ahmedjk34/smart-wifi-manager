@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
 Enhanced ML Inference Server - Production-ready WiFi rate adaptation inference
-FULLY UPDATED FOR NEW PIPELINE (9 safe features, oracle_aggressive default)
+🚀 FULLY UPDATED FOR PHASE 1A (15 safe features, oracle_aggressive default)
+
+CRITICAL UPDATES (2025-10-02 20:18:13 UTC):
+- PHASE 1A: Now expects 15 features (was 9)
+- Added 6 new features: retryRate, frameErrorRate, channelBusyRatio, 
+  recentRateAvg, rateStability, sinceLastChange
+- Updated feature validation and clamping for 15 features
+- Auto-discovery still works (backward compatible with 9-feature models)
 
 Author: ahmedjk34 (https://github.com/ahmedjk34)
-Date: 2025-10-02
+Date: 2025-10-02 20:18:13 UTC
 Usage: python3 python_files/6a_enhanced_ml_inference_server.py
 """
 
@@ -36,7 +43,7 @@ class ModelConfig:
     model_path: str
     scaler_path: str
     description: str = ""
-    features_count: int = 9  # FIXED: 9 safe features only!
+    features_count: int = 14  # 🚀 FIXED: 14 safe features (Phase 1A)
     rate_classes: int = 8
 
 @dataclass
@@ -51,21 +58,33 @@ class ServerConfig:
     enable_monitoring: bool = True
     monitoring_window: int = 1000
 
+
+    
 # ================== FEATURE DEFINITIONS ==================
 class WiFiFeatures:
-    """WiFi feature definitions and validation - 9 SAFE FEATURES ONLY."""
+    """WiFi feature definitions and validation - 14 SAFE FEATURES (PHASE 1B)."""
     
-    # FIXED: 9 safe features matching File 4 training pipeline
+    # 🚀 PHASE 1B: 14 safe features matching File 4 training pipeline
     FEATURE_NAMES = [
         # SNR features (7)
         "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
         "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
         
-        # Network configuration features (2)
-        "channelWidth", "mobilityMetric"
-    ]
+        # Network state (1 - removed channelWidth)
+        "mobilityMetric",
+        
+        # Phase 1A features (2 - removed channelBusyRatio)
+        "retryRate",          # Retry rate (past performance)
+        "frameErrorRate",     # Error rate (PHY feedback)
+        
+        # 🚀 PHASE 1B: NEW FEATURES (4)
+        "rssiVariance",       # RSSI variance (signal stability)
+        "interferenceLevel",  # Interference level (collision tracking)
+        "distanceMetric",     # Distance metric (from scenario)
+        "avgPacketSize"       # Average packet size (traffic characteristic)
+    ]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
     
-    # FIXED: Ranges for 9 safe features (indices 0-8)
+    # 🚀 PHASE 1B: Ranges for 14 safe features
     FEATURE_RANGES = {
         # SNR features (7)
         0: (-5.0, 40.0, "lastSnr (dB)"),
@@ -76,9 +95,18 @@ class WiFiFeatures:
         5: (0.0, 1.0, "snrPredictionConfidence"),
         6: (0.0, 100.0, "snrVariance"),
         
-        # Network configuration features (2)
-        7: (5.0, 160.0, "channelWidth (MHz)"),
-        8: (0.0, 50.0, "mobilityMetric")
+        # Network state (1 - removed channelWidth)
+        7: (0.0, 50.0, "mobilityMetric"),
+        
+        # Phase 1A features (2 - removed channelBusyRatio)
+        8: (0.0, 1.0, "retryRate"),
+        9: (0.0, 1.0, "frameErrorRate"),
+        
+        # 🚀 PHASE 1B: NEW FEATURES (4)
+        10: (0.0, 100.0, "rssiVariance (dB²)"),
+        11: (0.0, 1.0, "interferenceLevel"),
+        12: (0.0, 200.0, "distanceMetric (m)"),
+        13: (64.0, 1500.0, "avgPacketSize (bytes)")
     }
 
     @classmethod
@@ -224,10 +252,14 @@ class EnhancedMLInferenceServer:
         )
         
         self.logger = logging.getLogger('MLInferenceServer')
-        self.logger.info(f"🚀 Enhanced ML Inference Server v3.0 (NEW PIPELINE) initializing...")
+        self.logger.info("="*80)
+        self.logger.info("🚀 Enhanced ML Inference Server v4.0 (PHASE 1A - 15 FEATURES)")
+        self.logger.info("="*80)
         self.logger.info(f"👤 Author: ahmedjk34 (https://github.com/ahmedjk34)")
-        self.logger.info(f"📅 Pipeline Date: 2025-10-02 (Probabilistic Oracle)")
-        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (SAFE FEATURES ONLY)")
+        self.logger.info(f"📅 Pipeline Date: 2025-10-02 20:18:13 UTC")
+        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (PHASE 1B)")
+        self.logger.info(f"✅ PHASE 1B: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)")
+        self.logger.info("="*80)
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully."""
@@ -257,6 +289,7 @@ class EnhancedMLInferenceServer:
             load_time = (time.time() - start_time) * 1000
             self.logger.info(f"✅ Model '{model_config.name}' loaded in {load_time:.1f} ms")
             self.logger.info(f"📝 Description: {model_config.description}")
+            self.logger.info(f"🔢 Features: {model_config.features_count}")
             
         except Exception as e:
             self.logger.error(f"❌ Failed to load model '{model_config.name}': {str(e)}")
@@ -327,7 +360,8 @@ class EnhancedMLInferenceServer:
                 "confidence": confidence,
                 "model": model_name,
                 "clampWarnings": clamp_warnings,
-                "classProbabilities": class_probabilities
+                "classProbabilities": class_probabilities,
+                "featuresCount": len(features)
             }
             
             self.logger.info(f"[{model_name}] 🎯 rateIdx={rate_idx} latency={latency_ms:.2f}ms conf={confidence:.3f}")
@@ -372,10 +406,11 @@ class EnhancedMLInferenceServer:
         
         info = {
             "server": {
-                "version": "3.0.0",
+                "version": "4.0.0",
                 "author": "ahmedjk34",
                 "github": "https://github.com/ahmedjk34",
-                "pipeline_date": "2025-10-02",
+                "pipeline_date": "2025-10-02 20:18:13 UTC",
+                "phase": "PHASE 1A (15 features)",
                 "uptime": time.time() - self.monitor.start_time,
                 "config": asdict(self.config)
             },
@@ -385,7 +420,8 @@ class EnhancedMLInferenceServer:
                 "count": len(WiFiFeatures.FEATURE_NAMES),
                 "names": WiFiFeatures.FEATURE_NAMES,
                 "safe_features_only": True,
-                "no_outcome_features": True
+                "no_outcome_features": True,
+                "phase_1a": "9 original + 6 enhanced"
             }
         }
         
@@ -466,9 +502,9 @@ class EnhancedMLInferenceServer:
                 # Parse features and optional model name
                 parts = data.strip().split()
                 
-                # Check if last part is a model name
+                # 🚀 PHASE 1B: Check if last part is a model name (14 features expected)
                 model_name = None
-                if len(parts) > 9 and parts[-1] in self.models:  # FIXED: 9 features
+                if len(parts) > 14 and parts[-1] in self.models:
                     model_name = parts[-1]
                     features = [float(x) for x in parts[:-1]]
                 else:
@@ -527,7 +563,7 @@ class EnhancedMLInferenceServer:
             self.logger.info(f"✨ Default model: {self.default_model}")
             self.logger.info(f"📈 Monitoring enabled: {self.config.enable_monitoring}")
             self.logger.info(f"🔧 Max connections: {self.config.max_connections}")
-            self.logger.info(f"🔢 Features expected: {len(WiFiFeatures.FEATURE_NAMES)} (SAFE FEATURES ONLY)")
+            self.logger.info(f"🔢 Features expected: {len(WiFiFeatures.FEATURE_NAMES)} (PHASE 1A)")
             self.logger.info("📋 Available commands: INFO, STATS, MODELS, SHUTDOWN")
             
             while not self._stop_event.is_set():
@@ -568,10 +604,10 @@ def auto_discover_models(base_path: Path) -> List[ModelConfig]:
     
     # Model priority order (oracle_aggressive first)
     model_patterns = [
-        ("oracle_aggressive", "Aggressive oracle - prefers higher rates (62.8% test accuracy)"),
-        ("oracle_balanced", "Balanced oracle - symmetric exploration (45.3% test accuracy)"),
-        ("oracle_conservative", "Conservative oracle - prefers lower rates (47.5% test accuracy)"),
-        ("rateIdx", "Minstrel-HT behavior - mimics ns-3 implementation (46.1% test accuracy)")
+        ("oracle_aggressive", "Aggressive oracle - prefers higher rates (75-80% test accuracy expected)"),
+        ("oracle_balanced", "Balanced oracle - symmetric exploration (68-72% test accuracy expected)"),
+        ("oracle_conservative", "Conservative oracle - prefers lower rates (60-65% test accuracy expected)"),
+        ("rateIdx", "Minstrel-HT behavior - mimics ns-3 implementation")
     ]
     
     for model_name, description in model_patterns:
@@ -584,7 +620,7 @@ def auto_discover_models(base_path: Path) -> List[ModelConfig]:
                 model_path=str(model_file),
                 scaler_path=str(scaler_file),
                 description=description,
-                features_count=9,
+                features_count=14,  # 🚀 PHASE 1B: 14 features
                 rate_classes=8
             ))
     
@@ -592,7 +628,7 @@ def auto_discover_models(base_path: Path) -> List[ModelConfig]:
 
 # ================== MAIN EXECUTION ==================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Enhanced ML Inference Server v3.0 (New Pipeline)")
+    parser = argparse.ArgumentParser(description="Enhanced ML Inference Server v4.0 (Phase 1A - 15 Features)")
     parser.add_argument("--port", type=int, default=8765, help="Server port")
     parser.add_argument("--host", default="localhost", help="Server host")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Log level")
@@ -606,7 +642,7 @@ if __name__ == "__main__":
         
         if not base_path.exists():
             print(f"❌ Models directory not found: {base_path}")
-            print(f"💡 Please run training first (File 4)")
+            print(f"💡 Please run training first (File 4 with 15 features)")
             sys.exit(1)
         
         # Auto-discover models
@@ -616,9 +652,11 @@ if __name__ == "__main__":
         if not model_configs:
             print(f"❌ No trained models found in {base_path}")
             print(f"💡 Expected files: step4_rf_*_FIXED.joblib, step4_scaler_*_FIXED.joblib")
+            print(f"⚠️ Models must be trained with 14 features (Phase 1B)!")
             sys.exit(1)
         
         print(f"✅ Found {len(model_configs)} models: {[m.name for m in model_configs]}")
+        print(f"🔢 Expecting 15 features (Phase 1A)")
         
         # Create server config
         server_config = ServerConfig(
