@@ -101,7 +101,7 @@ np.random.seed(RANDOM_SEED)
 USE_MINMAX_SCALER = True  # Set to False to use StandardScaler (old behavior)
 
 # 🚀 PHASE 5C: Model selection
-USE_XGBOOST = False  # Set to True to use XGBoost instead of RandomForest
+USE_XGBOOST = True  # Set to True to use XGBoost instead of RandomForest
 
 # Target labels to train
 TARGET_LABELS = [
@@ -111,21 +111,30 @@ TARGET_LABELS = [
     "oracle_aggressive"           # Aggressive oracle strategy
 ]
 
-# 🚀 PHASE 1A + 5: Enhanced features (15 features, no outcome leakage)
+# 🔧 FIXED: Safe features (12 features after removing rate-dependent)
+# 🚀 PHASE 1A: 12 features (not 15 - removed 3 leaky ones)
+# 🚀 PHASE 1A + FIXED: Safe features (12 features, RATE-DEPENDENT REMOVED!)
 SAFE_FEATURES = [
     # Original 9 features (indices 0-8)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     "channelWidth", "mobilityMetric",
     
-    # 🚀 PHASE 1A: NEW FEATURES (indices 9-14)
-    "retryRate",          # Retry rate (past performance)
-    "frameErrorRate",     # Error rate (PHY feedback)
-    "channelBusyRatio",   # Channel occupancy (interference)
-    "recentRateAvg",      # Recent rate average (temporal context)
-    "rateStability",      # Rate stability (change frequency)
-    "sinceLastChange"     # Time since last rate change (stability)
-]
+    # 🚀 PHASE 1A: SAFE FEATURES ONLY (indices 9-11) - 3 features, not 6!
+    "retryRate",          # ✅ Retry rate (past performance, not current)
+    "frameErrorRate",     # ✅ Error rate (PHY feedback, not current)
+    "channelBusyRatio",   # ✅ Channel occupancy (interference, independent of rate)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE! - includes current rate in calculation)
+    # ❌ REMOVED: rateStability (LEAKAGE! - includes current rate in calculation)
+    # ❌ REMOVED: sinceLastChange (LEAKAGE! - tells model if rate just changed)
+]  # TOTAL: 12 features (7 SNR + 2 network + 3 Phase 1A SAFE)
+
+# 🚨 CRITICAL: These 3 features exist in CSV but are EXCLUDED from training:
+# - recentRateAvg (columns 16 in CSV) → NOT in SAFE_FEATURES
+# - rateStability (column 17 in CSV) → NOT in SAFE_FEATURES
+# - sinceLastChange (column 18 in CSV) → NOT in SAFE_FEATURES
+# File 4 will extract ONLY the 12 SAFE_FEATURES for training
 
 # Train/Val/Test split ratios
 TEST_SIZE = 0.2      # 20% for final test
@@ -133,11 +142,12 @@ VAL_SIZE = 0.2       # 20% of remaining (16% of total)
 # Final: 64% train, 16% val, 20% test
 
 # 🚀 PHASE 5: Updated performance thresholds for 15 features
+# 🚀 PHASE 1A + FIXED: Updated performance thresholds (12 features, not 15)
 PERFORMANCE_THRESHOLDS = {
-    'excellent': 0.78,   # >78% is excellent for 15 features
-    'good': 0.70,        # 70-78% is good
-    'acceptable': 0.62,  # 62-70% is acceptable (9-feature baseline)
-    # <62% needs investigation (worse than 9-feature model!)
+    'excellent': 0.75,   # >75% is excellent for 12 safe features (was 78% for 15)
+    'good': 0.68,        # 68-75% is good (down from 70%)
+    'acceptable': 0.62,  # 62-68% is acceptable (9-feature baseline)
+    'needs_improvement': 0.62  # <62% needs work (worse than baseline!)
 }
 
 USER = "ahmedjk34"
@@ -168,7 +178,7 @@ def setup_logging(target_label: str):
     logger.info(f"👤 Author: {USER}")
     logger.info(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"🔧 Random Seed: {RANDOM_SEED}")
-    logger.info(f"🛡️ Safe Features: {len(SAFE_FEATURES)} (no outcome features)")
+    logger.info(f"🛡️ Safe Features: {len(SAFE_FEATURES)} (no outcome/rate-dependent features)")    
     logger.info(f"🚀 Phase 1A: ENHANCED from 9 to 15 features (+67% information!)")
     logger.info(f"🚀 Phase 5A: MinMaxScaler = {USE_MINMAX_SCALER} (preserves SNR ranges)")
     logger.info(f"🚀 Phase 5C: XGBoost = {USE_XGBOOST and XGBOOST_AVAILABLE}")
@@ -185,11 +195,14 @@ def setup_logging(target_label: str):
     logger.info("  ✅ Issue M2: Feature scaling documented")
     logger.info("  ✅ Issue M3: Class weight limitation documented")
     logger.info("="*80)
+    logger.info("="*80)
     logger.info("EXPECTED CHANGES:")
-    logger.info("  - Model accuracy: 62.8% → 75-80% (Phase 1A + 5)")
-    logger.info("  - Rare classes (0-3): Better recall (7-34% → 40-60%)")
+    logger.info("  - Model accuracy: 62.8% → 70-75% (Phase 1A + Fixed)")  # Down from 75-80%
+    logger.info("  - Rare classes (0-3): Better recall (7-34% → 40-55%)")  # Down from 40-60%
+    logger.info("  - Features: 12 (not 15 - removed 3 rate-dependent)")   # NEW LINE
     logger.info("  - MinMaxScaler: SNR 5-30 dB → 0.0-1.0 (preserves ordering)")
     logger.info("  - XGBoost (if enabled): +5-8% accuracy over RF")
+    logger.info("  - Top feature: lastSnr (not recentRateAvg!)")           # NEW LINE
     logger.info("="*80)
     
     return logger
@@ -1102,11 +1115,12 @@ def main():
     print(f"\n📁 Models saved to: {OUTPUT_DIR}")
     print(f"✅ Training pipeline completed successfully!")
     print(f"\n📊 PHASE 1-5 IMPACT:")
-    print(f"  ✅ Accuracy: Expected 75-80% (up from 62.8%)")
-    print(f"  ✅ Features: 15 (up from 9, +67% information)")
+    print(f"  ✅ Accuracy: Expected 70-75% (up from 62.8%)")  # Down from 75-80%
+    print(f"  ✅ Features: 12 (removed 3 rate-dependent from 15)")  # NEW LINE
+    print(f"  ✅ Top feature: lastSnr (not recentRateAvg)")  # NEW LINE
     print(f"  ✅ Scaler: MinMaxScaler preserves SNR meaning")
     print(f"  ✅ XGBoost: {'+5-8% bonus if enabled' if XGBOOST_AVAILABLE else 'Not installed'}")
-    
+        
     return True
 
 if __name__ == "__main__":
