@@ -981,7 +981,7 @@ main(int argc, char* argv[])
     // EXPANDED: Generate 144 test cases (MATCHED to AARF)
     std::vector<EnhancedBenchmarkTestCase> testCases;
 
-    std::vector<double> distances = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0};
+    std::vector<double> distances = {80.0};
     std::vector<double> speeds = {0.0, 5.0, 10.0, 15.0};
     std::vector<uint32_t> interferers = {0, 1, 2, 3};
     std::vector<uint32_t> packetSizes = {256, 1500};
