@@ -45,7 +45,6 @@ BASE_DIR = Path(__file__).parent
 PARENT_DIR = BASE_DIR.parent
 CSV_FILE = PARENT_DIR / "smart-v3-ml-enriched.csv"
 MODELS_DIR = BASE_DIR / "trained_models"
-HYPERPARAMS_FILE = BASE_DIR / "hyperparameter_results" / "hyperparameter_tuning_results.json"
 OUTPUT_DIR = BASE_DIR / "evaluation_results"
 
 # Target labels to evaluate
@@ -60,14 +59,31 @@ CORRELATION_THRESHOLD_MODERATE = 0.4
 CORRELATION_THRESHOLD_HIGH = 0.7
 
 # Safe features (no temporal leakage)
+# 🚀 PHASE 1A + 5: Safe features (15 features, no outcome leakage)
 SAFE_FEATURES = [
+    # SNR features (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    "shortSuccRatio", "medSuccRatio",
-    "packetLossRate",
+    
+    # Network state (2)
     "channelWidth", "mobilityMetric",
-    "severity", "confidence"
-]
+    
+    # 🚀 PHASE 1A: NEW FEATURES (6)
+    "retryRate",          # Retry rate (past performance)
+    "frameErrorRate",     # Error rate (PHY feedback)
+    "channelBusyRatio",   # Channel occupancy (interference)
+    "recentRateAvg",      # Recent rate average (temporal context)
+    "rateStability",      # Rate stability (change frequency)
+    "sinceLastChange"     # Time since last rate change (stability)
+]  # TOTAL: 15 features
+
+# ❌ REMOVED (Issue C3): Outcome features
+# These were removed by File 2 and NOT used by File 4:
+# - shortSuccRatio (outcome of CURRENT rate)
+# - medSuccRatio (outcome of CURRENT rate)
+# - packetLossRate (outcome of CURRENT rate)
+# - severity (derived from packetLossRate)
+# - confidence (derived from shortSuccRatio)
 
 # Temporal leakage features (should be ABSENT)
 TEMPORAL_LEAKAGE_FEATURES = [
@@ -76,12 +92,12 @@ TEMPORAL_LEAKAGE_FEATURES = [
     "packetSuccess"
 ]
 
-# FIXED: Issue #17 - Realistic performance expectations
+# 🚀 PHASE 1A + 5: Updated performance expectations (15 features)
 PERFORMANCE_EXPECTATIONS = {
-    'excellent': 0.75,      # >75% is excellent (no leakage)
-    'good': 0.65,           # 65-75% is good
-    'acceptable': 0.55,     # 55-65% is acceptable
-    'needs_improvement': 0.55  # <55% needs work
+    'excellent': 0.78,      # >78% is excellent for 15 features (Phase 1A + 5)
+    'good': 0.70,           # 70-78% is good (Phase 1A)
+    'acceptable': 0.62,     # 62-70% is acceptable (9-feature baseline)
+    'needs_improvement': 0.62  # <62% needs work (worse than 9-feature baseline!)
 }
 
 CONTEXT_LABEL = "network_context"
@@ -115,6 +131,58 @@ def setup_logging_and_output():
     logger.info("="*80)
     
     return logger
+
+# Auto-detect hyperparameter file
+def find_hyperparameter_file() -> Path:
+    """Find the most recent hyperparameter tuning file (auto-detect mode)"""
+    hyperparams_dir = BASE_DIR / "hyperparameter_results"
+    
+    if not hyperparams_dir.exists():
+        return None
+    
+    # Find all JSON files with FIXED suffix (prioritize fixed versions)
+    json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*_FIXED.json"))
+    
+    if len(json_files) == 0:
+        # Try without FIXED suffix
+        json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*.json"))
+    
+    if len(json_files) == 0:
+        return None
+    
+    # If multiple files, use most recent
+    if len(json_files) > 1:
+        json_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        return json_files[0]
+    
+    return json_files[0]
+
+HYPERPARAMS_FILE = find_hyperparameter_file()
+
+
+# ✅Check for both RF and XGBoost models
+def find_model_files(target_label: str, models_dir: Path):
+    """Find model and scaler files (RF or XGBoost)"""
+    # Check XGBoost first (higher priority)
+    xgb_model = models_dir / f"step4_xgb_{target_label}_FIXED.joblib"
+    if xgb_model.exists():
+        model_file = xgb_model
+        model_type = "XGBoost"
+    else:
+        # Check RandomForest
+        rf_model = models_dir / f"step4_rf_{target_label}_FIXED.joblib"
+        if rf_model.exists():
+            model_file = rf_model
+            model_type = "RandomForest"
+        else:
+            return None, None, None
+    
+    scaler_file = models_dir / f"step4_scaler_{target_label}_FIXED.joblib"
+    results_file = models_dir / f"step4_results_{target_label}.json"
+    
+    return model_file, scaler_file, model_type
+
+
 
 class EvaluationProgress:
     """Track evaluation progress and issues"""
@@ -287,8 +355,7 @@ def evaluate_model_performance(target_label: str, df: pd.DataFrame, logger, prog
     progress.start_stage(f"Model Performance Evaluation - {target_label}")
     
     # Load model and scaler
-    model_file = MODELS_DIR / f"step4_rf_{target_label}_FIXED.joblib"
-    scaler_file = MODELS_DIR / f"step4_scaler_{target_label}_FIXED.joblib"
+    model_file, scaler_file, model_type = find_model_files(target_label, MODELS_DIR)
     results_file = MODELS_DIR / f"step4_results_{target_label}.json"
     
     if not model_file.exists() or not scaler_file.exists():
