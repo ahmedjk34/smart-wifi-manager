@@ -16,16 +16,15 @@
  *
  * Authors: Duy Nguyen <duy@soe.ucsc.edu>
  *          Matías Richart <mrichart@fing.edu.uy>
- *          ahmedjk34 <https://github.com/ahmedjk34> (2025-10-01 Fixed)
+ *          ahmedjk34 <https://github.com/ahmedjk34> (2025-10-03 PHASE 1A)
  *
- * MinstrelWifiManagerLogged - FIXED VERSION (2025-10-01 15:13:30 UTC)
+ * MinstrelWifiManagerLogged - PHASE 1A VERSION (20 FEATURES)
  *
  * CRITICAL FIXES APPLIED:
  * - Issue #1: Removed ALL 7 temporal leakage features
  * - Issue #33: Success ratios from PREVIOUS window (not current packet)
  * - Issue #4: Added scenario_file for proper train/test splitting
- * - 14 safe features: pre-decision state only, no outcome-based features
- * - Realistic accuracy: 65-75% (not 95%+ fake accuracy)
+ * - PHASE 1A: Added 6 new features (14 → 20 total)
  *
  * REMOVED FEATURES (Temporal Leakage - Issue #1):
  * ❌ consecSuccess      (outcome of CURRENT rate choice)
@@ -36,13 +35,15 @@
  * ❌ recentRateChanges  (rate adaptation history)
  * ❌ packetSuccess      (literal packet outcome)
  *
- * KEPT FEATURES (Safe - Pre-Decision State) - 14 Total:
+ * KEPT FEATURES (Safe - Pre-Decision State) - 20 Total:
  * ✓ SNR features (7): lastSnr, snrFast, snrSlow, snrTrendShort,
  *                     snrStabilityIndex, snrPredictionConfidence, snrVariance
  * ✓ Success ratios (2): shortSuccRatio, medSuccRatio (from PREVIOUS window)
  * ✓ Loss rate (1): packetLossRate (from PREVIOUS window)
  * ✓ Network state (2): channelWidth, mobilityMetric
  * ✓ Assessment (2): severity, confidence (from previous window)
+ * ✓ PHASE 1A (6): retryRate, frameErrorRate, channelBusyRatio,
+ *                 recentRateAvg, rateStability, sinceLastChange
  */
 
 #ifndef MINSTREL_WIFI_MANAGER_LOGGED_H
@@ -92,11 +93,12 @@ typedef std::vector<RateInfoLogged> MinstrelRateLogged;
 typedef std::vector<std::vector<uint8_t>> SampleRateLogged;
 
 /**
- * \brief Per-remote-station state for Minstrel with SAFE feature tracking
+ * \brief Per-remote-station state for Minstrel with SAFE feature tracking (PHASE 1A)
  *
- * FIXED (2025-10-01): Only safe, pre-decision features tracked
+ * FIXED (2025-10-03 PHASE 1A): 20 safe, pre-decision features tracked
  * - Issue #1: No temporal leakage features
  * - Issue #33: Success from PREVIOUS window
+ * - PHASE 1A: 6 new ns-3 telemetry features
  */
 struct MinstrelWifiRemoteStationLogged : public WifiRemoteStation
 {
@@ -125,17 +127,16 @@ struct MinstrelWifiRemoteStationLogged : public WifiRemoteStation
     Ptr<Node> m_node;
 
     // ========================================================================
-    // FIXED: SAFE FEATURES ONLY (14 features, zero temporal leakage)
+    // FIXED: SAFE FEATURES ONLY (20 features, zero temporal leakage)
     // ========================================================================
 
     // SNR features (7 features - SAFE: measured before decision)
     double m_lastSnr;                ///< Last measured SNR (dB) [-30 to +45]
     double m_fastEwmaSnr;            ///< Fast EWMA SNR (alpha=0.30)
     double m_slowEwmaSnr;            ///< Slow EWMA SNR (alpha=0.05)
-    std::deque<double> m_snrHistory; ///< Rolling SNR history (max 20 samples)
+    std::deque<double> m_snrHistory; ///< Rolling SNR history (max 200 samples)
 
     // FIXED: Issue #33 - PREVIOUS window tracking (SAFE)
-    // These represent COMPLETED transmission windows, not current packet outcomes
     std::deque<bool> m_previousShortWindow; ///< Previous short window (10 packets)
     std::deque<bool> m_previousMedWindow;   ///< Previous medium window (25 packets)
     uint32_t m_previousWindowSuccess;       ///< Success count from previous window
@@ -146,6 +147,15 @@ struct MinstrelWifiRemoteStationLogged : public WifiRemoteStation
     std::deque<bool> m_currentShortWindow; ///< Current window (becomes previous)
     std::deque<bool> m_currentMedWindow;   ///< Current window (becomes previous)
     uint32_t m_currentWindowPackets;       ///< Packet count in current window
+
+    // PHASE 1A: ns-3 telemetry for 6 new features
+    uint32_t m_framesRetried;          ///< Frames retried in current window
+    uint32_t m_framesSent;             ///< Total frames sent in current window
+    uint32_t m_framesFailed;           ///< Frames that failed in current window
+    double m_channelBusyTime;          ///< Accumulated channel busy time (seconds)
+    double m_observationTime;          ///< Total observation time (seconds)
+    std::deque<uint8_t> m_rateHistory; ///< Last 10 rate decisions (for rateStability)
+    uint32_t m_packetsSinceRateChange; ///< Packets since last rate change
 
     // Station ID for logging
     uint32_t m_stationId; ///< Unique station identifier
@@ -175,8 +185,14 @@ struct MinstrelWifiRemoteStationLogged : public WifiRemoteStation
           m_slowEwmaSnr(0.0),
           m_previousWindowSuccess(0),
           m_previousWindowTotal(0),
-          m_previousWindowLosses(0),
           m_currentWindowPackets(0),
+          m_previousWindowLosses(0),
+          m_framesRetried(0),
+          m_framesSent(0),
+          m_framesFailed(0),
+          m_channelBusyTime(0.0),
+          m_observationTime(0.1),
+          m_packetsSinceRateChange(0),
           m_stationId(0)
     {
     }
@@ -185,24 +201,22 @@ struct MinstrelWifiRemoteStationLogged : public WifiRemoteStation
 };
 
 /**
- * \brief Minstrel Rate Control Algorithm with SAFE Feature Logging
+ * \brief Minstrel Rate Control Algorithm with SAFE Feature Logging (PHASE 1A)
  * \ingroup wifi
  *
- * FIXED VERSION (2025-10-01 15:13:30 UTC):
- * - 14 safe features (zero temporal leakage)
+ * PHASE 1A VERSION (2025-10-03 08:35:45 UTC):
+ * - 20 safe features (14 original + 6 new, zero temporal leakage)
  * - Success ratios from PREVIOUS window (Issue #33)
  * - Scenario file for train/test splitting (Issue #4)
  * - Realistic accuracy expectations: 65-75%
  *
- * The core Minstrel algorithm is UNCHANGED. This version only logs
- * SAFE features that are known BEFORE the rate decision.
- *
- * CSV Output Format (14 features + metadata):
+ * CSV Output Format (20 features + metadata):
  * time,stationId,rateIdx,phyRate,
  * lastSnr,snrFast,snrSlow,snrTrendShort,snrStabilityIndex,snrPredictionConfidence,snrVariance,
  * shortSuccRatio,medSuccRatio,packetLossRate,
  * channelWidth,mobilityMetric,
  * severity,confidence,
+ * retryRate,frameErrorRate,channelBusyRatio,recentRateAvg,rateStability,sinceLastChange,
  * scenario_file
  */
 class MinstrelWifiManagerLogged : public WifiRemoteStationManager
@@ -284,7 +298,7 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     void PrintTable(MinstrelWifiRemoteStationLogged* station);
 
     // ========================================================================
-    // FIXED: Safe feature calculation methods (Issue #1, #33)
+    // FIXED: Safe feature calculation methods (Issue #1, #33, PHASE 1A)
     // ========================================================================
 
     /**
@@ -337,12 +351,6 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     double CalculateMobilityMetric(MinstrelWifiRemoteStationLogged* st) const;
 
     /**
-     * Get SNR tier for rate mapping
-     * SAFE: Uses current SNR measurement
-     */
-    uint8_t TierFromSnr(double snr) const;
-
-    /**
      * Stratified logging probability (for balanced dataset)
      */
     double GetStratifiedLogProbability(uint8_t rate, double snr, bool success) const;
@@ -353,7 +361,7 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     double GetRandomValue();
 
     /**
-     * FIXED: Safe logging function - logs only 14 pre-decision features
+     * PHASE 1A: Safe logging function - logs 20 pre-decision features
      * Called AFTER packet transmission to update windows, but logs
      * features that were available BEFORE the decision was made
      *
@@ -362,11 +370,6 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
      * \param success whether packet succeeded (for window tracking only)
      */
     void LogSafeFeatures(MinstrelWifiRemoteStationLogged* st, uint8_t currentRateIdx, bool success);
-
-    /**
-     * Write CSV header with 14 safe features + metadata
-     */
-    void WriteLogHeader();
 
     // Core Minstrel parameters
     typedef std::map<WifiMode, Time> TxTime;
