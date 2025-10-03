@@ -29,6 +29,12 @@ Expected Impact:
 - Test accuracy will MATCH CV (±3%) instead of dropping
 - Model will generalize to new scenarios
 
+CRITICAL UPDATES (2025-10-03 08:52:44 UTC):  ← Update date
+- 🚀 PHASE 1A: 15 safe features (6 new features added)  ← Add this line
+- 🚀 PHASE 5A: MinMaxScaler option (preserves physical meaning of SNR)
+- 🚀 PHASE 5B: Enhanced grid for 15 features (can go deeper without overfitting)
+- 🚀 PHASE 5C: Optional XGBoost support (if RF accuracy plateaus)
+
 Author: ahmedjk34
 Date: 2025-10-02 20:26:30 UTC (PHASE 5 ENHANCED)
 Pipeline Stage: Step 3c - Hyperparameter Optimization (PHASE 5)
@@ -128,7 +134,6 @@ FULL_GRID = {
     'class_weight': ['balanced']
 }
 # This creates 4×4×4×4×3 = 768 combinations (~8-12 hours with 5-fold CV)
-# This creates 2×3×3×3×2 = 108 combinations (~3 hours with 5-fold CV)
 
 # ⚡ CHANGE THIS TO SWITCH MODES
 USE_MODE = 'ultra_fast'  # Options: 'quick', 'ultra_fast', 'full'
