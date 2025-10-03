@@ -36,7 +36,7 @@ OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALL.csv")
 RANDOM_SEED = 42
 
 
-# FIXED: Phase 1A - 25 columns (4 metadata + 20 features + 1 scenario)
+# PHASE 1B UPDATE (2025-10-03): Now 29 columns (was 25)
 EXPECTED_COLUMNS = [
     # Metadata (4)
     'time', 'stationId', 'rateIdx', 'phyRate',
@@ -61,10 +61,12 @@ EXPECTED_COLUMNS = [
     'retryRate', 'frameErrorRate', 'channelBusyRatio',
     'recentRateAvg', 'rateStability', 'sinceLastChange',
     
+    # PHASE 1B: NEW FEATURES (4)
+    'rssiVariance', 'interferenceLevel', 'distanceMetric', 'avgPacketSize',
+    
     # Scenario identifier (1)
     'scenario_file'
-]  # TOTAL: 25 columns
-
+]  # TOTAL: 29 columns (4 metadata + 24 features + 1 scenario)
 def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
     """
     Validate CSV has exactly 19 columns, fix if needed
@@ -77,8 +79,8 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
             header_cols = header_line.split(',')
         
         # Check column count
-        if len(header_cols) != 25:
-            print(f"  ⚠️ {os.path.basename(filepath)}: {len(header_cols)} columns (expected 25) - FIXING...")
+        if len(header_cols) != 29:
+            print(f"  ⚠️ {os.path.basename(filepath)}: {len(header_cols)} columns (expected 29) - FIXING...")
             
             # Read all lines
             with open(filepath, 'r') as f:
@@ -95,10 +97,10 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
                 
                 parts = line.strip().split(',')
                 
-            if len(parts) < 25:
-                parts += [''] * (25 - len(parts))
-            elif len(parts) > 25:
-                parts = parts[:24] + [parts[-1]]  # Keep scenario_file as last column
+            if len(parts) < 29:
+                parts += [''] * (29 - len(parts))
+            elif len(parts) > 29:
+                parts = parts[:28] + [parts[-1]]  # Keep scenario_file as last column
 
                             
                 fixed_lines.append(','.join(parts) + '\n')
@@ -171,11 +173,12 @@ def clean_dataframe(df: pd.DataFrame, fname: str) -> pd.DataFrame:
         'snrStabilityIndex', 'snrPredictionConfidence', 'snrVariance',
         'shortSuccRatio', 'medSuccRatio', 'packetLossRate',
         'channelWidth', 'mobilityMetric', 'severity', 'confidence',
-        # PHASE 1A features (6 new)
+        # PHASE 1A features (6)
         'retryRate', 'frameErrorRate', 'channelBusyRatio',
-        'recentRateAvg', 'rateStability', 'sinceLastChange'
+        'recentRateAvg', 'rateStability', 'sinceLastChange',
+        # PHASE 1B features (4)  ← ADD THIS
+        'rssiVariance', 'interferenceLevel', 'distanceMetric', 'avgPacketSize'
     ]
-
         
     for col in numeric_cols:
         if col in df.columns:
