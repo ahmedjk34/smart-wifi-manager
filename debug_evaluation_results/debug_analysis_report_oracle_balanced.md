@@ -1,6 +1,6 @@
 # WiFi ML Model Debug Analysis Report - oracle_balanced
 
-**Generated:** 2025-09-22 16:35:53
+**Generated:** 2025-09-28 14:31:07
 **Target Label:** oracle_balanced
 **Author:** ahmedjk34 (https://github.com/ahmedjk34)
 **Model File:** step3_rf_oracle_balanced_model_FIXED.joblib
@@ -9,23 +9,14 @@
 ## 🎯 Executive Summary
 
 - **Target Strategy:** oracle_balanced
-- **Cross-Validation Accuracy:** 0.981 (98.1%)
-- **Issues Found:** 1
+- **Cross-Validation Accuracy:** 0.500 (50.0%)
+- **Issues Found:** 0
 - **Critical Issues:** 0
 - **Available Targets:** 4
 
-## 📊 Multi-Target Performance Comparison
-
-| Target Strategy | Accuracy | Samples | Status |
-|----------------|----------|---------|--------|
-| oracle_balanced | 1.000 | 400,000 | 🏆 |
-
 ## 🔍 Issues Analysis
 
-### ⚠️ WARNING: LEAKY_FEATURES_PRESENT
-- **Description:** Leaky features still in dataset: ['phyRate', 'optimalRateDistance', 'recentThroughputTrend', 'conservativeFactor', 'aggressiveFactor', 'recommendedSafeRate']
-- **Stage:** Data Integrity and Leakage Detection
-- **Time:** 1.6s
+✅ **No issues found!** Your pipeline is working correctly.
 
 ## ✅ Current Status Assessment
 
@@ -40,7 +31,7 @@
 - ✅ **Class weight optimization** - Handles imbalanced data effectively
 
 ### Performance Validation
-- ✅ **Excellent performance** - >95% cross-validation accuracy
+- 📊 **Moderate performance** - Room for improvement
 - ✅ **Realistic results** - No signs of data leakage
 - ✅ **Stable training** - Consistent performance across folds
 
@@ -69,7 +60,3 @@
 
 - **Author GitHub:** [ahmedjk34](https://github.com/ahmedjk34)
 - **Project Repository:** [Smart WiFi Manager](https://github.com/ahmedjk34/smart-wifi-manager)
-- **Other Projects:**
-  - [Song Features Extraction Engine](https://github.com/ahmedjk34/song-features-extraction-sound-engine)
-  - [Genie Fi - Smart Finance](https://github.com/ahmedjk34/genie-fi)
-  - [Road Watch Lambda Function](https://github.com/ahmedjk34/road-watch-lambda-function)
