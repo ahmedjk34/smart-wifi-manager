@@ -421,133 +421,87 @@ def classify_network_context(row) -> str:
 # ================== ORACLE LABEL CREATION (FULLY FIXED) ==================
 def create_snr_based_oracle_labels(row: pd.Series, context: str, current_rate: int) -> Dict[str, int]:
     """
-    🔧 FIXED: PROBABILISTIC APPROACH - Guaranteed variance, no rounding issues!
-    
-    Instead of continuous noise that gets rounded away by int(), we use
-    discrete probabilistic choices. This guarantees each SNR maps to
-    multiple possible labels.
-    
-    Conservative Strategy: Prefers lower rates (safer)
-      - 45% chance: stay at base rate
-      - 30% chance: drop by 1 rate
-      - 15% chance: drop by 2 rates
-      - 7% chance: drop by 3 rates
-      - 3% chance: increase by 1 rate (occasional optimism)
-    
-    Balanced Strategy: Symmetric around base rate
-      - 35% chance: stay at base rate
-      - 25% chance: drop by 1 rate
-      - 25% chance: increase by 1 rate
-      - 8% chance: drop by 2 rates
-      - 7% chance: increase by 2 rates
-    
-    Aggressive Strategy: Prefers higher rates (faster)
-      - 45% chance: stay at base rate
-      - 30% chance: increase by 1 rate
-      - 15% chance: increase by 2 rates
-      - 7% chance: increase by 3 rates
-      - 3% chance: drop by 1 rate (occasional caution)
-    
-    Expected variance per SNR: 3-5 unique labels (realistic WiFi noise!)
+    ✅ TUNED: Focused probabilistic oracle (2-3 labels per SNR, not 6)
     """
-    # Extract ONLY pre-decision features
+    # Extract features
     snr = safe_float(row.get('lastSnr', 20))
     snr_variance = safe_float(row.get('snrVariance', 0))
     mobility = safe_float(row.get('mobilityMetric', 0))
     
-    # Determine base rate from SNR using IEEE 802.11a thresholds
-    if snr < 8:
-        base = 0      # 6 Mbps (BPSK 1/2)
-    elif snr < 10:
-        base = 1      # 9 Mbps (BPSK 3/4)
-    elif snr < 13:
-        base = 2      # 12 Mbps (QPSK 1/2)
-    elif snr < 16:
-        base = 3      # 18 Mbps (QPSK 3/4)
-    elif snr < 19:
-        base = 4      # 24 Mbps (16-QAM 1/2)
-    elif snr < 22:
-        base = 5      # 36 Mbps (16-QAM 3/4)
-    elif snr < 25:
-        base = 6      # 48 Mbps (64-QAM 2/3)
-    else:
-        base = 7      # 54 Mbps (64-QAM 3/4)
+    # Map SNR to base rate
+    if snr < 8: base = 0
+    elif snr < 10: base = 1
+    elif snr < 13: base = 2
+    elif snr < 16: base = 3
+    elif snr < 19: base = 4
+    elif snr < 22: base = 5
+    elif snr < 25: base = 6
+    else: base = 7
     
-    # Apply penalties for instability and mobility
+    # Apply penalties
     penalty = 0
-    
     if snr_variance > CONTEXT_THRESHOLDS['variance_high']:
-        penalty += 1  # High variance → drop 1 rate
+        penalty += 1
     elif snr_variance > CONTEXT_THRESHOLDS['variance_moderate']:
-        penalty += 0.5  # Moderate variance → slight penalty
-    
+        penalty += 0.5
     if mobility > CONTEXT_THRESHOLDS['mobility_high']:
-        penalty += 1  # High mobility → drop 1 rate
+        penalty += 1
     elif mobility > CONTEXT_THRESHOLDS['mobility_moderate']:
-        penalty += 0.5  # Moderate mobility → slight penalty
-    
-    # Apply penalty
+        penalty += 0.5
     base = max(0, int(base - penalty))
     
-    # Context-based adjustments (fine-tuning)
+    # Context adjustments
     if context == 'emergency_recovery':
-        base = max(0, base - 1)  # Extra conservative in emergency
+        base = max(0, base - 1)
     elif context in ['poor_unstable', 'poor_stable']:
-        base = max(0, base - 1)  # Be conservative in poor conditions
+        base = max(0, base - 1)
     elif context in ['excellent_stable', 'excellent_unstable']:
-        base = min(7, base + 1)  # Can be slightly more aggressive in excellent conditions
+        base = min(7, base + 1)
     
-    # 🔧 PROBABILISTIC APPROACH - Guaranteed variance!
-   
-       # 🔧 PROBABILISTIC APPROACH - Guaranteed variance!
-    
-    # Conservative: Bias toward lower rates (UNCHANGED)
+    # ✅ TUNED: Conservative (60/30/8/2)
     rand_cons = np.random.rand()
-    if rand_cons < 0.45:
+    if rand_cons < 0.60:
         cons = base
-    elif rand_cons < 0.75:
-        cons = max(0, base - 1)
     elif rand_cons < 0.90:
+        cons = max(0, base - 1)
+    elif rand_cons < 0.98:
         cons = max(0, base - 2)
-    elif rand_cons < 0.97:
-        cons = max(0, base - 3)
     else:
-        cons = min(7, base + 1)  # Occasional optimism
+        cons = max(0, base - 3) if np.random.rand() < 0.5 else min(7, base + 1)
     
-    # Balanced: Symmetric around base (UNCHANGED)
+    # ✅ TUNED: Balanced (50/25/15/7/3)
     rand_bal = np.random.rand()
-    if rand_bal < 0.35:
+    if rand_bal < 0.50:
         bal = base
-    elif rand_bal < 0.60:
+    elif rand_bal < 0.75:
         bal = max(0, base - 1)
-    elif rand_bal < 0.85:
+    elif rand_bal < 0.90:
         bal = min(7, base + 1)
-    elif rand_bal < 0.93:
+    elif rand_bal < 0.97:
         bal = max(0, base - 2)
     else:
         bal = min(7, base + 2)
     
-    # 🚀 PHASE 1B: ENHANCED AGGRESSIVE ORACLE (MORE aggressive!)
-    # OLD: 45% stay, 30% +1, 15% +2, 7% +3, 3% -1
-    # NEW: 30% stay, 35% +1, 20% +2, 10% +3, 5% -1
-    # Effect: Pushes toward higher rates more often (better throughput on clean channels)
+    # ✅ TUNED: Aggressive (50/25/15/7/3)
     rand_agg = np.random.rand()
-    if rand_agg < 0.30:      # 30% stay at base (down from 45%)
+    if rand_agg < 0.50:
         agg = base
-    elif rand_agg < 0.65:    # 35% increase by 1 (up from 30%)
+    elif rand_agg < 0.75:
         agg = min(7, base + 1)
-    elif rand_agg < 0.85:    # 20% increase by 2 (up from 15%)
+    elif rand_agg < 0.90:
         agg = min(7, base + 2)
-    elif rand_agg < 0.95:    # 10% increase by 3 (up from 7%)
+    elif rand_agg < 0.97:
         agg = min(7, base + 3)
-    else:                    # 5% decrease by 1 (up from 3%)
-        agg = max(0, base - 1) # Occasional caution
-        
+    else:
+        agg = max(0, base - 1)
+    
     return {
         "oracle_conservative": cons,
         "oracle_balanced": bal,
         "oracle_aggressive": agg,
     }
+
+
 # ================== SYNTHETIC EDGE CASES (FIXED) ==================
 def generate_critical_edge_cases(target_samples: int = SYNTHETIC_EDGE_CASES) -> pd.DataFrame:
     """
