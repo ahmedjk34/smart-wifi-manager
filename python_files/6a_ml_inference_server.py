@@ -43,7 +43,7 @@ class ModelConfig:
     model_path: str
     scaler_path: str
     description: str = ""
-    features_count: int = 15  # 🚀 FIXED: 15 safe features (Phase 1A)
+    features_count: int = 14  # 🚀 FIXED: 14 safe features (Phase 1A)
     rate_classes: int = 8
 
 @dataclass
@@ -62,21 +62,30 @@ class ServerConfig:
 class WiFiFeatures:
     """WiFi feature definitions and validation - 15 SAFE FEATURES (PHASE 1A)."""
     
-    # 🚀 PHASE 1A: 15 safe features matching File 2 training pipeline
-    FEATURE_NAMES = [
-        # Original 9 features (indices 0-8)
-        "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
-        "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-        "channelWidth", "mobilityMetric",
+    # 🚀 PHASE 1B: Ranges for 14 safe features
+    FEATURE_RANGES = {
+        # SNR features (7)
+        0: (-5.0, 40.0, "lastSnr (dB)"),
+        1: (-5.0, 40.0, "snrFast (dB)"),
+        2: (-5.0, 40.0, "snrSlow (dB)"),
+        3: (-10.0, 10.0, "snrTrendShort"),
+        4: (0.0, 10.0, "snrStabilityIndex"),
+        5: (0.0, 1.0, "snrPredictionConfidence"),
+        6: (0.0, 100.0, "snrVariance"),
         
-        # 🚀 PHASE 1A: NEW FEATURES (indices 9-14)
-        "retryRate",          # Retry rate (past performance)
-        "frameErrorRate",     # Error rate (PHY feedback)
-        "channelBusyRatio",   # Channel occupancy (interference)
-        "recentRateAvg",      # Recent rate average (temporal context)
-        "rateStability",      # Rate stability (change frequency)
-        "sinceLastChange"     # Time since last rate change (stability)
-    ]
+        # Network state (1 - removed channelWidth)
+        7: (0.0, 50.0, "mobilityMetric"),
+        
+        # Phase 1A features (2 - removed channelBusyRatio)
+        8: (0.0, 1.0, "retryRate"),
+        9: (0.0, 1.0, "frameErrorRate"),
+        
+        # 🚀 PHASE 1B: NEW FEATURES (4)
+        10: (0.0, 100.0, "rssiVariance (dB²)"),
+        11: (0.0, 1.0, "interferenceLevel"),
+        12: (0.0, 200.0, "distanceMetric (m)"),
+        13: (64.0, 1500.0, "avgPacketSize (bytes)")
+    }
     
     # 🚀 PHASE 1A: Ranges for 15 safe features (indices 0-14)
     FEATURE_RANGES = {
@@ -248,8 +257,8 @@ class EnhancedMLInferenceServer:
         self.logger.info("="*80)
         self.logger.info(f"👤 Author: ahmedjk34 (https://github.com/ahmedjk34)")
         self.logger.info(f"📅 Pipeline Date: 2025-10-02 20:18:13 UTC")
-        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (PHASE 1A)")
-        self.logger.info(f"✅ PHASE 1A: 15 features (9 original + 6 enhanced)")
+        self.logger.info(f"🔢 Expected features: {len(WiFiFeatures.FEATURE_NAMES)} (PHASE 1B)")
+        self.logger.info(f"✅ PHASE 1B: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)")
         self.logger.info("="*80)
 
     def _signal_handler(self, signum, frame):
@@ -493,9 +502,9 @@ class EnhancedMLInferenceServer:
                 # Parse features and optional model name
                 parts = data.strip().split()
                 
-                # 🚀 PHASE 1A: Check if last part is a model name (15 features expected)
+                # 🚀 PHASE 1B: Check if last part is a model name (14 features expected)
                 model_name = None
-                if len(parts) > 15 and parts[-1] in self.models:
+                if len(parts) > 14 and parts[-1] in self.models:
                     model_name = parts[-1]
                     features = [float(x) for x in parts[:-1]]
                 else:
@@ -611,7 +620,7 @@ def auto_discover_models(base_path: Path) -> List[ModelConfig]:
                 model_path=str(model_file),
                 scaler_path=str(scaler_file),
                 description=description,
-                features_count=15,  # 🚀 PHASE 1A: 15 features
+                features_count=14,  # 🚀 PHASE 1B: 14 features
                 rate_classes=8
             ))
     
@@ -643,7 +652,7 @@ if __name__ == "__main__":
         if not model_configs:
             print(f"❌ No trained models found in {base_path}")
             print(f"💡 Expected files: step4_rf_*_FIXED.joblib, step4_scaler_*_FIXED.joblib")
-            print(f"⚠️ Models must be trained with 15 features (Phase 1A)!")
+            print(f"⚠️ Models must be trained with 14 features (Phase 1B)!")
             sys.exit(1)
         
         print(f"✅ Found {len(model_configs)} models: {[m.name for m in model_configs]}")
