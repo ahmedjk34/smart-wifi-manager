@@ -1,6 +1,6 @@
 /*
- * Minstrel WiFi Manager Benchmark - FIXED FOR 14-FEATURE PIPELINE
- * Compatible with FIXED MinstrelWifiManagerLogged (14 safe features, zero temporal leakage)
+ * Minstrel WiFi Manager Benchmark - PHASE 1B (24-FEATURE PIPELINE)
+ * Compatible with MinstrelWifiManagerLogged Phase 1B (24 safe features, zero temporal leakage)
  *
  * CRITICAL FIXES (2025-10-01 14:58:28 UTC):
  * - Issue #1: No temporal leakage (manager handles safe logging)
@@ -500,6 +500,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     std::cout << "[SIM] Simulation completed" << std::endl;
 
     // After Simulator::Run() in your benchmark:
+    // After Simulator::Run() in your benchmark:
     std::cout << "\n=== DIAGNOSTIC INFO ===" << std::endl;
     std::cout << "Simulation time: " << Simulator::Now().GetSeconds() << "s" << std::endl;
 
@@ -517,6 +518,11 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
             std::string firstLine;
             std::getline(checkFile, firstLine);
             std::cout << "First line: " << firstLine << std::endl;
+
+            // ✅ PHASE 1B: Count commas to verify 24 features + metadata
+            int commaCount = std::count(firstLine.begin(), firstLine.end(), ',');
+            std::cout << "Feature count: " << commaCount
+                      << " (expected: 28 for 24 features + 4 metadata)" << std::endl;
 
             int lineCount = 1;
             std::string line;
@@ -618,7 +624,7 @@ main(int argc, char* argv[])
 
     // Generate test cases
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(400);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(350);
 
     std::cout << "\n📊 Generated " << testCases.size() << " performance-based scenarios"
               << std::endl;
