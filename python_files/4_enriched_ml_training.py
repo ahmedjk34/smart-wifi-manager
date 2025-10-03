@@ -2,11 +2,11 @@
 Ultimate ML Model Training Pipeline - PHASE 1-5 COMPLETE
 Trains Random Forest models using optimized hyperparameters from Step 3c
 
-CRITICAL UPDATES (2025-10-02 20:29:26 UTC):
+CRITICAL UPDATES (2025-10-03 14:21:17 UTC):
 ============================================================================
-🚀 PHASE 1A: ENHANCED FEATURES (9 → 15 for +67% information)
+🚀 PHASE 1B: 14 SAFE FEATURES (4 Phase 1B added, 5 leaky removed)
 🚀 PHASE 5A: MinMaxScaler (preserves physical meaning of SNR)
-🚀 PHASE 5B: Enhanced hyperparameters for 15 features
+🚀 PHASE 5B: Enhanced hyperparameters for 14 features
 🚀 PHASE 5C: XGBoost alternative (optional, if RF plateaus)
 ============================================================================
 
@@ -101,7 +101,7 @@ np.random.seed(RANDOM_SEED)
 USE_MINMAX_SCALER = True  # Set to False to use StandardScaler (old behavior)
 
 # 🚀 PHASE 5C: Model selection
-USE_XGBOOST = True  # Set to True to use XGBoost instead of RandomForest
+USE_XGBOOST = False  # Set to True to use XGBoost instead of RandomForest
 
 # Target labels to train
 TARGET_LABELS = [
@@ -114,40 +114,49 @@ TARGET_LABELS = [
 # 🔧 FIXED: Safe features (12 features after removing rate-dependent)
 # 🚀 PHASE 1A: 12 features (not 15 - removed 3 leaky ones)
 # 🚀 PHASE 1A + FIXED: Safe features (12 features, RATE-DEPENDENT REMOVED!)
+# 🚀 PHASE 1B: Safe features (14 features, no temporal leakage)
 SAFE_FEATURES = [
-    # Original 9 features (indices 0-8)
-    "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
+    # SNR features (7)
+    "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    "channelWidth", "mobilityMetric",
     
-    # 🚀 PHASE 1A: SAFE FEATURES ONLY (indices 9-11) - 3 features, not 6!
-    "retryRate",          # ✅ Retry rate (past performance, not current)
-    "frameErrorRate",     # ✅ Error rate (PHY feedback, not current)
-    "channelBusyRatio",   # ✅ Channel occupancy (interference, independent of rate)
+    # Network state (1 - removed channelWidth, always 20)
+    "mobilityMetric",
     
-    # ❌ REMOVED: recentRateAvg (LEAKAGE! - includes current rate in calculation)
-    # ❌ REMOVED: rateStability (LEAKAGE! - includes current rate in calculation)
-    # ❌ REMOVED: sinceLastChange (LEAKAGE! - tells model if rate just changed)
-]  # TOTAL: 12 features (7 SNR + 2 network + 3 Phase 1A SAFE)
+    # 🚀 PHASE 1A: SAFE ONLY (2 features - removed channelBusyRatio, always 0)
+    "retryRate",          # ✅ Past retry rate (not current)
+    "frameErrorRate",     # ✅ Past error rate (not current)
+    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
+    
+    # 🚀 PHASE 1B: NEW FEATURES (4)
+    "rssiVariance",       # ✅ RSSI variance (signal stability)
+    "interferenceLevel",  # ✅ Interference level (collision tracking)
+    "distanceMetric",     # ✅ Distance metric (from scenario)
+    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
+    # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
+    # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
+]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
 
 # 🚨 CRITICAL: These 3 features exist in CSV but are EXCLUDED from training:
-# - recentRateAvg (columns 16 in CSV) → NOT in SAFE_FEATURES
-# - rateStability (column 17 in CSV) → NOT in SAFE_FEATURES
-# - sinceLastChange (column 18 in CSV) → NOT in SAFE_FEATURES
-# File 4 will extract ONLY the 12 SAFE_FEATURES for training
+# - recentRateAvg (LEAKAGE - includes current rate in average)
+# - rateStability (LEAKAGE - includes current rate in variance calculation)
+# - sinceLastChange (LEAKAGE - tells model if rate just changed)
+# File 4 will extract ONLY the 14 SAFE_FEATURES for training
 
-# Train/Val/Test split ratios
-TEST_SIZE = 0.2      # 20% for final test
-VAL_SIZE = 0.2       # 20% of remaining (16% of total)
-# Final: 64% train, 16% val, 20% test
+TEST_SIZE = 0.10     # 10% for final test
+VAL_SIZE = 0.111     # 11.1% of remaining (10% of total)
+# Final: 80% train, 10% val, 10% test
+
 
 # 🚀 PHASE 5: Updated performance thresholds for 15 features
 # 🚀 PHASE 1A + FIXED: Updated performance thresholds (12 features, not 15)
 PERFORMANCE_THRESHOLDS = {
-    'excellent': 0.75,   # >75% is excellent for 12 safe features (was 78% for 15)
-    'good': 0.68,        # 68-75% is good (down from 70%)
-    'acceptable': 0.62,  # 62-68% is acceptable (9-feature baseline)
-    'needs_improvement': 0.62  # <62% needs work (worse than baseline!)
+    'excellent': 0.72,   # >72% is excellent for 14 features (Phase 1B target!)
+    'good': 0.68,        # 68-72% is good
+    'acceptable': 0.63,  # 63-68% is acceptable
+    'needs_improvement': 0.62  # <63% needs work (worse than baseline 62.8%)
 }
 
 USER = "ahmedjk34"
@@ -185,7 +194,7 @@ def setup_logging(target_label: str):
     logger.info(f"💻 Device: CPU (no GPU required)")
     logger.info("="*80)
     logger.info("FIXES APPLIED:")
-    logger.info("  ✅ Phase 1A: 15 features (9 → 15)")
+    logger.info("  ✅ Phase 1B: 14 features (10 → 14)")  # Update this line
     logger.info("  ✅ Phase 5A: MinMaxScaler (preserves physical meaning)")
     logger.info("  ✅ Phase 5B: Enhanced hyperparameters")
     logger.info("  ✅ Phase 5C: XGBoost support")
@@ -195,14 +204,6 @@ def setup_logging(target_label: str):
     logger.info("  ✅ Issue M2: Feature scaling documented")
     logger.info("  ✅ Issue M3: Class weight limitation documented")
     logger.info("="*80)
-    logger.info("="*80)
-    logger.info("EXPECTED CHANGES:")
-    logger.info("  - Model accuracy: 62.8% → 70-75% (Phase 1A + Fixed)")  # Down from 75-80%
-    logger.info("  - Rare classes (0-3): Better recall (7-34% → 40-55%)")  # Down from 40-60%
-    logger.info("  - Features: 12 (not 15 - removed 3 rate-dependent)")   # NEW LINE
-    logger.info("  - MinMaxScaler: SNR 5-30 dB → 0.0-1.0 (preserves ordering)")
-    logger.info("  - XGBoost (if enabled): +5-8% accuracy over RF")
-    logger.info("  - Top feature: lastSnr (not recentRateAvg!)")           # NEW LINE
     logger.info("="*80)
     
     return logger
