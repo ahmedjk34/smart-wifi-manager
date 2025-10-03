@@ -85,8 +85,9 @@ RATE_MAPPING = {
     7: "54 Mbps (64-QAM 3/4)"
 }
 
-# 🔧 FIXED: Issue C3 - SAFE features list (OUTCOME FEATURES REMOVED!)
-# 🚀 PHASE 1A: ENHANCED to 15 features (was 9)
+
+# 🔧 FIXED: Issue C3 - SAFE features list (RATE-DEPENDENT FEATURES REMOVED!)
+# 🚀 PHASE 1A: REDUCED to 12 features (was 15, removed 3 leaky)
 # These features are available BEFORE making rate decision
 SAFE_FEATURES = [
     # SNR features (pre-decision) - SAFE (7)
@@ -102,15 +103,15 @@ SAFE_FEATURES = [
     # Network state (pre-decision) - SAFE (2)
     "channelWidth", "mobilityMetric",
     
-    # 🚀 PHASE 1A: NEW FEATURES (6 added for 67% more information!)
-    "retryRate",          # Retry rate (past performance)
-    "frameErrorRate",     # Error rate (PHY feedback)
-    "channelBusyRatio",   # Channel occupancy (interference)
-    "recentRateAvg",      # Recent rate average (temporal context)
-    "rateStability",      # Rate stability (change frequency)
-    "sinceLastChange"     # Time since last rate change (stability)
-]  # TOTAL: 15 features (7 SNR + 2 network + 6 Phase 1A)
-
+    # 🚀 PHASE 1A: NEW FEATURES - ONLY SAFE ONES (3, not 6!)
+    "retryRate",          # ✅ Retry rate (past performance, not current)
+    "frameErrorRate",     # ✅ Error rate (PHY feedback, not current)
+    "channelBusyRatio",   # ✅ Channel occupancy (interference, independent of rate)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE! - includes current rate in calculation)
+    # ❌ REMOVED: rateStability (LEAKAGE! - includes current rate in calculation)  
+    # ❌ REMOVED: sinceLastChange (LEAKAGE! - tells model if rate just changed)
+]  # TOTAL: 12 features (7 SNR + 2 network + 3 Phase 1A SAFE)
 
 
 # Temporal leakage features (should already be removed in File 2)
