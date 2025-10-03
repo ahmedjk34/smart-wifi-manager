@@ -402,12 +402,15 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
 
     static constexpr uint32_t WINDOW_SIZE = 50;
 
+    // 🚀 PHASE 1B: NEW FEATURE TRACKING (4 features)
+    double rssiVariance;      // RSSI variance (dB²)
+    double interferenceLevel; // Interference level (0-1)
+    double distanceMetric;    // Distance from AP (meters)
+    double avgPacketSize;     // Average packet size (bytes)
+
     double retryRate{0.0};
     double frameErrorRate{0.0};
-    double channelBusyRatio{0.0};
-    double recentRateAvg{4.0};
-    double rateStability{1.0};
-    double sinceLastChange{0.0};
+
     uint32_t packetsSinceRateChange{0};
     uint32_t successfulPackets{0};
     uint32_t failedPackets{0};
