@@ -855,3 +855,10 @@ def main():
         import traceback
         logger.error(traceback.format_exc())
         return False
+
+if __name__ == "__main__":
+    success = main()
+    if success:
+        sys.exit(0)
+    else:
+        sys.exit(1)
