@@ -6,9 +6,14 @@ CRITICAL FIX: Implements stratified sampling per rate to prevent high-rate domin
 - Equal-time simulation generates more high-rate samples
 - This combiner ensures balanced training data (15K samples per rate)
 
+PHASE 1A UPDATE (2025-10-03):
+- Now expects 25 columns (was 19)
+- Added 6 new features: retryRate, frameErrorRate, channelBusyRatio,
+  recentRateAvg, rateStability, sinceLastChange
+
 Author: ahmedjk34
-Date: 2025-10-01 18:24:49 UTC
-Version: 3.0 (SMART BALANCING)
+Date: 2025-10-03 08:45:00 UTC (PHASE 1A UPDATE)
+Version: 3.1 (PHASE 1A COMPATIBLE)
 """
 
 import os
@@ -30,15 +35,35 @@ LOG_DIR = os.path.join(PARENT_DIR, "balanced-results")
 OUTPUT_CSV = os.path.join(PARENT_DIR, "smart-v3-logged-ALL.csv")
 RANDOM_SEED = 42
 
-# FIXED: Define EXACT expected columns (19 fields)
+
+# FIXED: Phase 1A - 25 columns (4 metadata + 20 features + 1 scenario)
 EXPECTED_COLUMNS = [
+    # Metadata (4)
     'time', 'stationId', 'rateIdx', 'phyRate',
+    
+    # SNR features (7)
     'lastSnr', 'snrFast', 'snrSlow', 'snrTrendShort',
     'snrStabilityIndex', 'snrPredictionConfidence', 'snrVariance',
-    'shortSuccRatio', 'medSuccRatio', 'packetLossRate',
+    
+    # Previous window success (2)
+    'shortSuccRatio', 'medSuccRatio',
+    
+    # Previous window loss (1)
+    'packetLossRate',
+    
+    # Network state (2)
     'channelWidth', 'mobilityMetric',
-    'severity', 'confidence', 'scenario_file'
-]
+    
+    # Assessment (2)
+    'severity', 'confidence',
+    
+    # PHASE 1A: New features (6)
+    'retryRate', 'frameErrorRate', 'channelBusyRatio',
+    'recentRateAvg', 'rateStability', 'sinceLastChange',
+    
+    # Scenario identifier (1)
+    'scenario_file'
+]  # TOTAL: 25 columns
 
 def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
     """
@@ -52,8 +77,8 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
             header_cols = header_line.split(',')
         
         # Check column count
-        if len(header_cols) != 19:
-            print(f"  ⚠️ {os.path.basename(filepath)}: {len(header_cols)} columns (expected 19) - FIXING...")
+        if len(header_cols) != 25:
+            print(f"  ⚠️ {os.path.basename(filepath)}: {len(header_cols)} columns (expected 25) - FIXING...")
             
             # Read all lines
             with open(filepath, 'r') as f:
@@ -70,11 +95,12 @@ def validate_and_fix_csv(filepath: str) -> Tuple[bool, str]:
                 
                 parts = line.strip().split(',')
                 
-                if len(parts) < 19:
-                    parts += [''] * (19 - len(parts))
-                elif len(parts) > 19:
-                    parts = parts[:18] + [parts[-1]]
-                
+            if len(parts) < 25:
+                parts += [''] * (25 - len(parts))
+            elif len(parts) > 25:
+                parts = parts[:24] + [parts[-1]]  # Keep scenario_file as last column
+
+                            
                 fixed_lines.append(','.join(parts) + '\n')
             
             # Write fixed file
@@ -125,13 +151,11 @@ def clean_dataframe(df: pd.DataFrame, fname: str) -> pd.DataFrame:
         return df
     
     # Ensure exactly 19 columns
-    if len(df.columns) != 19:
-        if len(df.columns) > 19:
-            df = df.iloc[:, :19]
-        df.columns = EXPECTED_COLUMNS
-    
-    # Set scenario_file
-    df['scenario_file'] = fname.replace('_detailed.csv', '')
+    if len(df.columns) != 25:
+        if len(df.columns) > 25:
+            df = df.iloc[:, :25]
+        # Set scenario_file
+        df['scenario_file'] = fname.replace('_detailed.csv', '')
     
     # Remove blank rows
     cols_to_check = EXPECTED_COLUMNS[:-1]
@@ -146,9 +170,13 @@ def clean_dataframe(df: pd.DataFrame, fname: str) -> pd.DataFrame:
         'lastSnr', 'snrFast', 'snrSlow', 'snrTrendShort',
         'snrStabilityIndex', 'snrPredictionConfidence', 'snrVariance',
         'shortSuccRatio', 'medSuccRatio', 'packetLossRate',
-        'channelWidth', 'mobilityMetric', 'severity', 'confidence'
+        'channelWidth', 'mobilityMetric', 'severity', 'confidence',
+        # PHASE 1A features (6 new)
+        'retryRate', 'frameErrorRate', 'channelBusyRatio',
+        'recentRateAvg', 'rateStability', 'sinceLastChange'
     ]
-    
+
+        
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce', downcast=None)
