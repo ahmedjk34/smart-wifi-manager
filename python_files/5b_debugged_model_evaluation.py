@@ -60,22 +60,30 @@ CORRELATION_THRESHOLD_HIGH = 0.7
 
 # Safe features (no temporal leakage)
 # 🚀 PHASE 1A + 5: Safe features (15 features, no outcome leakage)
+# 🚀 PHASE 1B: Safe features (14 features, no temporal leakage)
 SAFE_FEATURES = [
     # SNR features (7)
-    "lastSnr", "snrFast", "snrSlow", "snrTrendShort", 
+    "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
     
-    # Network state (2)
-    "channelWidth", "mobilityMetric",
+    # Network state (1 - removed channelWidth, always 20)
+    "mobilityMetric",
     
-    # 🚀 PHASE 1A: NEW FEATURES (6)
-    "retryRate",          # Retry rate (past performance)
-    "frameErrorRate",     # Error rate (PHY feedback)
-    "channelBusyRatio",   # Channel occupancy (interference)
-    "recentRateAvg",      # Recent rate average (temporal context)
-    "rateStability",      # Rate stability (change frequency)
-    "sinceLastChange"     # Time since last rate change (stability)
-]  # TOTAL: 15 features
+    # 🚀 PHASE 1A: SAFE ONLY (2 features - removed channelBusyRatio, always 0)
+    "retryRate",          # ✅ Past retry rate (not current)
+    "frameErrorRate",     # ✅ Past error rate (not current)
+    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
+    
+    # 🚀 PHASE 1B: NEW FEATURES (4)
+    "rssiVariance",       # ✅ RSSI variance (signal stability)
+    "interferenceLevel",  # ✅ Interference level (collision tracking)
+    "distanceMetric",     # ✅ Distance metric (from scenario)
+    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
+    
+    # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
+    # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
+    # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
+]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
 
 # ❌ REMOVED (Issue C3): Outcome features
 # These were removed by File 2 and NOT used by File 4:
@@ -94,10 +102,10 @@ TEMPORAL_LEAKAGE_FEATURES = [
 
 # 🚀 PHASE 1A + 5: Updated performance expectations (15 features)
 PERFORMANCE_EXPECTATIONS = {
-    'excellent': 0.78,      # >78% is excellent for 15 features (Phase 1A + 5)
-    'good': 0.70,           # 70-78% is good (Phase 1A)
-    'acceptable': 0.62,     # 62-70% is acceptable (9-feature baseline)
-    'needs_improvement': 0.62  # <62% needs work (worse than 9-feature baseline!)
+    'excellent': 0.72,   # >72% is excellent for 14 features (Phase 1B target!)
+    'good': 0.68,        # 68-72% is good
+    'acceptable': 0.63,  # 63-68% is acceptable
+    'needs_improvement': 0.62  # <63% needs work (worse than baseline 62.8%)
 }
 
 CONTEXT_LABEL = "network_context"
