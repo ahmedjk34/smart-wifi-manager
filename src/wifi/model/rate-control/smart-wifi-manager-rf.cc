@@ -298,7 +298,19 @@ SmartWifiManagerRf::GetTypeId()
             .AddTraceSource("MLInferences",
                             "Number of ML inferences made",
                             MakeTraceSourceAccessor(&SmartWifiManagerRf::m_mlInferences),
-                            "ns3::TracedValueCallback::Uint32");
+                            "ns3::TracedValueCallback::Uint32")
+            .AddAttribute("BenchmarkDistance",
+                          "Initial benchmark distance (meters) - set via attributes",
+                          DoubleValue(20.0),
+                          MakeDoubleAccessor(&SmartWifiManagerRf::SetBenchmarkDistanceAttribute,
+                                             &SmartWifiManagerRf::GetBenchmarkDistanceAttribute),
+                          MakeDoubleChecker<double>())
+            .AddAttribute("BenchmarkInterferers",
+                          "Initial interferer count - set via attributes",
+                          UintegerValue(0),
+                          MakeUintegerAccessor(&SmartWifiManagerRf::SetInterferersAttribute,
+                                               &SmartWifiManagerRf::GetInterferersAttribute),
+                          MakeUintegerChecker<uint32_t>());
     return tid;
 }
 
@@ -527,15 +539,15 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
         return m_oracleStrategy;
     }
 
-    // CRITICAL FIX: Force SNR recalculation if using default initialization value
-    // Use range check instead of exact comparison to catch floating point variations
     double currentDistance = m_benchmarkDistance.load();
     uint32_t currentInterferers = m_currentInterferers.load();
 
-    bool snrLooksStale = (station->snrSlow > 18.0 && station->snrSlow < 18.5) &&
-                         (currentDistance != 20.0 || currentInterferers != 0);
+    // CRITICAL FIX: Force SNR recalculation if parameters don't match initialized values
+    bool snrIsInitValue = (station->snrSlow > 18.0 && station->snrSlow < 18.5);
+    bool paramsChanged = (currentDistance != 20.0 || currentInterferers != 0);
+    bool snrTooHighForDistance = (currentDistance > 50.0 && station->snrSlow > 10.0);
 
-    if (snrLooksStale)
+    if ((snrIsInitValue && paramsChanged) || snrTooHighForDistance)
     {
         double realisticSnr =
             ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers, SOFT_MODEL);
@@ -543,60 +555,55 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
         station->snrFast = realisticSnr;
         station->snrSlow = realisticSnr;
 
-        NS_LOG_WARN("Detected stale initialization SNR ("
-                    << station->snrSlow << " dB), recalculated to " << realisticSnr
-                    << " dB for distance=" << currentDistance
-                    << "m, interferers=" << currentInterferers);
+        NS_LOG_INFO("[PHASE 2] Corrected stale SNR: " << station->snrSlow << " → " << realisticSnr
+                                                      << " dB");
     }
 
-    // Calculate scenario difficulty score (0.0 = easy, 1.0 = hard)
+    // Calculate difficulty score (0.0 = easy, 1.0 = hard)
     double difficultyScore = 0.0;
+    double avgSnr = station->snrSlow;
 
-    // Factor 1: SNR quality (40% weight)
-    // SNR range: 5-30 dB (lower SNR = harder scenario)
-    double avgSnr = station->snrSlow; // Use slow SNR for stable assessment
+    // Factor 1: SNR quality (50% weight) - INCREASED for better sensitivity
+    // SNR < 5 dB is very hard, SNR > 30 dB is easy
     double snrScore = 1.0 - std::min(1.0, std::max(0.0, (avgSnr - 5.0) / 25.0));
-    difficultyScore += snrScore * 0.4;
+    difficultyScore += snrScore * 0.5; // Increased from 0.4
 
     // Factor 2: Interference level (30% weight)
-    // 0-5 interferers expected (more = harder)
-    uint32_t interferers = m_currentInterferers.load();
-    double intfScore = std::min(1.0, static_cast<double>(interferers) / 5.0);
+    // 0-5 interferers expected
+    double intfScore = std::min(1.0, static_cast<double>(currentInterferers) / 5.0);
     difficultyScore += intfScore * 0.3;
 
-    // Factor 3: Mobility (20% weight)
-    // 0-20 m/s expected (higher speed = harder)
+    // Factor 3: Mobility (15% weight) - DECREASED slightly
     double mobilityScore = std::min(1.0, station->mobilityMetric / 20.0);
-    difficultyScore += mobilityScore * 0.2;
+    difficultyScore += mobilityScore * 0.15;
 
-    // Factor 4: Channel busy ratio (10% weight)
-    // 0-1 range (busier = harder)
+    // Factor 4: Channel busy ratio (5% weight) - DECREASED
     double busyScore = station->channelBusyRatio;
-    difficultyScore += busyScore * 0.1;
+    difficultyScore += busyScore * 0.05;
 
-    // Select model based on difficulty
+    // Select model based on difficulty with ADJUSTED thresholds
     std::string selectedModel;
 
-    if (difficultyScore < 0.3)
+    if (difficultyScore < 0.35) // Was 0.3 - slightly raised
     {
-        // EASY scenario: Use aggressive model
         selectedModel = "oracle_aggressive";
-        NS_LOG_INFO("[PHASE 2] Scenario: EASY (score=" << difficultyScore
-                                                       << ") → oracle_aggressive");
+        NS_LOG_INFO("[PHASE 2] EASY (score=" << difficultyScore << "): SNR=" << avgSnr
+                                             << "dB, intf=" << currentInterferers
+                                             << " → oracle_aggressive");
     }
-    else if (difficultyScore < 0.6)
+    else if (difficultyScore < 0.65) // Was 0.6 - raised to push conservative earlier
     {
-        // MEDIUM scenario: Use balanced model
         selectedModel = "oracle_balanced";
-        NS_LOG_INFO("[PHASE 2] Scenario: MEDIUM (score=" << difficultyScore
-                                                         << ") → oracle_balanced");
+        NS_LOG_INFO("[PHASE 2] MEDIUM (score=" << difficultyScore << "): SNR=" << avgSnr
+                                               << "dB, intf=" << currentInterferers
+                                               << " → oracle_balanced");
     }
     else
     {
-        // HARD scenario: Use conservative model
         selectedModel = "oracle_conservative";
-        NS_LOG_INFO("[PHASE 2] Scenario: HARD (score=" << difficultyScore
-                                                       << ") → oracle_conservative");
+        NS_LOG_INFO("[PHASE 2] HARD (score=" << difficultyScore << "): SNR=" << avgSnr
+                                             << "dB, intf=" << currentInterferers
+                                             << " → oracle_conservative");
     }
 
     return selectedModel;
@@ -1903,6 +1910,32 @@ SmartWifiManagerRf::DebugPrintCurrentConfig() const
               << std::endl;
     std::cout << "============================================================================"
               << std::endl;
+}
+
+void
+SmartWifiManagerRf::SetBenchmarkDistanceAttribute(double dist)
+{
+    m_benchmarkDistance.store(dist);
+    std::cout << "[ATTR SET] BenchmarkDistance=" << dist << "m" << std::endl;
+}
+
+double
+SmartWifiManagerRf::GetBenchmarkDistanceAttribute() const
+{
+    return m_benchmarkDistance.load();
+}
+
+void
+SmartWifiManagerRf::SetInterferersAttribute(uint32_t count)
+{
+    m_currentInterferers.store(count);
+    std::cout << "[ATTR SET] BenchmarkInterferers=" << count << std::endl;
+}
+
+uint32_t
+SmartWifiManagerRf::GetInterferersAttribute() const
+{
+    return m_currentInterferers.load();
 }
 
 } // namespace ns3

@@ -329,6 +329,12 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     // Update signature of RunMLInference:
     InferenceResult RunMLInference(const std::vector<double>& features,
                                    const std::string& modelName = "") const;
+
+    // 🚀 ATTRIBUTE SETTERS/GETTERS (for guaranteed sync)
+    void SetBenchmarkDistanceAttribute(double dist);
+    double GetBenchmarkDistanceAttribute() const;
+    void SetInterferersAttribute(uint32_t count);
+    uint32_t GetInterferersAttribute() const;
 };
 
 /**
