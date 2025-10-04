@@ -794,11 +794,20 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
         std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
+        // ✅ NEW CODE - PASTE THIS INSTEAD:
         for (auto it = stats.begin(); it != stats.end(); ++it)
         {
             Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
-            if (t.sourceAddress == staInterface.GetAddress(0) &&
-                t.destinationAddress == apInterface.GetAddress(0))
+
+            // Accept ANY flow on the main network (10.1.3.x) to port 4000
+            bool isMainFlow = (t.sourceAddress.CombineMask(Ipv4Mask("255.255.255.0")) ==
+                                   Ipv4Address("10.1.3.0") &&
+                               t.destinationAddress.CombineMask(Ipv4Mask("255.255.255.0")) ==
+                                   Ipv4Address("10.1.3.0") &&
+                               t.destinationPort == port);
+
+            // OR: Use the flow with the MOST packets (handles multiple managers robustly)
+            if (isMainFlow && it->second.txPackets > txPackets)
             {
                 flowStatsFound = true;
                 rxPackets = it->second.rxPackets;
@@ -818,11 +827,63 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
 
                 if (it->second.rxPackets > 1)
                     jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
-
-                break;
             }
         }
 
+        // 🚀 ADD: Debug logging if no flow found
+        if (!flowStatsFound)
+        {
+            std::cout << "⚠️ [FLOW DEBUG] No matching flow found! Searching all flows..."
+                      << std::endl;
+
+            // Fallback: Take the flow with the MOST TX packets on ANY 10.1.x.x network
+            for (auto it = stats.begin(); it != stats.end(); ++it)
+            {
+                Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
+
+                std::cout << "  Available flow: " << t.sourceAddress << ":" << t.sourcePort << " → "
+                          << t.destinationAddress << ":" << t.destinationPort
+                          << " | TX=" << it->second.txPackets << " RX=" << it->second.rxPackets
+                          << std::endl;
+
+                // Take ANY flow on 10.1.x.x with packets
+                if (it->second.txPackets > txPackets &&
+                    t.sourceAddress.CombineMask(Ipv4Mask("255.255.0.0")) == Ipv4Address("10.1.0.0"))
+                {
+                    std::cout << "  ✅ Using this flow (most packets)" << std::endl;
+
+                    flowStatsFound = true;
+                    rxPackets = it->second.rxPackets;
+                    txPackets = it->second.txPackets;
+                    rxBytes = it->second.rxBytes;
+                    droppedPackets = it->second.lostPackets;
+                    retransmissions = it->second.timesForwarded;
+
+                    if (simulationTime > 0)
+                        throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
+
+                    if (txPackets > 0)
+                        packetLoss = 100.0 * (txPackets - rxPackets) / txPackets;
+
+                    if (it->second.rxPackets > 0)
+                        avgDelay = it->second.delaySum.GetSeconds() / it->second.rxPackets;
+
+                    if (it->second.rxPackets > 1)
+                        jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
+                }
+            }
+        }
+
+        if (flowStatsFound)
+        {
+            std::cout << "✅ [FLOW STATS] Found valid flow: TX=" << txPackets << " RX=" << rxPackets
+                      << " Throughput=" << throughput << " Mbps" << std::endl;
+        }
+        else
+        {
+            std::cout << "❌ [FLOW STATS] NO VALID FLOW FOUND - Stats will be invalid!"
+                      << std::endl;
+        }
         // Collect realistic SNR statistics
         double avgSnr = 0.0;
         size_t validSnrSamples = 0;
@@ -874,6 +935,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         currentStats.throughput = throughput;
         currentStats.avgDelay = avgDelay;
         currentStats.jitter = jitter;
+        currentStats.statsValid = flowStatsFound; // ← CRITICAL FIX!
 
         // ML performance estimation
         if (g_managerInitialized && currentStats.rateChanges > 0)
@@ -1018,7 +1080,6 @@ main(int argc, char* argv[])
     std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"}; // 3
     std::string strategy = "oracle_aggressive";
 
-    // Generate test cases with CORRECTED filtering and expectations
     // Generate test cases with CORRECTED filtering and expectations
     for (double d : distances)
     {

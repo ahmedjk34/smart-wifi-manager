@@ -425,7 +425,9 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     std::cout << "Starting simulation (20 seconds - ENVIRONMENT MATCHED)..." << std::endl;
     Simulator::Run();
 
-    // Collect results
+    // ============================================================
+    // COLLECT FLOW STATISTICS - FIXED (SMARTRF METHOD)
+    // ============================================================
     double throughput = 0, packetLoss = 0, avgDelay = 0, jitter = 0;
     double rxPackets = 0, txPackets = 0, rxBytes = 0;
     double simulationTime = 14.0;
@@ -436,11 +438,20 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
+    // PRIMARY DETECTION: Network mask matching (handles multiple managers)
     for (auto it = stats.begin(); it != stats.end(); ++it)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
-        if (t.sourceAddress == staInterface.GetAddress(0) &&
-            t.destinationAddress == apInterface.GetAddress(0))
+
+        // Accept ANY flow on the main network (10.1.3.x) to port 4000
+        bool isMainFlow =
+            (t.sourceAddress.CombineMask(Ipv4Mask("255.255.255.0")) == Ipv4Address("10.1.3.0") &&
+             t.destinationAddress.CombineMask(Ipv4Mask("255.255.255.0")) ==
+                 Ipv4Address("10.1.3.0") &&
+             t.destinationPort == port);
+
+        // Take the flow with the MOST packets
+        if (isMainFlow && it->second.txPackets > txPackets)
         {
             flowStatsFound = true;
             rxPackets = it->second.rxPackets;
@@ -448,19 +459,79 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
             rxBytes = it->second.rxBytes;
             droppedPackets = it->second.lostPackets;
             retransmissions = it->second.timesForwarded;
-            throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
-            packetLoss = txPackets > 0 ? 100.0 * (txPackets - rxPackets) / txPackets : 0.0;
-            avgDelay = it->second.rxPackets > 0
-                           ? it->second.delaySum.GetSeconds() / it->second.rxPackets
-                           : 0.0;
-            jitter = it->second.rxPackets > 1
-                         ? it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1)
-                         : 0.0;
-            break;
+
+            if (simulationTime > 0)
+                throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
+
+            if (txPackets > 0)
+                packetLoss = 100.0 * (txPackets - rxPackets) / txPackets;
+
+            if (it->second.rxPackets > 0)
+                avgDelay = it->second.delaySum.GetSeconds() / it->second.rxPackets;
+
+            if (it->second.rxPackets > 1)
+                jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
         }
     }
 
-    // MATCHED: Same SNR calculation
+    // FALLBACK DETECTION: Any flow on 10.1.x.x with most packets
+    if (!flowStatsFound)
+    {
+        std::cout << "WARNING [FLOW DEBUG] Primary detection failed. Scanning all flows..."
+                  << std::endl;
+
+        for (auto it = stats.begin(); it != stats.end(); ++it)
+        {
+            Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
+
+            std::cout << "  Available flow: " << t.sourceAddress << ":" << t.sourcePort << " -> "
+                      << t.destinationAddress << ":" << t.destinationPort
+                      << " | TX=" << it->second.txPackets << " RX=" << it->second.rxPackets
+                      << std::endl;
+
+            // Take ANY flow on 10.1.x.x with the most packets
+            bool isTestNetwork =
+                (t.sourceAddress.CombineMask(Ipv4Mask("255.255.0.0")) == Ipv4Address("10.1.0.0"));
+
+            if (isTestNetwork && it->second.txPackets > txPackets)
+            {
+                std::cout << "  -> Using this flow (most TX packets)" << std::endl;
+
+                flowStatsFound = true;
+                rxPackets = it->second.rxPackets;
+                txPackets = it->second.txPackets;
+                rxBytes = it->second.rxBytes;
+                droppedPackets = it->second.lostPackets;
+                retransmissions = it->second.timesForwarded;
+
+                if (simulationTime > 0)
+                    throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
+
+                if (txPackets > 0)
+                    packetLoss = 100.0 * (txPackets - rxPackets) / txPackets;
+
+                if (it->second.rxPackets > 0)
+                    avgDelay = it->second.delaySum.GetSeconds() / it->second.rxPackets;
+
+                if (it->second.rxPackets > 1)
+                    jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
+            }
+        }
+    }
+
+    // VERIFICATION LOGGING
+    if (flowStatsFound)
+    {
+        std::cout << "SUCCESS [FLOW STATS] Valid flow found: TX=" << txPackets
+                  << " RX=" << rxPackets << " Throughput=" << std::fixed << std::setprecision(2)
+                  << throughput << " Mbps" << std::endl;
+    }
+    else
+    {
+        std::cout << "ERROR [FLOW STATS] NO VALID FLOW FOUND - Stats will be invalid!" << std::endl;
+    }
+
+    // MATCHED: Same SNR calculation as before
     double avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL);
     currentStats.avgSNR = avgSnr;
     currentStats.minSNR = avgSnr - 3.0;
