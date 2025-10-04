@@ -229,13 +229,23 @@ struct EnhancedBenchmarkTestCase
 void
 EnhancedRateTrace(std::string context, uint64_t rate, uint64_t oldRate)
 {
-    if (g_managerInitialized)
+    if (!g_managerInitialized)
+        return;
+
+    // 🚀 FIX: Only count rate changes for the MAIN STA device!
+    // Context format: "/NodeList/0/DeviceList/0/$ns3::WifiNetDevice/RemoteStationManager/Rate"
+    // Node 0 = STA, Node 1 = AP, Node 2+ = Interferers
+
+    if (context.find("/NodeList/0/") == std::string::npos)
     {
-        currentStats.rateChanges++;
-        logFile << "[RATE CHANGE] Context=" << context << " | New=" << rate
-                << " bps | Old=" << oldRate << " bps | Changes=" << currentStats.rateChanges
-                << " | Strategy=" << currentStats.oracleStrategy << std::endl;
+        // Not the main STA, ignore this rate change
+        return;
     }
+
+    currentStats.rateChanges++;
+    logFile << "[RATE CHANGE] Rate: " << rate << " bps (was " << oldRate
+            << " bps) | Changes=" << currentStats.rateChanges
+            << " | Strategy=" << currentStats.oracleStrategy << std::endl;
 }
 
 void
