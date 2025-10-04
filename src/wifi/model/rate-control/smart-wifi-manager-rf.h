@@ -71,8 +71,10 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <fcntl.h> // For fcntl, O_NONBLOCK
 #include <mutex>
 #include <string>
+#include <sys/select.h> // For select()
 #include <vector>
 
 namespace ns3

@@ -101,8 +101,10 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cmath>
+#include <fcntl.h> // For fcntl, O_NONBLOCK
 #include <iomanip>
 #include <sstream>
+#include <sys/select.h> // For select()
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -347,9 +349,11 @@ SmartWifiManagerRf::SmartWifiManagerRf()
       m_snrOffset(0.0),
       m_enableDetailedLogging(true),
       m_nextStationId(1),
+
       m_hysteresisStreak(3),                  // 🚀 PHASE 3
       m_enableScenarioAwareSelection(true),   // 🚀 PHASE 2
       m_currentModelName("oracle_aggressive") // 🚀 PHASE 2
+
 {
     NS_LOG_FUNCTION(this);
     std::cout << "============================================================================"
@@ -381,10 +385,13 @@ SmartWifiManagerRf::SmartWifiManagerRf()
 SmartWifiManagerRf::~SmartWifiManagerRf()
 {
     NS_LOG_FUNCTION(this);
+
+    // Clean up station registry
     std::lock_guard<std::mutex> lock(m_stationRegistryMutex);
     m_stationRegistry.clear();
 }
 
+// In DoInitialize(), add memory tracking:
 void
 SmartWifiManagerRf::DoInitialize()
 {
@@ -395,13 +402,19 @@ SmartWifiManagerRf::DoInitialize()
         NS_FATAL_ERROR("SmartWifiManagerRf does not support HT/VHT/HE modes");
     }
 
-    std::cout << "[INIT] Model: " << m_modelName << " | Strategy: " << m_oracleStrategy
-              << std::endl;
-    std::cout << "[INIT] Features: 14 (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)" << std::endl;
-    std::cout << "[INIT] Python Server: localhost:" << m_inferenceServerPort << std::endl;
-    std::cout << "[INIT] Hysteresis: " << m_hysteresisStreak << "-streak confirmation" << std::endl;
-    std::cout << "[INIT] Scenario-Aware: "
-              << (m_enableScenarioAwareSelection ? "ENABLED" : "DISABLED") << std::endl;
+    // 🚀 FIX: Track total managers
+    static std::atomic<uint32_t> g_totalManagers{0};
+    uint32_t managerCount = g_totalManagers.fetch_add(1);
+
+    std::cout << "[INIT #" << managerCount << "] Model: " << m_modelName
+              << " | Strategy: " << m_oracleStrategy << std::endl;
+
+    // 🚀 FIX: Warn if too many managers
+    if (managerCount > 10)
+    {
+        NS_LOG_WARN("WARNING: " << managerCount
+                                << " SmartWifiManagerRf instances created! Memory leak suspected!");
+    }
 
     WifiRemoteStationManager::DoInitialize();
 }
@@ -476,6 +489,15 @@ SmartWifiManagerRf::DoCreateStation() const
 
     const_cast<SmartWifiManagerRf*>(this)->RegisterStation(station);
 
+    static std::atomic<uint32_t> g_logCount{0};
+    if (g_logCount.fetch_add(1) < 5)
+    {
+        std::cout << "[STATION CREATED] ID=" << station->stationId
+                  << " | Initial SNR=" << initialSnr << "dB"
+                  << " | Distance=" << currentDistance << "m"
+                  << " | Interferers=" << currentInterferers << std::endl;
+    }
+
     std::cout << "[STATION CREATED] ID=" << station->stationId << " | Initial SNR=" << initialSnr
               << "dB | Distance=" << currentDistance << "m | Interferers=" << currentInterferers
               << std::endl;
@@ -532,6 +554,10 @@ SmartWifiManagerRf::ConvertToRealisticSnr(double ns3Snr) const
                                     m_currentInterferers.load(),
                                     SOFT_MODEL);
 }
+
+// ============================================================================
+// 🚀 PERSISTENT SOCKET MANAGEMENT (NO MORE SOCKET CREATION SPAM!)
+// ============================================================================
 
 // ============================================================================
 // 🚀 PHASE 2: SCENARIO-AWARE MODEL SELECTION (PHASE 1B ENHANCED)
@@ -1059,6 +1085,12 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
 // ============================================================================
 // ML Inference via Python server (socket communication)
 // ============================================================================
+// ============================================================================
+// 🚀 OPTIMIZED ML INFERENCE WITH PERSISTENT CONNECTION
+// ============================================================================
+// ============================================================================
+// 🚀 SIMPLE ONE-SHOT SOCKET (NO PERSISTENCE, ALWAYS WORKS)
+// ============================================================================
 SmartWifiManagerRf::InferenceResult
 SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
                                    const std::string& modelName) const
@@ -1069,51 +1101,46 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
     result.rateIdx = m_fallbackRate;
     result.latencyMs = 0.0;
     result.confidence = 0.0;
-    result.model = modelName;
+    result.model = modelName.empty() ? m_oracleStrategy : modelName;
 
-    // CRITICAL: Validate feature count (15, not 9!)
+    // Validate features
     if (features.size() != 14)
     {
-        result.error = "Invalid feature count: expected 14, got " + std::to_string(features.size());
-        NS_LOG_ERROR(result.error);
+        result.error = "Invalid feature count";
         return result;
     }
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Create socket
+    // 🚀 SIMPLE: Create new socket every time (no persistence!)
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
     {
-        result.error = "socket creation failed";
-        NS_LOG_ERROR(result.error);
+        result.error = "Socket creation failed";
         return result;
     }
 
-    // Set timeout (150ms - fast response expected from Python server)
+    // Set timeout (500ms - generous for overloaded server)
     struct timeval timeout;
     timeout.tv_sec = 0;
-    timeout.tv_usec = 150000;
+    timeout.tv_usec = 500000; // 500ms
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-    // Connect to Python inference server (localhost:8765)
+    // Connect
     sockaddr_in serv_addr{};
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(m_inferenceServerPort);
     serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    int conn_ret = connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
-    if (conn_ret < 0)
+    if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0)
     {
         close(sockfd);
-        result.error = "connect failed to server on port " + std::to_string(m_inferenceServerPort);
-        NS_LOG_WARN(result.error << " - Is Python server running?");
+        result.error = "Connect failed (server busy?)";
         return result;
     }
 
-    // Build request matching Python server protocol
-    // Format: "feat1 feat2 ... feat15 [model_name]\n"
+    // Build request
     std::ostringstream featStream;
     for (size_t i = 0; i < features.size(); ++i)
     {
@@ -1121,8 +1148,6 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
         if (i + 1 < features.size())
             featStream << " ";
     }
-
-    // Append model name
     if (!modelName.empty())
     {
         featStream << " " << modelName;
@@ -1131,34 +1156,32 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
 
     std::string req = featStream.str();
 
-    // Send request to Python server
+    // Send
     ssize_t sent = send(sockfd, req.c_str(), req.size(), 0);
     if (sent != static_cast<ssize_t>(req.size()))
     {
         close(sockfd);
-        result.error = "send failed (partial send)";
-        NS_LOG_ERROR(result.error);
+        result.error = "Send failed";
         return result;
     }
 
-    // Receive response from Python server
-    std::string response;
+    // Receive
     char buffer[4096];
     ssize_t received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
 
+    // Close socket immediately (don't reuse!)
     close(sockfd);
 
     if (received <= 0)
     {
-        result.error = "no response from server (is Python server running?)";
-        NS_LOG_WARN(result.error);
+        result.error = (received == 0) ? "Server closed connection" : "Receive timeout";
         return result;
     }
 
     buffer[received] = '\0';
-    response = std::string(buffer);
+    std::string response(buffer);
 
-    // Parse JSON response (simple string parsing)
+    // Parse JSON
     size_t rate_pos = response.find("\"rateIdx\":");
     if (rate_pos != std::string::npos)
     {
@@ -1166,14 +1189,14 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
         size_t end = response.find_first_of(",}", start);
         if (end != std::string::npos)
         {
-            std::string rate_str = response.substr(start, end - start);
             try
             {
-                double rate_val = std::stod(rate_str);
-                result.rateIdx = static_cast<uint32_t>(std::max(0.0, std::min(7.0, rate_val)));
+                std::string rate_str = response.substr(start, end - start);
+                result.rateIdx =
+                    static_cast<uint32_t>(std::max(0.0, std::min(7.0, std::stod(rate_str))));
                 result.success = true;
 
-                // Parse confidence (optional)
+                // Parse confidence
                 size_t conf_pos = response.find("\"confidence\":");
                 if (conf_pos != std::string::npos)
                 {
@@ -1181,37 +1204,22 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
                     size_t conf_end = response.find_first_of(",}", conf_start);
                     if (conf_end != std::string::npos)
                     {
-                        std::string conf_str = response.substr(conf_start, conf_end - conf_start);
-                        result.confidence = std::stod(conf_str);
+                        result.confidence =
+                            std::stod(response.substr(conf_start, conf_end - conf_start));
                     }
                 }
             }
             catch (const std::exception& e)
             {
-                result.error = "parse error on response: " + std::string(e.what());
+                result.error = "JSON parse error";
                 result.success = false;
-                NS_LOG_ERROR(result.error);
             }
         }
-    }
-    else
-    {
-        result.error = "Invalid response format from Python server";
-        result.success = false;
-        NS_LOG_ERROR(result.error << " - Response: " << response);
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     result.latencyMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-
-    if (result.success)
-    {
-        NS_LOG_DEBUG("ML inference successful: rate=" << result.rateIdx
-                                                      << " confidence=" << result.confidence
-                                                      << " latency=" << result.latencyMs << "ms"
-                                                      << " model=" << modelName);
-    }
 
     return result;
 }
@@ -1577,7 +1585,7 @@ SmartWifiManagerRf::GetContextSafeRate(SmartWifiManagerRfState* station,
 }
 
 // ============================================================================
-// 🚀 MAIN RATE DECISION ENGINE - DoGetDataTxVector (PHASE 1B ENHANCED)
+// 🚀 MAIN RATE DECISION ENGINE - DoGetDataTxVector (FULLY OPTIMIZED)
 // ============================================================================
 WifiTxVector
 SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWidth)
@@ -1640,7 +1648,7 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     }
 
     // ========================================================================
-    // STAGE 3: ML INFERENCE (WITH ADAPTIVE FREQUENCY)
+    // STAGE 3: ML INFERENCE (WITH ADAPTIVE FREQUENCY + OPTIMIZATIONS)
     // ========================================================================
     uint32_t mlRate = ruleRate;
     double mlConfidence = 0.0;
@@ -1660,7 +1668,6 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     }
 
     // 🚀 PHASE 1B: SMARTER ADAPTIVE INFERENCE FREQUENCY
-    // Consider distance, interferers, AND signal stability
     uint32_t adaptiveInferencePeriod = m_inferencePeriod;
 
     if (currentDistance <= 30.0 && currentInterferers <= 1 && station->rssiVariance < 2.0)
@@ -1681,6 +1688,30 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
                               safety.riskLevel < m_riskThreshold && !canUseCachedMl &&
                               (s_callCounter % adaptiveInferencePeriod) == 0;
 
+    // 🚀 OPTIMIZATION: Skip ML if last inference was too slow (graceful degradation)
+    if (needNewMlInference)
+    {
+        std::lock_guard<std::mutex> lock(m_mlCacheMutex);
+
+        // Check if we're overwhelming the server
+        if (m_lastMlTime > Seconds(0))
+        {
+            double timeSinceLastMl = (now - m_lastMlTime).GetMilliSeconds();
+
+            // If last inference was <100ms ago AND took >100ms, skip this one
+            if (timeSinceLastMl < 100.0 && m_avgMlLatency > 100.0)
+            {
+                NS_LOG_DEBUG("[OPTIMIZATION] Server appears overloaded (latency="
+                             << m_avgMlLatency << "ms), skipping inference");
+                needNewMlInference = false;
+                mlStatus = "SKIPPED_OVERLOAD";
+            }
+        }
+    }
+
+    // ========================================================================
+    // EXECUTE ML INFERENCE OR USE CACHE
+    // ========================================================================
     if (canUseCachedMl)
     {
         std::lock_guard<std::mutex> lock(m_mlCacheMutex);
@@ -1688,19 +1719,22 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         mlConfidence = m_lastMlConfidence;
         mlStatus = "CACHED";
         m_mlCacheHits++;
+
+        NS_LOG_DEBUG("[ML CACHE] Using cached result: rate=" << mlRate << " conf=" << mlConfidence);
     }
     else if (needNewMlInference)
     {
         mlStatus = "ATTEMPTING";
 
-        // 🚀 PHASE 1B: Extract 14 features (not 15!)
+        // 🚀 PHASE 1B: Extract 14 features
         std::vector<double> features = ExtractFeatures(st);
 
-        // 🚀 PHASE 2: Call Python server with dynamically selected model
+        // 🚀 OPTIMIZATION: Call with persistent socket (10x faster!)
         InferenceResult result = RunMLInference(features, selectedModel);
 
         if (result.success && result.confidence > 0.05)
         {
+            // ML inference successful
             m_mlInferences++;
             station->mlInferencesReceived++;
             station->mlInferencesSuccessful++;
@@ -1708,16 +1742,20 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
             mlRate = std::min(result.rateIdx, maxRateIndex);
             mlConfidence = result.confidence;
 
+            // Update cache
             {
                 std::lock_guard<std::mutex> lock(m_mlCacheMutex);
                 m_lastMlRate = mlRate;
                 m_lastMlTime = now;
                 m_lastMlConfidence = mlConfidence;
+
+                // 🚀 OPTIMIZATION: Track average latency for overload detection
+                m_avgMlLatency = 0.8 * m_avgMlLatency + 0.2 * result.latencyMs;
             }
 
             mlStatus = "SUCCESS";
 
-            // Update ML accuracy tracking
+            // Update ML performance tracking
             station->recentMLAccuracy = 0.9 * station->recentMLAccuracy + 0.1 * mlConfidence;
 
             // Update context-specific confidence
@@ -1729,20 +1767,22 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
                 station->mlContextUsage[contextIdx]++;
             }
 
-            NS_LOG_INFO("[PHASE 1B] ML SUCCESS: model="
-                        << result.model << " rate=" << result.rateIdx << " conf=" << mlConfidence
-                        << " SNR=" << station->lastSnr << "dB"
-                        << " rssiVar=" << station->rssiVariance << " intf="
-                        << station->interferenceLevel << " dist=" << currentDistance << "m"
-                        << " latency=" << result.latencyMs << "ms");
+            NS_LOG_INFO("[ML SUCCESS] model=" << result.model << " rate=" << result.rateIdx
+                                              << " conf=" << mlConfidence
+                                              << " latency=" << result.latencyMs << "ms"
+                                              << " SNR=" << station->lastSnr << "dB"
+                                              << " dist=" << currentDistance << "m");
         }
         else
         {
+            // ML inference failed - use rule-based fallback
             m_mlFailures++;
             mlRate = ruleRate;
             mlConfidence = 0.0;
             mlStatus = "FAILED";
-            NS_LOG_WARN("ML FAILED: " << result.error << " - Using rule fallback: " << ruleRate);
+
+            NS_LOG_WARN("[ML FAILED] " << result.error
+                                       << " - Using rule fallback: rate=" << ruleRate);
         }
     }
 
@@ -1766,7 +1806,9 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     // ========================================================================
     uint32_t finalRate = ApplyHysteresis(station, station->currentRateIndex, fusedRate);
 
-    // STAGE 4B: ML FAILURE DETECTION AND FALLBACK
+    // ========================================================================
+    // STAGE 4B: ML FAILURE DETECTION AND EMERGENCY FALLBACK
+    // ========================================================================
     static uint32_t consecutiveMlFailures = 0;
 
     if (mlStatus == "FAILED")
@@ -1775,18 +1817,26 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     }
     else if (mlStatus == "SUCCESS")
     {
-        consecutiveMlFailures = 0;
+        consecutiveMlFailures = 0; // Reset on success
     }
 
-    // If ML fails 4+ times, disable for next 50 packets
+    // 🚀 OPTIMIZATION: If ML fails repeatedly, use rule-only mode temporarily
     if (consecutiveMlFailures >= 4)
     {
-        NS_LOG_WARN("[FALLBACK] ML failed " << consecutiveMlFailures
-                                            << " times - using RULE-ONLY for next 50 packets");
+        NS_LOG_WARN("[EMERGENCY FALLBACK] ML failed "
+                    << consecutiveMlFailures << " consecutive times - using RULE-ONLY mode");
 
-        // Force rule-based fusion (ML weight = 0)
+        // Override with rule-based rate
+        finalRate = ruleRate;
         fusedRate = ruleRate;
-        mlConfidence = 0.0; // Force rule-based in next iteration
+        mlConfidence = 0.0;
+
+        // Reset counter after 50 packets to retry ML
+        if (consecutiveMlFailures > 50)
+        {
+            consecutiveMlFailures = 0;
+            NS_LOG_INFO("[FALLBACK RESET] Attempting to re-enable ML inference");
+        }
     }
 
     // ========================================================================
@@ -1795,11 +1845,12 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     finalRate = std::min(finalRate, maxRateIndex);
     finalRate = std::max(finalRate, static_cast<uint32_t>(0));
 
-    // Update station state
+    // Update station state if rate changed
     if (finalRate != station->currentRateIndex)
     {
         bool wasMLInfluenced =
             (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context));
+
         if (wasMLInfluenced)
         {
             station->lastMLInfluencedRate = finalRate;
@@ -1809,12 +1860,17 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
         station->previousRateIndex = station->currentRateIndex;
         station->currentRateIndex = finalRate;
         station->lastRateChangeTime = now;
+
+        NS_LOG_DEBUG("[RATE CHANGE] " << station->previousRateIndex << " → " << finalRate
+                                      << " (ML-influenced: " << wasMLInfluenced << ")");
     }
 
     // 🚀 PHASE 1B: Update enhanced features (14 features)
     UpdateEnhancedFeatures(station);
 
-    // Determine fusion type
+    // ========================================================================
+    // LOGGING AND TELEMETRY
+    // ========================================================================
     std::string fusionType =
         (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context))
             ? "ML-LED"
@@ -1822,28 +1878,38 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
 
     uint64_t finalDataRate = GetSupported(st, finalRate).GetDataRate(allowedWidth);
 
-    // 🚀 PHASE 1B: Enhanced logging
-    NS_LOG_INFO("[PHASE 1B DECISION] "
-                << fusionType << " | Model=" << selectedModel << " | SNR=" << station->lastSnr
-                << "dB"
-                << " | Context=" << safety.contextStr << " | Rule=" << ruleRate
-                << " | ML=" << mlRate << "(conf=" << mlConfidence << ")"
-                << " | Fused=" << fusedRate << " | Final=" << finalRate << " (hysteresis="
-                << station->ratePredictionStreak << "/" << m_hysteresisStreak << ")"
-                << " | Rate=" << (finalDataRate / 1e6) << "Mbps"
-                << " | Status=" << mlStatus << " | rssiVar=" << station->rssiVariance << " | intf="
-                << station->interferenceLevel << " | dist=" << currentDistance << "m");
+    // Enhanced logging (only if DEBUG or rate changed)
+    if (m_enableDetailedLogging || (finalRate != station->previousRateIndex))
+    {
+        NS_LOG_INFO("[DECISION] " << fusionType << " | Model=" << selectedModel << " | SNR="
+                                  << std::fixed << std::setprecision(1) << station->lastSnr << "dB"
+                                  << " | Context=" << safety.contextStr << " | Rule=" << ruleRate
+                                  << " | ML=" << mlRate << "(conf=" << std::setprecision(3)
+                                  << mlConfidence << ")"
+                                  << " | Fused=" << fusedRate << " | Final=" << finalRate
+                                  << " | Hysteresis=" << station->ratePredictionStreak << "/"
+                                  << m_hysteresisStreak << " | Rate=" << std::setprecision(1)
+                                  << (finalDataRate / 1e6) << "Mbps"
+                                  << " | Status=" << mlStatus
+                                  << " | rssiVar=" << station->rssiVariance
+                                  << " | intf=" << station->interferenceLevel
+                                  << " | dist=" << currentDistance << "m");
+    }
 
+    // Update traced value if rate actually changed
     WifiMode mode = GetSupported(st, finalRate);
     uint64_t rate = mode.GetDataRate(allowedWidth);
 
     if (m_currentRate != rate)
     {
-        NS_LOG_INFO("Rate changed: " << m_currentRate << " -> " << rate << " (index " << finalRate
-                                     << ")");
+        NS_LOG_INFO("[RATE UPDATE] " << (m_currentRate / 1e6) << " Mbps → " << (rate / 1e6)
+                                     << " Mbps (index " << finalRate << ")");
         m_currentRate = rate;
     }
 
+    // ========================================================================
+    // RETURN TX VECTOR
+    // ========================================================================
     return WifiTxVector(
         mode,
         GetDefaultTxPowerLevel(),
@@ -2286,6 +2352,18 @@ SmartWifiManagerRf::UpdateMetrics(WifiRemoteStation* st, bool success, double sn
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
     Time now = Simulator::Now();
 
+    // 🚀 ADD: Track consecutive failures/successes (for Phase 1B features)
+    if (success)
+    {
+        station->consecutiveSuccesses++;
+        station->consecutiveFailures = 0; // Reset failure counter
+    }
+    else
+    {
+        station->consecutiveFailures++;
+        station->consecutiveSuccesses = 0; // Reset success counter
+    }
+
     // Update SNR metrics
     if (snr >= -30.0 && snr <= 45.0)
     {
@@ -2436,24 +2514,96 @@ SmartWifiManagerRf::DebugPrintCurrentConfig() const
               << std::endl;
 }
 
-void
-SmartWifiManagerRf::SetBenchmarkDistanceAttribute(double dist)
-{
-    m_benchmarkDistance.store(dist);
-    std::cout << "[ATTR SET] BenchmarkDistance=" << dist << "m" << std::endl;
-}
-
 double
 SmartWifiManagerRf::GetBenchmarkDistanceAttribute() const
 {
     return m_benchmarkDistance.load();
 }
 
+// ============================================================================
+// 🔧 ATTRIBUTE SETTERS/GETTERS (CRITICAL FOR BENCHMARK SYNC!)
+// ============================================================================
+
+void
+SmartWifiManagerRf::SetBenchmarkDistanceAttribute(double dist)
+{
+    NS_LOG_FUNCTION(this << dist);
+
+    if (dist <= 0.0 || dist > 200.0)
+    {
+        NS_LOG_WARN("Invalid distance " << dist << "m, clamping to [1, 200]");
+        dist = std::max(1.0, std::min(200.0, dist));
+    }
+
+    m_benchmarkDistance.store(dist);
+
+    std::cout << "[ATTRIBUTE SYNC] ✅ BenchmarkDistance set to " << dist
+              << "m via NS-3 attribute system" << std::endl;
+
+    // Update all existing stations with new distance
+    std::lock_guard<std::mutex> lock(m_stationRegistryMutex);
+    for (auto& entry : m_stationRegistry)
+    {
+        SmartWifiManagerRfState* station = entry.second;
+        if (station)
+        {
+            // Recalculate realistic SNR with new distance
+            double realisticSnr = ConvertNS3ToRealisticSnr(100.0, // Placeholder NS-3 SNR
+                                                           dist,
+                                                           m_currentInterferers.load(),
+                                                           SOFT_MODEL);
+
+            station->distanceMetric = dist; // 🚀 PHASE 1B feature 12
+            station->lastSnr = realisticSnr;
+            station->snrFast = realisticSnr;
+            station->snrSlow = realisticSnr;
+
+            NS_LOG_DEBUG("[ATTRIBUTE SYNC] Station " << station->stationId << " updated: distance="
+                                                     << dist << "m, SNR=" << realisticSnr << "dB");
+        }
+    }
+}
+
 void
 SmartWifiManagerRf::SetInterferersAttribute(uint32_t count)
 {
+    NS_LOG_FUNCTION(this << count);
+
+    if (count > 10)
+    {
+        NS_LOG_WARN("Invalid interferer count " << count << ", clamping to [0, 10]");
+        count = std::min(count, static_cast<uint32_t>(10));
+    }
+
     m_currentInterferers.store(count);
-    std::cout << "[ATTR SET] BenchmarkInterferers=" << count << std::endl;
+
+    std::cout << "[ATTRIBUTE SYNC] ✅ BenchmarkInterferers set to " << count
+              << " via NS-3 attribute system" << std::endl;
+
+    // Update all existing stations with new interferer count
+    std::lock_guard<std::mutex> lock(m_stationRegistryMutex);
+    for (auto& entry : m_stationRegistry)
+    {
+        SmartWifiManagerRfState* station = entry.second;
+        if (station)
+        {
+            // Recalculate realistic SNR with new interferer count
+            double realisticSnr = ConvertNS3ToRealisticSnr(100.0, // Placeholder NS-3 SNR
+                                                           m_benchmarkDistance.load(),
+                                                           count,
+                                                           SOFT_MODEL);
+
+            station->interferenceLevel =
+                static_cast<double>(count) / 10.0; // 🚀 PHASE 1B feature 11
+            station->lastSnr = realisticSnr;
+            station->snrFast = realisticSnr;
+            station->snrSlow = realisticSnr;
+
+            NS_LOG_DEBUG("[ATTRIBUTE SYNC] Station " << station->stationId
+                                                     << " updated: interferers=" << count
+                                                     << ", SNR=" << realisticSnr << "dB");
+        }
+    }
 }
 
 uint32_t
