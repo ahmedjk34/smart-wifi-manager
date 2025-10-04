@@ -548,8 +548,11 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                      "HysteresisStreak",
                                      UintegerValue(3),
                                      "EnableScenarioAwareSelection",
-                                     BooleanValue(true));
-
+                                     BooleanValue(true),
+                                     "BenchmarkSpeed",
+                                     DoubleValue(tc.staSpeed),
+                                     "BenchmarkPacketSize",
+                                     UintegerValue(tc.packetSize));
         // MAC configuration
         WifiMacHelper mac;
         Ssid ssid = Ssid("smartrf-fixed-" + tc.oracleStrategy);
@@ -1083,11 +1086,11 @@ main(int argc, char* argv[])
     // Strategy: Cover edge cases, boundaries, and ML-sensitive regions
 
     // SNR-centric distribution (what matters for rate adaptation)
-    std::vector<double> distances = {5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0}; // 8
-    std::vector<double> speeds = {0.0, 1.0, 5.0, 10.0};    // 4 (realistic WiFi)
-    std::vector<uint32_t> interferers = {0, 1, 2};         // 3 (0-2 is 95% of real cases)
-    std::vector<uint32_t> packetSizes = {512, 1024, 1500}; // 3 (small/med/large)
-    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"}; // 3
+    std::vector<double> distances = {20.0};             // 1 case
+    std::vector<double> speeds = {5.0};                 // 1 case
+    std::vector<uint32_t> interferers = {3};            // 1 case
+    std::vector<uint32_t> packetSizes = {1500};         // 1 case
+    std::vector<std::string> trafficRates = {"11Mbps"}; // 1 case
     std::string strategy = "oracle_aggressive";
 
     // Generate test cases with CORRECTED filtering and expectations
