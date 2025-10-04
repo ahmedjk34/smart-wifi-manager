@@ -556,10 +556,6 @@ SmartWifiManagerRf::ConvertToRealisticSnr(double ns3Snr) const
 }
 
 // ============================================================================
-// 🚀 PERSISTENT SOCKET MANAGEMENT (NO MORE SOCKET CREATION SPAM!)
-// ============================================================================
-
-// ============================================================================
 // 🚀 PHASE 2: SCENARIO-AWARE MODEL SELECTION (PHASE 1B ENHANCED)
 // ============================================================================
 std::string
@@ -575,7 +571,9 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
     double currentDistance = m_benchmarkDistance.load();
     uint32_t currentInterferers = m_currentInterferers.load();
 
-    // CRITICAL FIX: Force SNR recalculation if parameters don't match initialized values
+    // ========================================================================
+    // SNR CORRECTION (keep your existing logic)
+    // ========================================================================
     bool snrIsInitValue = (station->snrSlow > 18.0 && station->snrSlow < 18.5);
     bool paramsChanged = (currentDistance != 20.0 || currentInterferers != 0);
     bool snrTooHighForDistance = (currentDistance > 50.0 && station->snrSlow > 10.0);
@@ -593,121 +591,221 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
     }
 
     // ========================================================================
-    // 🚀 PHASE 1B: ENHANCED DIFFICULTY CALCULATION (5 FACTORS)
-    // ========================================================================
-    // ========================================================================
-    // 🚀 PHASE 1B: ENHANCED DIFFICULTY CALCULATION (5 FACTORS) - FIXED WEIGHTS
+    // 🚀 FIXED: 3-TIER SNR SCORING + OPTIMIZED WEIGHTS
     // ========================================================================
     double difficultyScore = 0.0;
     double avgSnr = station->snrSlow;
 
-    // Factor 1: SNR quality (35% weight) - REDUCED from 40%
+    // Factor 1: SNR quality (50% weight) - INCREASED from 45%
+    // 3-tier system: easy (>18dB), medium (5-18dB), hard (<5dB)
     double snrScore;
     if (avgSnr < 5.0)
     {
         snrScore = 1.0; // Very hard
     }
-    else if (avgSnr > 30.0)
+    else if (avgSnr > 25.0)
     {
         snrScore = 0.0; // Very easy
     }
+    else if (avgSnr > 18.0)
+    {
+        // Good SNR zone: linear interpolation 25→18dB = 0.0→0.2
+        snrScore = 0.2 * (1.0 - (avgSnr - 18.0) / 7.0);
+    }
     else
     {
-        snrScore = std::exp(-(avgSnr - 5.0) / 10.0);
+        // Medium SNR zone: exponential 5→18dB = 1.0→0.2
+        snrScore = 0.2 + 0.8 * std::exp(-(avgSnr - 5.0) / 8.0);
     }
-    difficultyScore += snrScore * 0.35; // Was 0.40
+    double snrContribution = snrScore * 0.50;
+    difficultyScore += snrContribution;
 
-    // Factor 2: Interference level (20% weight) - REDUCED from 25%
-    double intfScore = std::min(1.0, std::pow(static_cast<double>(currentInterferers) / 5.0, 0.8));
-    difficultyScore += intfScore * 0.20; // Was 0.25
+    // Factor 2: Combined Interference (30% weight) - INCREASED from 25%
+    double intfFromCount = std::min(1.0, static_cast<double>(currentInterferers) / 3.0);
+    double combinedIntf = (intfFromCount * 0.6) + (station->interferenceLevel * 0.4);
+    double intfContribution = combinedIntf * 0.30;
+    difficultyScore += intfContribution;
 
-    // Factor 3: 🚀 PHASE 1B - RSSI Variance (20% weight) - INCREASED from 15%
-    double rssiVarianceScore = std::min(1.0, station->rssiVariance / 10.0);
-    difficultyScore += rssiVarianceScore * 0.20; // ✅ Was 0.15
+    // Factor 3: Mobility (10% weight) - REDUCED from 20% per your analysis
+    double mobilityScore = std::min(1.0, station->mobilityMetric / 15.0);
+    double mobilityContribution = mobilityScore * 0.10;
+    difficultyScore += mobilityContribution;
 
-    // Factor 4: 🚀 PHASE 1B - Interference Level from feature (10% weight) - UNCHANGED
-    double measuredIntfScore = station->interferenceLevel;
-    difficultyScore += measuredIntfScore * 0.10;
+    // Factor 4: Signal Stability (10% weight) - UNCHANGED
+    double stabilityScore = std::min(1.0, station->rssiVariance / 8.0);
+    double stabilityContribution = stabilityScore * 0.10;
+    difficultyScore += stabilityContribution;
 
-    // Factor 5: Mobility (25% weight) - INCREASED from 10%
-    double mobilityScore = std::min(1.0, station->mobilityMetric / 20.0);
-    difficultyScore += mobilityScore * 0.25; // ✅ Was 0.10 - FIXED!
+    // TOTAL: 50% + 30% + 10% + 10% = 100% ✅
 
-    // ✅ TOTAL: 35 + 20 + 20 + 10 + 25 = 110% (need to normalize)
-    // Normalize to 100%:
-    difficultyScore = difficultyScore / 1.10; // Divide by 1.10 to normalize
+    // 🚀 DEBUG LOGGING (per your suggestion)
+    NS_LOG_DEBUG("[DEBUG CALC] SNR="
+                 << avgSnr << "dB"
+                 << " → snrScore=" << std::fixed << std::setprecision(3) << snrScore
+                 << " → contrib=" << snrContribution << " | intf=" << combinedIntf
+                 << " → contrib=" << intfContribution << " | mobility=" << station->mobilityMetric
+                 << " → contrib=" << mobilityContribution
+                 << " | stability=" << station->rssiVariance
+                 << " → contrib=" << stabilityContribution << " | TOTAL=" << difficultyScore);
 
     // ========================================================================
-    // ADAPTIVE THRESHOLDS BASED ON PHASE 1B FEATURES
+    // THRESHOLDS + ADAPTIVE ADJUSTMENTS
     // ========================================================================
+    double aggressiveThreshold = 0.25;
+    double conservativeThreshold = 0.60;
 
-    // Base thresholds
-    double aggressiveThreshold = 0.30;   // Below this: use aggressive
-    double conservativeThreshold = 0.65; // Above this: use conservative
-
-    // 🚀 PHASE 1B: Adjust thresholds based on distance
-    // Farther distance = use conservative earlier
+    // Distance adjustments
     if (currentDistance > 70.0)
     {
-        conservativeThreshold = 0.55; // Earlier switch to conservative
+        conservativeThreshold = 0.50;
+        aggressiveThreshold = 0.15;
     }
-    else if (currentDistance < 30.0)
+    else if (currentDistance < 25.0)
     {
-        aggressiveThreshold = 0.35; // Can stay aggressive longer
+        aggressiveThreshold = 0.30; // Slightly more lenient when close
     }
 
-    // 🚀 PHASE 1B: Adjust based on RSSI variance (signal stability)
-    // High variance = need more conservative
+    // Stability adjustments
     if (station->rssiVariance > 5.0)
     {
-        conservativeThreshold = 0.60; // Earlier switch
-        aggressiveThreshold = 0.25;   // Harder to stay aggressive
+        conservativeThreshold = 0.55;
+        aggressiveThreshold = 0.20;
     }
 
-    // Select model based on difficulty with ADAPTIVE thresholds
+    NS_LOG_DEBUG("[DEBUG THRESHOLDS] aggressive=" << aggressiveThreshold
+                                                  << " conservative=" << conservativeThreshold);
+
+    // ========================================================================
+    // PRIMARY SELECTION
+    // ========================================================================
     std::string selectedModel;
 
     if (difficultyScore < aggressiveThreshold)
     {
         selectedModel = "oracle_aggressive";
-        NS_LOG_INFO("[PHASE 2] EASY (score="
-                    << difficultyScore << "/" << aggressiveThreshold << "): SNR=" << avgSnr << "dB"
-                    << ", intf=" << currentInterferers << ", rssiVar=" << station->rssiVariance
-                    << ", dist=" << currentDistance << "m"
-                    << " → oracle_aggressive");
     }
     else if (difficultyScore < conservativeThreshold)
     {
         selectedModel = "oracle_balanced";
-        NS_LOG_INFO("[PHASE 2] MEDIUM (score=" << difficultyScore << "/" << conservativeThreshold
-                                               << "): SNR=" << avgSnr << "dB"
-                                               << ", intf=" << currentInterferers
-                                               << ", rssiVar=" << station->rssiVariance
-                                               << ", dist=" << currentDistance << "m"
-                                               << " → oracle_balanced");
     }
     else
     {
         selectedModel = "oracle_conservative";
-        NS_LOG_INFO("[PHASE 2] HARD (score=" << difficultyScore << " >" << conservativeThreshold
-                                             << "): SNR=" << avgSnr << "dB"
-                                             << ", intf=" << currentInterferers
-                                             << ", rssiVar=" << station->rssiVariance
-                                             << ", dist=" << currentDistance << "m"
-                                             << " → oracle_conservative");
     }
 
-    // 🚀 PHASE 1B: Emergency override based on distance + interference combo
-    // If distance > 80m AND interferers > 3, FORCE conservative
-    if (currentDistance > 80.0 && currentInterferers > 3)
+    NS_LOG_DEBUG("[DEBUG SELECTION] difficulty=" << difficultyScore
+                                                 << " → initial choice: " << selectedModel);
+
+    // ========================================================================
+    // SAFETY OVERRIDES WITH DETAILED LOGGING
+    // ========================================================================
+
+    // Override 1: Never aggressive if SNR < 10dB
+    if (avgSnr < 10.0 && selectedModel != "oracle_conservative")
+    {
+        NS_LOG_WARN("[OVERRIDE 1] SNR=" << avgSnr << "dB (critical) → FORCING conservative");
+        selectedModel = "oracle_conservative";
+    }
+
+    // Override 2: Downgrade aggressive if SNR < 15dB + high interference
+    if (avgSnr < 15.0 && currentInterferers >= 2 && selectedModel == "oracle_aggressive")
+    {
+        NS_LOG_WARN("[OVERRIDE 2] SNR=" << avgSnr << "dB + intf=" << currentInterferers
+                                        << " → DOWNGRADE to balanced");
+        selectedModel = "oracle_balanced";
+    }
+
+    // Override 3: Aggressive only in EXCELLENT conditions
+    if (selectedModel == "oracle_aggressive")
+    {
+        bool excellentSnr = (avgSnr > 24.0);
+        bool lowInterference = (currentInterferers <= 1 && station->interferenceLevel < 0.2);
+        bool notTooFast = (station->mobilityMetric < 10.0);
+        bool stable = (station->rssiVariance < 3.0);
+
+        // 🚀 DETAILED DEBUG LOGGING (per your suggestion)
+        NS_LOG_DEBUG("[OVERRIDE 3 CHECK] excellentSnr="
+                     << excellentSnr << " (" << avgSnr << ">24)"
+                     << " | lowIntf=" << lowInterference << " (count=" << currentInterferers
+                     << ", level=" << station->interferenceLevel << ")"
+                     << " | notFast=" << notTooFast << " (" << station->mobilityMetric << "<10)"
+                     << " | stable=" << stable << " (" << station->rssiVariance << "<3)");
+
+        if (!(excellentSnr && lowInterference && notTooFast && stable))
+        {
+            std::string reason = "";
+            if (!excellentSnr)
+                reason += "SNR_LOW ";
+            if (!lowInterference)
+                reason += "HIGH_INTF ";
+            if (!notTooFast)
+                reason += "TOO_FAST ";
+            if (!stable)
+                reason += "UNSTABLE ";
+
+            NS_LOG_INFO("[OVERRIDE 3] Aggressive conditions NOT met ("
+                        << reason << ") → DOWNGRADE to balanced");
+            selectedModel = "oracle_balanced";
+        }
+        else
+        {
+            NS_LOG_DEBUG("[OVERRIDE 3] Aggressive conditions MET - keeping aggressive");
+        }
+    }
+
+    // Override 4: Emergency override
+    if (currentDistance > 70.0 && currentInterferers >= 3 && station->mobilityMetric > 10.0)
     {
         if (selectedModel != "oracle_conservative")
         {
-            NS_LOG_WARN("[PHASE 2] EMERGENCY: Forcing conservative (dist="
-                        << currentDistance << "m, intf=" << currentInterferers << ")");
+            NS_LOG_WARN("[OVERRIDE 4 EMERGENCY] Extreme conditions "
+                        << "(dist=" << currentDistance << "m, intf=" << currentInterferers
+                        << ", speed=" << station->mobilityMetric << ") → FORCING conservative");
             selectedModel = "oracle_conservative";
         }
     }
+
+    // ========================================================================
+    // 🚀 MODEL SWITCHING HYSTERESIS (per your suggestion)
+    // ========================================================================
+    if (selectedModel != m_currentModelName)
+    {
+        Time now = Simulator::Now();
+
+        // Check if we switched recently
+        if (station->lastModelSwitchTime.IsStrictlyPositive() &&
+            (now - station->lastModelSwitchTime) < MilliSeconds(500))
+        {
+            NS_LOG_DEBUG("[HYSTERESIS] Model switch suppressed "
+                         << "(last switch "
+                         << (now - station->lastModelSwitchTime).GetMilliSeconds()
+                         << "ms ago) - keeping " << m_currentModelName);
+            return m_currentModelName;
+        }
+
+        // Allow switch
+        station->lastModelSwitchTime = now;
+        NS_LOG_INFO("[MODEL SWITCH] " << m_currentModelName << " → " << selectedModel
+                                      << " (difficulty=" << difficultyScore << ")");
+    }
+
+    // ========================================================================
+    // FINAL LOGGING
+    // ========================================================================
+    std::string difficultyLabel;
+    if (difficultyScore < 0.25)
+        difficultyLabel = "EASY";
+    else if (difficultyScore < 0.60)
+        difficultyLabel = "MEDIUM";
+    else
+        difficultyLabel = "HARD";
+
+    NS_LOG_INFO("[PHASE 2 FINAL] "
+                << difficultyLabel << " (score=" << std::fixed << std::setprecision(2)
+                << difficultyScore << "): SNR=" << avgSnr << "dB, intf=" << currentInterferers
+                << ", speed=" << station->mobilityMetric << "m/s"
+                << ", rssiVar=" << station->rssiVariance << ", dist=" << currentDistance << "m → "
+                << selectedModel);
 
     return selectedModel;
 }

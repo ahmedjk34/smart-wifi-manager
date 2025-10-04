@@ -427,6 +427,8 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     uint32_t consecutiveFailures = 0;  // Track consecutive failures (AARF-style)
     uint32_t consecutiveSuccesses = 0; // Track consecutive successes (AARF-style)
 
+    Time lastModelSwitchTime{Seconds(0)}; // Add this line
+
     SmartWifiManagerRfState()
         : stationId(0),
           lastSnr(0.0),
