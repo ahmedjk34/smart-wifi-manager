@@ -278,6 +278,8 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
 
     std::atomic<double> m_benchmarkDistance;
     std::atomic<uint32_t> m_currentInterferers;
+    std::atomic<double> m_benchmarkSpeed;
+    std::atomic<uint32_t> m_benchmarkPacketSize{1200};
 
     std::vector<WifiMode> m_supportedRates;
     bool m_enableDetailedLogging;
@@ -300,6 +302,8 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
 
     double CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState* station,
                                                 WifiContextType context) const;
+
+    double GetBenchmarkSpeedAttribute() const;
 
     // 🚀 PHASE 2: Scenario-aware selection
     bool m_enableScenarioAwareSelection;
@@ -337,6 +341,11 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     double GetBenchmarkDistanceAttribute() const;
     void SetInterferersAttribute(uint32_t count);
     uint32_t GetInterferersAttribute() const;
+
+    void SetBenchmarkSpeed(double speed);
+
+    uint32_t GetBenchmarkPacketSizeAttribute() const;
+    void SetBenchmarkPacketSizeAttribute(uint32_t pktSize);
 };
 
 /**

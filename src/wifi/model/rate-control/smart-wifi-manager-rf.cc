@@ -108,6 +108,25 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+uint8_t
+EstimateOptimalRate(double snr)
+{
+    // Rule-based optimal rate for comparison
+    if (snr > 25)
+        return 7; // 54 Mbps
+    if (snr > 18)
+        return 6; // 48 Mbps
+    if (snr > 15)
+        return 5; // 36 Mbps
+    if (snr > 12)
+        return 4; // 24 Mbps
+    if (snr > 8)
+        return 3; // 18 Mbps
+    if (snr > 5)
+        return 2; // 12 Mbps
+    return 1;     // 6 Mbps
+}
+
 namespace ns3
 {
 
@@ -312,7 +331,20 @@ SmartWifiManagerRf::GetTypeId()
                           UintegerValue(0),
                           MakeUintegerAccessor(&SmartWifiManagerRf::SetInterferersAttribute,
                                                &SmartWifiManagerRf::GetInterferersAttribute),
-                          MakeUintegerChecker<uint32_t>());
+                          MakeUintegerChecker<uint32_t>())
+            .AddAttribute("BenchmarkSpeed",
+                          "Initial benchmark speed (meters/sec) - set via attributes",
+                          DoubleValue(0.0),
+                          MakeDoubleAccessor(&SmartWifiManagerRf::SetBenchmarkSpeed,
+                                             &SmartWifiManagerRf::GetBenchmarkSpeedAttribute),
+                          MakeDoubleChecker<double>())
+            .AddAttribute(
+                "BenchmarkPacketSize",
+                "Packet size for this test (bytes)",
+                UintegerValue(1200),
+                MakeUintegerAccessor(&SmartWifiManagerRf::SetBenchmarkPacketSizeAttribute,
+                                     &SmartWifiManagerRf::GetBenchmarkPacketSizeAttribute),
+                MakeUintegerChecker<uint32_t>());
     return tid;
 }
 
@@ -349,6 +381,7 @@ SmartWifiManagerRf::SmartWifiManagerRf()
       m_snrOffset(0.0),
       m_enableDetailedLogging(true),
       m_nextStationId(1),
+      m_benchmarkSpeed(0.0),
 
       m_hysteresisStreak(3),                  // 🚀 PHASE 3
       m_enableScenarioAwareSelection(true),   // 🚀 PHASE 2
@@ -402,20 +435,34 @@ SmartWifiManagerRf::DoInitialize()
         NS_FATAL_ERROR("SmartWifiManagerRf does not support HT/VHT/HE modes");
     }
 
-    // 🚀 FIX: Track total managers
     static std::atomic<uint32_t> g_totalManagers{0};
-    uint32_t managerCount = g_totalManagers.fetch_add(1);
+    static std::atomic<uint32_t> g_managersThisTest{0};
+    static bool g_testStarted = false;
 
-    std::cout << "[INIT #" << managerCount << "] Model: " << m_modelName
-              << " | Strategy: " << m_oracleStrategy << std::endl;
-
-    // 🚀 FIX: Warn if too many managers
-    if (managerCount > 10)
+    // Reset counter at start of each test
+    if (!g_testStarted)
     {
-        NS_LOG_WARN("WARNING: " << managerCount
-                                << " SmartWifiManagerRf instances created! Memory leak suspected!");
+        g_managersThisTest.store(0);
+        g_testStarted = true;
     }
 
+    uint32_t managerCount = g_totalManagers.fetch_add(1);
+    uint32_t testManagerCount = g_managersThisTest.fetch_add(1);
+
+    if (testManagerCount == 1)
+    {
+        // First manager of this test - print banner
+        std::cout << "🚀 SmartWifiManagerRf v8.0 - PHASE 1B COMPLETE" << std::endl;
+        // ... rest of banner
+    }
+
+    if (testManagerCount > 4)
+    {
+        NS_LOG_ERROR(
+            "⚠️ WARNING: "
+            << testManagerCount << " managers created in THIS TEST! "
+            << "Expected ≤ 4 (1 STA + 1 AP + interferers). Rate changes will be inflated!");
+    }
     WifiRemoteStationManager::DoInitialize();
 }
 
@@ -477,7 +524,19 @@ SmartWifiManagerRf::DoCreateStation() const
     // station->packetsSinceRateChange = 0;
 
     // 🚀 PHASE 1B: Initialize new features (4 features)
-    station->rssiVariance = 0.1;
+    // Calculate realistic initial variance based on distance
+    if (currentDistance > 70.0)
+    {
+        station->rssiVariance = 8.0; // High variance at far distances
+    }
+    else if (currentDistance > 40.0)
+    {
+        station->rssiVariance = 4.0; // Medium variance
+    }
+    else
+    {
+        station->rssiVariance = 1.0; // Low variance when close
+    }
     station->interferenceLevel = 0.0;
     station->distanceMetric = m_benchmarkDistance.load();
     station->avgPacketSize = 1200.0; // Default MTU
@@ -1319,6 +1378,21 @@ SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
     result.latencyMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
+    // After extracting features, BEFORE sending to server:
+    std::cout << "🔍 [ML DEBUG] Sending features to model:" << std::endl;
+    std::cout << "   SNR: [" << features[0] << ", " << features[1] << ", " << features[2] << "]"
+              << std::endl;
+    std::cout << "   Trend: " << features[3] << " | Stability: " << features[4] << std::endl;
+    std::cout << "   Interference: " << features[11] << " | Distance: " << features[12]
+              << std::endl;
+    std::cout << "   Mobility: " << features[7] << std::endl;
+    std::cout << "   Expected Rate (SNR " << features[0]
+              << "dB): " << EstimateOptimalRate(features[0]) << std::endl;
+
+    // After getting ML result:
+    std::cout << "   ML Predicted: Rate " << result.rateIdx << " (confidence: " << result.confidence
+              << ")" << std::endl;
+
     return result;
 }
 
@@ -1904,6 +1978,20 @@ SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWid
     // ========================================================================
     uint32_t finalRate = ApplyHysteresis(station, station->currentRateIndex, fusedRate);
 
+    if (finalRate != mlRate)
+    {
+        NS_LOG_WARN("[HYSTERESIS SUPPRESSED] ML wanted rate "
+                    << (uint32_t)mlRate << " but staying at " << (uint32_t)finalRate << " (streak="
+                    << station->ratePredictionStreak << "/" << m_hysteresisStreak << ")");
+    }
+    else if (finalRate != station->currentRateIndex)
+    {
+        NS_LOG_INFO("[HYSTERESIS CONFIRMED] Rate change: "
+                    << (uint32_t)station->currentRateIndex << " → " << (uint32_t)finalRate
+                    << " (streak=" << station->ratePredictionStreak << " ≥ " << m_hysteresisStreak
+                    << ")");
+    }
+
     // ========================================================================
     // STAGE 4B: ML FAILURE DETECTION AND EMERGENCY FALLBACK
     // ========================================================================
@@ -2118,13 +2206,8 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     station->totalPackets++;
     station->successfulPackets++;
 
-    // 🚀 PHASE 1B: Update interferenceLevel (feature 11)
-    // Success reduces interference estimate (exponential decay)
-    station->interferenceLevel = 0.95 * station->interferenceLevel;
-
-    // 🚀 PHASE 1B: Update average packet size (feature 13)
-    // Track actual packet sizes if available (future enhancement)
-    // For now, keep at default 1200 bytes
+    // 🚀 FIX: Success reduces interference estimate (channel is clear)
+    station->interferenceLevel = std::max(0.0, station->interferenceLevel * 0.95);
 
     UpdateMetrics(st, true, realisticDataSnr);
 }
@@ -2141,19 +2224,8 @@ SmartWifiManagerRf::DoReportDataFailed(WifiRemoteStation* st)
     station->lostPackets++;
     station->failedPackets++;
 
-    // 🚀 PHASE 1B: Update interferenceLevel (feature 11) from failures
-    // Failed packets suggest interference/collisions
-    // Use exponential moving average to track collision rate
-    if (station->totalPackets > 0)
-    {
-        double failureRate = static_cast<double>(station->failedPackets) / station->totalPackets;
-
-        // Update interference level (blend current failure rate with history)
-        station->interferenceLevel = 0.8 * station->interferenceLevel + 0.2 * failureRate;
-
-        // Clamp to [0, 1]
-        station->interferenceLevel = std::min(1.0, std::max(0.0, station->interferenceLevel));
-    }
+    // 🚀 FIX: Failure suggests interference/collision
+    // Update via UpdateEnhancedFeatures() which now properly calculates interference
 
     UpdateMetrics(st, false, station->lastSnr);
 }
@@ -2230,26 +2302,24 @@ SmartWifiManagerRf::UpdateEnhancedFeatures(SmartWifiManagerRfState* station)
     NS_LOG_FUNCTION(this << station);
 
     // ========================================================================
-    // PHASE 1A: SAFE FEATURES (2 features) - ENHANCED WITH CONSECUTIVE TRACKING
+    // PHASE 1A: SAFE FEATURES (2 features) - ENHANCED
     // ========================================================================
 
-    // Feature 8: Retry Rate (from MAC layer stats + consecutive failures)
+    // Feature 8: Retry Rate
     if (station->totalPackets > 0)
     {
         double baseFailureRate =
             static_cast<double>(station->failedPackets) / station->totalPackets;
 
-        // ✅ ENHANCEMENT 1: Amplify retry rate if we have recent consecutive failures
-        // This captures AARF-style granularity (bursty loss detection)
         double consecutiveFailureBoost = 1.0;
         if (station->consecutiveFailures >= 5)
         {
-            consecutiveFailureBoost = 2.0; // Severe recent failures → amplify 2x
+            consecutiveFailureBoost = 2.0;
             NS_LOG_DEBUG("[ENHANCE] 5+ consecutive failures → retryRate boost 2.0x");
         }
         else if (station->consecutiveFailures >= 3)
         {
-            consecutiveFailureBoost = 1.5; // Moderate recent failures → amplify 1.5x
+            consecutiveFailureBoost = 1.5;
             NS_LOG_DEBUG("[ENHANCE] 3+ consecutive failures → retryRate boost 1.5x");
         }
 
@@ -2260,21 +2330,18 @@ SmartWifiManagerRf::UpdateEnhancedFeatures(SmartWifiManagerRfState* station)
         station->retryRate = 0.0;
     }
 
-    // Feature 9: Frame Error Rate (from PHY layer stats + exponential decay)
+    // Feature 9: Frame Error Rate (EWMA)
     if (station->totalPackets > 0)
     {
         double currentErrorRate =
             std::min(1.0, static_cast<double>(station->lostPackets) / station->totalPackets);
 
-        // ✅ ENHANCEMENT 2: Use exponential moving average (gives more weight to recent errors)
-        // This prevents stale error rates from influencing decisions
         if (station->frameErrorRate == 0.0)
         {
-            station->frameErrorRate = currentErrorRate; // First time initialization
+            station->frameErrorRate = currentErrorRate;
         }
         else
         {
-            // EWMA with alpha=0.3 (30% current, 70% history)
             station->frameErrorRate = 0.3 * currentErrorRate + 0.7 * station->frameErrorRate;
         }
     }
@@ -2284,15 +2351,62 @@ SmartWifiManagerRf::UpdateEnhancedFeatures(SmartWifiManagerRfState* station)
     }
 
     // ========================================================================
-    // PHASE 1B: NEW FEATURES (4 features) - ENHANCED WITH BETTER ALGORITHMS
+    // 🚀 CRITICAL FIX #1: INTERFERENCE LEVEL CALCULATION
     // ========================================================================
 
-    // Feature 10: RSSI Variance (from SNR history) - ENHANCED WITH WELFORD'S ALGORITHM
+    // Method 1: Use interferer count directly (MOST RELIABLE)
+    uint32_t currentInterferers = m_currentInterferers.load();
+    double interfererBasedLevel = std::min(1.0, currentInterferers / 3.0);
+
+    // Method 2: Use SNR degradation as interference indicator
+    double expectedSnr =
+        ConvertNS3ToRealisticSnr(100.0, m_benchmarkDistance.load(), currentInterferers, SOFT_MODEL);
+    double snrDegradation = std::max(0.0, expectedSnr - station->snrSlow);
+    double degradationBasedLevel = std::min(1.0, snrDegradation / 20.0);
+
+    // Method 3: Use failure rate as interference proxy
+    double failureBasedLevel = 0.0;
+    if (station->totalPackets > 0)
+    {
+        failureBasedLevel =
+            std::min(1.0, static_cast<double>(station->failedPackets) / station->totalPackets);
+    }
+
+    // Blend all three methods (60% interferer count, 25% SNR, 15% failures)
+    double blendedInterference =
+        (interfererBasedLevel * 0.60) + (degradationBasedLevel * 0.25) + (failureBasedLevel * 0.15);
+
+    // Apply EWMA for stability
+    if (station->interferenceLevel == 0.0)
+    {
+        station->interferenceLevel = blendedInterference;
+    }
+    else
+    {
+        station->interferenceLevel = 0.25 * blendedInterference + 0.75 * station->interferenceLevel;
+    }
+
+    // Boost on consecutive failures
+    if (station->consecutiveFailures >= 3)
+    {
+        double recentBurst = std::min(1.0, station->consecutiveFailures / 10.0);
+        station->interferenceLevel = std::max(station->interferenceLevel, recentBurst);
+    }
+
+    station->interferenceLevel = std::min(1.0, std::max(0.0, station->interferenceLevel));
+
+    NS_LOG_DEBUG("[FIX] Interference: interferers="
+                 << currentInterferers << " → direct=" << interfererBasedLevel
+                 << ", SNR_deg=" << degradationBasedLevel << ", failures=" << failureBasedLevel
+                 << " → FINAL=" << station->interferenceLevel);
+
+    // ========================================================================
+    // PHASE 1B: RSSI Variance (Welford's algorithm)
+    // ========================================================================
     if (station->snrHistory.size() >= 3)
     {
-        // ✅ ENHANCEMENT 3: Use Welford's algorithm (numerically stable variance calculation)
         double mean = 0.0;
-        double M2 = 0.0; // Sum of squared differences from mean
+        double M2 = 0.0;
 
         size_t count = 0;
         for (double snr : station->snrHistory)
@@ -2306,120 +2420,46 @@ SmartWifiManagerRf::UpdateEnhancedFeatures(SmartWifiManagerRfState* station)
 
         double variance = (count > 1) ? M2 / count : 0.0;
 
-        // ✅ ENHANCEMENT 4: Use exponential smoothing to prevent sudden jumps
         if (station->rssiVariance == 0.0)
         {
-            station->rssiVariance = variance; // First time
+            station->rssiVariance = variance;
         }
         else
         {
-            // EWMA with alpha=0.2 (20% current, 80% history)
             station->rssiVariance = 0.2 * variance + 0.8 * station->rssiVariance;
         }
     }
     else if (station->snrHistory.size() > 0)
     {
-        // Not enough samples for variance, use a small default
-        station->rssiVariance = 0.5; // Small variance assumption
+        station->rssiVariance = 0.5;
     }
     else
     {
         station->rssiVariance = 0.0;
     }
 
-    // Feature 11: Interference Level (from collision tracking) - ENHANCED WITH TIME DECAY
-    if (station->totalPackets > 0)
-    {
-        double currentFailureRate =
-            std::min(1.0, static_cast<double>(station->failedPackets) / station->totalPackets);
-
-        // ✅ ENHANCEMENT 5: Blend current failure rate with history using EWMA
-        // This prevents stale interference estimates
-        if (station->interferenceLevel == 0.0)
-        {
-            station->interferenceLevel = currentFailureRate; // First time
-        }
-        else
-        {
-            // EWMA with alpha=0.25 (25% current, 75% history)
-            station->interferenceLevel =
-                0.25 * currentFailureRate + 0.75 * station->interferenceLevel;
-        }
-
-        // ✅ ENHANCEMENT 6: Boost interference if consecutive failures detected
-        // (Recent failures suggest current interference, not past)
-        if (station->consecutiveFailures >= 3)
-        {
-            double recentBurst = std::min(1.0, station->consecutiveFailures / 10.0);
-            station->interferenceLevel = std::max(station->interferenceLevel, recentBurst);
-            NS_LOG_DEBUG("[ENHANCE] Consecutive failures boost interferenceLevel to "
-                         << station->interferenceLevel);
-        }
-
-        // Clamp to [0, 1]
-        station->interferenceLevel = std::min(1.0, std::max(0.0, station->interferenceLevel));
-    }
-    else
-    {
-        station->interferenceLevel = 0.0;
-    }
-
-    // Feature 12: Distance Metric (from global benchmark) - ENHANCED WITH SANITY CHECK
+    // ========================================================================
+    // PHASE 1B: Distance Metric (with validation)
+    // ========================================================================
     double currentDistance = m_benchmarkDistance.load();
-
-    // ✅ ENHANCEMENT 7: Sanity check distance (prevent unrealistic values)
     if (currentDistance <= 0.0 || currentDistance > 200.0)
     {
         NS_LOG_WARN("[ENHANCE] Invalid distance " << currentDistance << "m, clamping to [1, 200]");
         currentDistance = std::max(1.0, std::min(200.0, currentDistance));
     }
-
     station->distanceMetric = currentDistance;
 
-    // Feature 13: Average Packet Size - ENHANCED WITH ACTUAL TRACKING
-    // ✅ ENHANCEMENT 8: Track actual packet sizes (if available from MAC layer)
-    // For now, use adaptive estimate based on rate and conditions
-
-    // Heuristic: Higher rates → larger packets (likely bulk transfer)
-    //           Lower rates → smaller packets (likely control/ACK)
-    double estimatedPacketSize = 1200.0; // Default MTU
-
-    if (station->currentRateIndex >= 6)
-    {
-        // High rates (48-54 Mbps): likely bulk transfer
-        estimatedPacketSize = 1400.0; // Near MTU
-    }
-    else if (station->currentRateIndex >= 4)
-    {
-        // Medium rates (18-36 Mbps): mixed traffic
-        estimatedPacketSize = 1200.0; // Default
-    }
-    else
-    {
-        // Low rates (6-12 Mbps): likely control packets
-        estimatedPacketSize = 800.0; // Smaller packets
-    }
-
-    // EWMA to smooth packet size estimate
-    if (station->avgPacketSize == 0.0)
-    {
-        station->avgPacketSize = estimatedPacketSize;
-    }
-    else
-    {
-        station->avgPacketSize = 0.1 * estimatedPacketSize + 0.9 * station->avgPacketSize;
-    }
+    // ========================================================================
+    // PHASE 1B: Average Packet Size (adaptive estimate)
+    // ========================================================================
+    station->avgPacketSize = static_cast<double>(m_benchmarkPacketSize.load());
 
     // ========================================================================
-    // 🚀 NEW: CONSECUTIVE FAILURE/SUCCESS DECAY
+    // Consecutive counter decay
     // ========================================================================
-
-    // ✅ ENHANCEMENT 9: Decay consecutive counters over time
-    // (Prevents old failures from affecting current decisions)
     Time now = Simulator::Now();
     Time timeSinceLastUpdate = now - station->lastUpdateTime;
 
-    // If more than 1 second has passed, decay consecutive counters
     if (timeSinceLastUpdate > Seconds(1.0))
     {
         station->consecutiveFailures = 0;
@@ -2427,16 +2467,10 @@ SmartWifiManagerRf::UpdateEnhancedFeatures(SmartWifiManagerRfState* station)
         NS_LOG_DEBUG("[ENHANCE] Decayed consecutive counters (>1s since last update)");
     }
 
-    // ========================================================================
-    // ENHANCED LOGGING
-    // ========================================================================
-
-    NS_LOG_DEBUG("[PHASE 1B ENHANCED] Features updated: "
-                 << "retry=" << station->retryRate
-                 << " (conseqFail=" << station->consecutiveFailures << ")"
-                 << " error=" << station->frameErrorRate << " rssiVar=" << station->rssiVariance
-                 << " intf=" << station->interferenceLevel
-                 << " (conseqFail=" << station->consecutiveFailures << ")"
+    NS_LOG_DEBUG("[PHASE 1B FIXED] Features updated: "
+                 << "retry=" << station->retryRate << " error=" << station->frameErrorRate
+                 << " rssiVar=" << station->rssiVariance << " intf=" << station->interferenceLevel
+                 << " ← FIXED!"
                  << " dist=" << station->distanceMetric << " pktSize=" << station->avgPacketSize);
 }
 
@@ -2530,59 +2564,37 @@ SmartWifiManagerRf::GetSnrPredictionConfidence(WifiRemoteStation* st) const
     return std::max(0.0, std::min(1.0, stabilityFactor));
 }
 
+// Add this function anywhere in the implementation:
+void
+SmartWifiManagerRf::SetBenchmarkSpeed(double speed)
+{
+    if (speed < 0.0 || speed > 50.0)
+    {
+        NS_LOG_WARN("Invalid speed " << speed << " m/s, clamping to [0, 50]");
+        speed = std::max(0.0, std::min(50.0, speed));
+    }
+    m_benchmarkSpeed.store(speed);
+    NS_LOG_INFO("[CONFIG] Speed updated to " << speed << " m/s");
+}
+
+// Update GetMobilityMetric to use it:
 double
 SmartWifiManagerRf::GetMobilityMetric(WifiRemoteStation* st) const
 {
-    NS_LOG_FUNCTION(this << st);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
-    // FIXED: Get actual node speed from MobilityModel (NOT SNR variance!)
-    Ptr<WifiPhy> phy = GetPhy();
-    if (phy == nullptr)
-    {
-        NS_LOG_WARN("No PHY available, using fallback mobility metric");
-        station->mobilityMetric = 0.0;
-        return 0.0;
-    }
+    // Get configured speed from benchmark
+    double configuredSpeed = m_benchmarkSpeed.load();
 
-    Ptr<NetDevice> device = phy->GetDevice();
-    if (device == nullptr)
-    {
-        NS_LOG_WARN("No device available, using fallback mobility metric");
-        station->mobilityMetric = 0.0;
-        return 0.0;
-    }
+    // 🚀 FIX: Return RAW speed (0-50 m/s), NOT normalized!
+    // The Python model expects raw m/s values, not 0-1 normalized
 
-    Ptr<Node> node = device->GetNode();
-    if (node == nullptr)
-    {
-        NS_LOG_WARN("No node available, using fallback mobility metric");
-        station->mobilityMetric = 0.0;
-        return 0.0;
-    }
+    // Optionally blend with RSSI variance for robustness
+    double varianceProxy = std::min(50.0, station->rssiVariance * 5.0);
+    double blended = (configuredSpeed * 0.85) + (varianceProxy * 0.15);
 
-    // Get MobilityModel from node
-    Ptr<MobilityModel> mobility = node->GetObject<MobilityModel>();
-    if (mobility == nullptr)
-    {
-        NS_LOG_DEBUG("No MobilityModel found, assuming stationary (speed = 0)");
-        station->mobilityMetric = 0.0;
-        return 0.0;
-    }
-
-    // Calculate actual speed from velocity vector
-    Vector velocity = mobility->GetVelocity();
-    double speed =
-        std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-
-    // Clamp speed to reasonable range (0-50 m/s)
-    speed = std::max(0.0, std::min(50.0, speed));
-
-    station->mobilityMetric = speed;
-
-    NS_LOG_DEBUG("Mobility metric calculated: speed=" << speed << " m/s");
-
-    return speed;
+    // Clamp to valid range
+    return std::min(50.0, std::max(0.0, blended));
 }
 
 void
@@ -2616,6 +2628,26 @@ double
 SmartWifiManagerRf::GetBenchmarkDistanceAttribute() const
 {
     return m_benchmarkDistance.load();
+}
+
+void
+SmartWifiManagerRf::SetBenchmarkPacketSizeAttribute(uint32_t pktSize)
+{
+    NS_LOG_FUNCTION(this << pktSize);
+    if (pktSize < 100 || pktSize > 3000)
+    {
+        NS_LOG_WARN("Invalid packet size " << pktSize << " bytes, clamping to [100, 3000]");
+        pktSize = std::max(100u, std::min(3000u, pktSize));
+    }
+    m_benchmarkPacketSize.store(pktSize);
+    std::cout << "[ATTRIBUTE SYNC] ✅ BenchmarkPacketSize set to " << pktSize
+              << " bytes via NS-3 attribute system" << std::endl;
+}
+
+uint32_t
+SmartWifiManagerRf::GetBenchmarkPacketSizeAttribute() const
+{
+    return m_benchmarkPacketSize.load();
 }
 
 // ============================================================================
@@ -2708,6 +2740,12 @@ uint32_t
 SmartWifiManagerRf::GetInterferersAttribute() const
 {
     return m_currentInterferers.load();
+}
+
+double
+SmartWifiManagerRf::GetBenchmarkSpeedAttribute() const
+{
+    return m_benchmarkSpeed.load();
 }
 
 } // namespace ns3
