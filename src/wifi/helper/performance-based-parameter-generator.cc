@@ -416,20 +416,49 @@ PerformanceBasedParameterGenerator::GenerateForceHighRateScenario(uint32_t index
 double
 PerformanceBasedParameterGenerator::CalculateDistanceForSnr(double targetSnr, uint32_t interferers)
 {
-    // FIX: Subtract interference BEFORE calculating distance
-    double adjustedSnr = targetSnr - (interferers * 2.0);
+    // ============================================================================
+    // CRITICAL FIX: Compensate for interference subtraction at runtime
+    // ============================================================================
+    double compensatedSnr = targetSnr + (interferers * 2.0);
 
     double distance;
-    if (adjustedSnr >= 35.0)
-        distance = 1.0;
-    else if (adjustedSnr > 19.0)
-        distance = (35.0 - adjustedSnr) / 0.8;
-    else if (adjustedSnr > 4.0)
-        distance = 20.0 + (19.0 - adjustedSnr) / 0.5;
+
+    // Inverse of SOFT_MODEL branches
+    if (compensatedSnr >= 35.0)
+    {
+        // ✅ FIX: For SNR ≥ 35 dB, use the exact inverse formula
+        // SOFT_MODEL: realisticSnr = 35.0 - (distance * 0.8)
+        // Inverse: distance = (35.0 - realisticSnr) / 0.8
+        // For compensatedSnr = 35.0: distance = 0.0 (impossible)
+        // For compensatedSnr > 35.0: distance would be negative (impossible)
+        // Solution: Clamp to minimum realistic distance
+        distance = std::max(0.5, (35.0 - compensatedSnr) / 0.8);
+    }
+    else if (compensatedSnr > 19.0)
+    {
+        // Branch 1: distance range [1.0, 20.0]
+        distance = (35.0 - compensatedSnr) / 0.8;
+    }
+    else if (compensatedSnr > 4.0)
+    {
+        // Branch 2: realisticSnr = 19.0 - ((distance - 20.0) * 0.5)
+        // Inverse: distance = 20.0 + (19.0 - realisticSnr) / 0.5
+        distance = 20.0 + (19.0 - compensatedSnr) / 0.5;
+    }
+    else if (compensatedSnr > -11.0)
+    {
+        // Branch 3: realisticSnr = 4.0 - ((distance - 50.0) * 0.3)
+        // Inverse: distance = 50.0 + (4.0 - realisticSnr) / 0.3
+        distance = 50.0 + (4.0 - compensatedSnr) / 0.3;
+    }
     else
-        distance = 50.0 + (4.0 - adjustedSnr) / 0.3;
+    {
+        // Branch 4: realisticSnr = -11.0 - ((distance - 100.0) * 0.2)
+        // Inverse: distance = 100.0 + (-11.0 - realisticSnr) / 0.2
+        distance = 100.0 + (-11.0 - compensatedSnr) / 0.2;
+    }
 
-    return std::clamp(distance, 1.0, 80.0);
+    // Clamp to safe range
+    return std::clamp(distance, 0.5, 200.0);
 }
-
 } // namespace ns3

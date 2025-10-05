@@ -41,6 +41,8 @@ class PerformanceBasedParameterGenerator
 
   public:
     std::vector<ScenarioParams> GenerateStratifiedScenarios(uint32_t totalScenarios = 200);
+    // Utility
+    double CalculateDistanceForSnr(double targetSnr, uint32_t interferers);
 
   private:
     // Scenario generators
@@ -54,9 +56,6 @@ class PerformanceBasedParameterGenerator
     ScenarioParams GenerateRandomChaosScenario(uint32_t index);
     ScenarioParams GenerateExcellentPerformanceScenario(uint32_t index);
     ScenarioParams GenerateForceHighRateScenario(uint32_t index);
-
-    // Utility
-    double CalculateDistanceForSnr(double targetSnr, uint32_t interferers);
 };
 
 } // namespace ns3
