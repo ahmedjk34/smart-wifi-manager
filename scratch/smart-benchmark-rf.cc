@@ -1143,7 +1143,7 @@ main(int argc, char* argv[])
     // std::vector<uint32_t> packetSizes = {512, 1500};                       // 2 points
     // std::vector<std::string> trafficRates = {"2Mbps", "11Mbps", "54Mbps"}; // 3 points
     std::vector<double> distances = {5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0}; // 8
-    std::vector<double> speeds = {0.0, 1.0, 5.0, 10.0};                              // 4
+    std::vector<double> speeds = {5.0, 10.0};                                        // 4
     std::vector<uint32_t> interferers = {0, 1, 2};                                   // 3
     std::vector<uint32_t> packetSizes = {512, 1024, 1500};                           // 3
     std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};           // 3
