@@ -617,11 +617,10 @@ SmartWifiManagerRf::ConvertToRealisticSnr(double ns3Snr) const
 // ============================================================================
 // 🚀 PHASE 2: SCENARIO-AWARE MODEL SELECTION (PHASE 1B ENHANCED)
 // ============================================================================
+
 std::string
 SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
 {
-    NS_LOG_FUNCTION(this << station);
-
     if (!m_enableScenarioAwareSelection)
     {
         return m_oracleStrategy;
@@ -630,14 +629,15 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
     double currentDistance = m_benchmarkDistance.load();
     uint32_t currentInterferers = m_currentInterferers.load();
 
-    // ========================================================================
-    // SNR CORRECTION (keep your existing logic)
-    // ========================================================================
-    bool snrIsInitValue = (station->snrSlow > 18.0 && station->snrSlow < 18.5);
+    // SNR correction (keep existing logic)
+    bool snrIsStale = (station->snrSlow > 18.0 && station->snrSlow < 18.5);
     bool paramsChanged = (currentDistance != 20.0 || currentInterferers != 0);
-    bool snrTooHighForDistance = (currentDistance > 50.0 && station->snrSlow > 10.0);
 
-    if ((snrIsInitValue && paramsChanged) || snrTooHighForDistance)
+    // 🚀 FIX: More precise staleness detection
+    double maxExpectedSnr = ConvertNS3ToRealisticSnr(100.0, currentDistance, 0, SOFT_MODEL) + 5.0;
+    bool snrImpossiblyHigh = (station->snrSlow > maxExpectedSnr);
+
+    if ((snrIsStale && paramsChanged) || snrImpossiblyHigh)
     {
         double realisticSnr =
             ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers, SOFT_MODEL);
@@ -645,75 +645,65 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
         station->snrFast = realisticSnr;
         station->snrSlow = realisticSnr;
 
-        NS_LOG_INFO("[PHASE 2] Corrected stale SNR: " << station->snrSlow << " → " << realisticSnr
-                                                      << " dB");
+        NS_LOG_INFO("[MODEL SELECT] Corrected stale SNR: " << station->snrSlow << " → "
+                                                           << realisticSnr << " dB (distance="
+                                                           << currentDistance << "m)");
     }
 
     // ========================================================================
-    // 🚀 FIXED: 3-TIER SNR SCORING + OPTIMIZED WEIGHTS
+    // DIFFICULTY SCORING (with better documentation)
     // ========================================================================
     double difficultyScore = 0.0;
     double avgSnr = station->snrSlow;
 
-    // Factor 1: SNR quality (50% weight) - INCREASED from 45%
-    // 3-tier system: easy (>18dB), medium (5-18dB), hard (<5dB)
+    // Factor 1: SNR Quality (50% weight)
+    // Rationale: SNR is the dominant factor in rate selection
     double snrScore;
     if (avgSnr < 5.0)
     {
-        snrScore = 1.0; // Very hard
+        snrScore = 1.0; // Very hard - near minimum sensitivity
     }
     else if (avgSnr > 25.0)
     {
-        snrScore = 0.0; // Very easy
+        snrScore = 0.0; // Excellent - any rate will work
     }
     else if (avgSnr > 18.0)
     {
-        // Good SNR zone: linear interpolation 25→18dB = 0.0→0.2
+        // Good zone: 18-25 dB (linear interpolation)
         snrScore = 0.2 * (1.0 - (avgSnr - 18.0) / 7.0);
     }
     else
     {
-        // Medium SNR zone: exponential 5→18dB = 1.0→0.2
+        // Challenging zone: 5-18 dB (exponential - harder below 10 dB)
         snrScore = 0.2 + 0.8 * std::exp(-(avgSnr - 5.0) / 8.0);
     }
-    double snrContribution = snrScore * 0.50;
-    difficultyScore += snrContribution;
+    difficultyScore += snrScore * 0.50;
 
-    // Factor 2: Combined Interference (30% weight) - INCREASED from 25%
+    // Factor 2: Combined Interference (30% weight)
+    // Rationale: Interference directly impacts packet loss, needs high weight
     double intfFromCount = std::min(1.0, static_cast<double>(currentInterferers) / 3.0);
     double combinedIntf = (intfFromCount * 0.6) + (station->interferenceLevel * 0.4);
-    double intfContribution = combinedIntf * 0.30;
-    difficultyScore += intfContribution;
+    difficultyScore += combinedIntf * 0.30;
 
-    // Factor 3: Mobility (10% weight) - REDUCED from 20% per your analysis
+    // Factor 3: Mobility (10% weight)
+    // Rationale: Normalized to 15 m/s because that's the practical upper limit
+    // for meaningful WiFi rate adaptation (>15 m/s = always use conservative rates)
+    // 🚀 FIX: Document why 15.0 is used
     double mobilityScore = std::min(1.0, station->mobilityMetric / 15.0);
-    double mobilityContribution = mobilityScore * 0.10;
-    difficultyScore += mobilityContribution;
+    difficultyScore += mobilityScore * 0.10;
 
-    // Factor 4: Signal Stability (10% weight) - UNCHANGED
+    // Factor 4: Signal Stability (10% weight)
+    // Rationale: Unstable signal makes predictions unreliable
     double stabilityScore = std::min(1.0, station->rssiVariance / 8.0);
-    double stabilityContribution = stabilityScore * 0.10;
-    difficultyScore += stabilityContribution;
-
-    // TOTAL: 50% + 30% + 10% + 10% = 100% ✅
-
-    // 🚀 DEBUG LOGGING (per your suggestion)
-    NS_LOG_DEBUG("[DEBUG CALC] SNR="
-                 << avgSnr << "dB"
-                 << " → snrScore=" << std::fixed << std::setprecision(3) << snrScore
-                 << " → contrib=" << snrContribution << " | intf=" << combinedIntf
-                 << " → contrib=" << intfContribution << " | mobility=" << station->mobilityMetric
-                 << " → contrib=" << mobilityContribution
-                 << " | stability=" << station->rssiVariance
-                 << " → contrib=" << stabilityContribution << " | TOTAL=" << difficultyScore);
+    difficultyScore += stabilityScore * 0.10;
 
     // ========================================================================
-    // THRESHOLDS + ADAPTIVE ADJUSTMENTS
+    // THRESHOLDS (with adaptive adjustments)
     // ========================================================================
     double aggressiveThreshold = 0.25;
     double conservativeThreshold = 0.60;
 
-    // Distance adjustments
+    // Distance-based adjustments
     if (currentDistance > 70.0)
     {
         conservativeThreshold = 0.50;
@@ -721,7 +711,7 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
     }
     else if (currentDistance < 25.0)
     {
-        aggressiveThreshold = 0.30; // Slightly more lenient when close
+        aggressiveThreshold = 0.30;
     }
 
     // Stability adjustments
@@ -730,9 +720,6 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
         conservativeThreshold = 0.55;
         aggressiveThreshold = 0.20;
     }
-
-    NS_LOG_DEBUG("[DEBUG THRESHOLDS] aggressive=" << aggressiveThreshold
-                                                  << " conservative=" << conservativeThreshold);
 
     // ========================================================================
     // PRIMARY SELECTION
@@ -752,29 +739,26 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
         selectedModel = "oracle_conservative";
     }
 
-    NS_LOG_DEBUG("[DEBUG SELECTION] difficulty=" << difficultyScore
-                                                 << " → initial choice: " << selectedModel);
-
     // ========================================================================
-    // SAFETY OVERRIDES WITH DETAILED LOGGING
+    // SAFETY OVERRIDES
     // ========================================================================
 
     // Override 1: Never aggressive if SNR < 10dB
     if (avgSnr < 10.0 && selectedModel != "oracle_conservative")
     {
-        NS_LOG_WARN("[OVERRIDE 1] SNR=" << avgSnr << "dB (critical) → FORCING conservative");
+        NS_LOG_WARN("[OVERRIDE] SNR=" << avgSnr << "dB (critical) → FORCING conservative");
         selectedModel = "oracle_conservative";
     }
 
-    // Override 2: Downgrade aggressive if SNR < 15dB + high interference
+    // Override 2: Downgrade aggressive in marginal conditions
     if (avgSnr < 15.0 && currentInterferers >= 2 && selectedModel == "oracle_aggressive")
     {
-        NS_LOG_WARN("[OVERRIDE 2] SNR=" << avgSnr << "dB + intf=" << currentInterferers
-                                        << " → DOWNGRADE to balanced");
+        NS_LOG_WARN("[OVERRIDE] SNR=" << avgSnr << "dB + intf=" << currentInterferers
+                                      << " → DOWNGRADE to balanced");
         selectedModel = "oracle_balanced";
     }
 
-    // Override 3: Aggressive only in EXCELLENT conditions
+    // Override 3: Aggressive ONLY in excellent conditions
     if (selectedModel == "oracle_aggressive")
     {
         bool excellentSnr = (avgSnr > 24.0);
@@ -782,96 +766,55 @@ SmartWifiManagerRf::SelectBestModel(SmartWifiManagerRfState* station) const
         bool notTooFast = (station->mobilityMetric < 10.0);
         bool stable = (station->rssiVariance < 3.0);
 
-        // 🚀 DETAILED DEBUG LOGGING (per your suggestion)
-        NS_LOG_DEBUG("[OVERRIDE 3 CHECK] excellentSnr="
-                     << excellentSnr << " (" << avgSnr << ">24)"
-                     << " | lowIntf=" << lowInterference << " (count=" << currentInterferers
-                     << ", level=" << station->interferenceLevel << ")"
-                     << " | notFast=" << notTooFast << " (" << station->mobilityMetric << "<10)"
-                     << " | stable=" << stable << " (" << station->rssiVariance << "<3)");
-
         if (!(excellentSnr && lowInterference && notTooFast && stable))
         {
-            std::string reason = "";
-            if (!excellentSnr)
-                reason += "SNR_LOW ";
-            if (!lowInterference)
-                reason += "HIGH_INTF ";
-            if (!notTooFast)
-                reason += "TOO_FAST ";
-            if (!stable)
-                reason += "UNSTABLE ";
-
-            NS_LOG_INFO("[OVERRIDE 3] Aggressive conditions NOT met ("
-                        << reason << ") → DOWNGRADE to balanced");
+            NS_LOG_INFO("[OVERRIDE] Aggressive conditions NOT met → balanced");
             selectedModel = "oracle_balanced";
-        }
-        else
-        {
-            NS_LOG_DEBUG("[OVERRIDE 3] Aggressive conditions MET - keeping aggressive");
         }
     }
 
-    // Override 4: Emergency override
+    // Override 4: Emergency override for extreme conditions
     if (currentDistance > 70.0 && currentInterferers >= 3 && station->mobilityMetric > 10.0)
     {
         if (selectedModel != "oracle_conservative")
         {
-            NS_LOG_WARN("[OVERRIDE 4 EMERGENCY] Extreme conditions "
-                        << "(dist=" << currentDistance << "m, intf=" << currentInterferers
-                        << ", speed=" << station->mobilityMetric << ") → FORCING conservative");
+            NS_LOG_WARN("[OVERRIDE EMERGENCY] Extreme conditions → FORCING conservative");
             selectedModel = "oracle_conservative";
         }
     }
 
     // ========================================================================
-    // 🚀 MODEL SWITCHING HYSTERESIS (per your suggestion)
+    // 🚀 FIX: PER-STATION MODEL SWITCHING HYSTERESIS
     // ========================================================================
-    if (selectedModel != m_currentModelName)
-    {
-        Time now = Simulator::Now();
+    Time now = Simulator::Now();
 
-        // Check if we switched recently
+    if (selectedModel != station->currentModelName)
+    {
+        // Check if we switched recently (per-station tracking)
         if (station->lastModelSwitchTime.IsStrictlyPositive() &&
             (now - station->lastModelSwitchTime) < MilliSeconds(500))
         {
-            NS_LOG_DEBUG("[HYSTERESIS] Model switch suppressed "
-                         << "(last switch "
+            NS_LOG_DEBUG("[HYSTERESIS] Model switch suppressed (last switch "
                          << (now - station->lastModelSwitchTime).GetMilliSeconds()
-                         << "ms ago) - keeping " << m_currentModelName);
-            return m_currentModelName;
+                         << "ms ago) - keeping " << station->currentModelName);
+            return station->currentModelName;
         }
 
         // Allow switch
         station->lastModelSwitchTime = now;
-        NS_LOG_INFO("[MODEL SWITCH] " << m_currentModelName << " → " << selectedModel
-                                      << " (difficulty=" << difficultyScore << ")");
+        station->currentModelName = selectedModel;
+
+        NS_LOG_INFO("[MODEL SWITCH] " << station->currentModelName << " → " << selectedModel
+                                      << " (difficulty=" << std::fixed << std::setprecision(2)
+                                      << difficultyScore << ")");
     }
-
-    // ========================================================================
-    // FINAL LOGGING
-    // ========================================================================
-    std::string difficultyLabel;
-    if (difficultyScore < 0.25)
-        difficultyLabel = "EASY";
-    else if (difficultyScore < 0.60)
-        difficultyLabel = "MEDIUM";
-    else
-        difficultyLabel = "HARD";
-
-    NS_LOG_INFO("[PHASE 2 FINAL] "
-                << difficultyLabel << " (score=" << std::fixed << std::setprecision(2)
-                << difficultyScore << "): SNR=" << avgSnr << "dB, intf=" << currentInterferers
-                << ", speed=" << station->mobilityMetric << "m/s"
-                << ", rssiVar=" << station->rssiVariance << ", dist=" << currentDistance << "m → "
-                << selectedModel);
 
     return selectedModel;
 }
 
-// ============================================================================
-// 🚀 PHASE 3: HYSTERESIS (PHASE 1B ENHANCED - RATE THRASHING FIX)
-// ============================================================================
+// ---------------------------------------------------------------------------
+// STEP 3: IMPROVED HYSTERESIS (FIX: Oscillation handling)
+// ---------------------------------------------------------------------------
 
 uint8_t
 SmartWifiManagerRf::ApplyHysteresis(SmartWifiManagerRfState* station,
@@ -880,126 +823,105 @@ SmartWifiManagerRf::ApplyHysteresis(SmartWifiManagerRfState* station,
 {
     NS_LOG_FUNCTION(this << station << (uint32_t)currentRate << (uint32_t)predictedRate);
 
-    // Don't change rate if prediction is same
+    // No change needed
     if (predictedRate == currentRate)
     {
         station->rateStableCount++;
         return currentRate;
     }
 
-    // Check if this is the same prediction as last time
-    if (predictedRate == station->lastPredictedRate)
+    // 🚀 FIX: PROXIMITY HYSTERESIS (tolerate ±1 rate oscillation)
+    int rateDifference =
+        std::abs(static_cast<int>(predictedRate) - static_cast<int>(station->lastPredictedRate));
+
+    if (rateDifference <= 1)
     {
-        // Same prediction - increment streak
+        // Within ±1 of last prediction - keep building streak
         station->ratePredictionStreak++;
+        station->lastPredictedRate = predictedRate; // Update target but don't reset
+
+        NS_LOG_DEBUG("[HYSTERESIS PROXIMITY] Rate "
+                     << (uint32_t)predictedRate << " within ±1 of "
+                     << (uint32_t)station->lastPredictedRate
+                     << " → streak=" << station->ratePredictionStreak);
     }
     else
     {
-        // Different prediction - reset streak
+        // Large jump - reset streak
         station->ratePredictionStreak = 1;
         station->lastPredictedRate = predictedRate;
+
+        NS_LOG_DEBUG("[HYSTERESIS RESET] Large jump from " << (uint32_t)station->lastPredictedRate
+                                                           << " to " << (uint32_t)predictedRate
+                                                           << " → reset streak");
     }
 
     // ========================================================================
-    // 🚀 FIXED: ADAPTIVE HYSTERESIS (REDUCE STREAK IN UNSTABLE CONDITIONS)
+    // ADAPTIVE STREAK REQUIREMENT
     // ========================================================================
-
     uint32_t requiredStreak = m_hysteresisStreak; // Default: 3
 
-    // ✅ FIX: REDUCE streak when variance is high (faster adaptation in chaos)
-    // Critic was RIGHT - we had this backwards!
+    // 🚀 FIX: Reduce streak in UNSTABLE conditions (not increase!)
     if (station->rssiVariance > 8.0)
     {
-        requiredStreak =
-            std::max(static_cast<uint32_t>(1), m_hysteresisStreak - 1); // Need 2 (not 5!)
-        NS_LOG_DEBUG("[PHASE 3 FIXED] High RSSI variance ("
-                     << station->rssiVariance << "), REDUCED streak to " << requiredStreak
-                     << " (fast adaptation in chaos)");
-    }
-    else if (station->rssiVariance > 5.0)
-    {
-        // Moderate variance: keep default streak
-        NS_LOG_DEBUG("[PHASE 3] Moderate RSSI variance ("
-                     << station->rssiVariance << "), keeping streak at " << requiredStreak);
+        requiredStreak = std::max(1u, m_hysteresisStreak - 1); // Fast adaptation in chaos
     }
     else if (station->rssiVariance < 2.0)
     {
-        // Low variance (stable): can afford MORE confirmation (prevent thrashing)
-        requiredStreak = m_hysteresisStreak + 1; // Need 4 confirmations when stable
-        NS_LOG_DEBUG("[PHASE 3] Low RSSI variance (" << station->rssiVariance
-                                                     << "), INCREASED streak to " << requiredStreak
-                                                     << " (prevent thrashing in stability)");
+        requiredStreak = m_hysteresisStreak + 1; // More confirmation when stable
     }
 
-    // ✅ FIX: REDUCE streak when interference is high (need fast reaction)
     if (station->interferenceLevel > 0.7)
     {
-        requiredStreak =
-            std::max(static_cast<uint32_t>(1), requiredStreak - 1); // At least 1, reduce by 1
-        NS_LOG_DEBUG("[PHASE 3 FIXED] High interference ("
-                     << station->interferenceLevel << "), REDUCED streak to " << requiredStreak);
+        requiredStreak = std::max(1u, requiredStreak - 1); // Fast reaction to interference
     }
 
     // ========================================================================
-    // 🚀 EMERGENCY BYPASS (UNCHANGED - ALREADY CORRECT)
+    // EMERGENCY BYPASSES
     // ========================================================================
 
-    // If SNR is critically low (<5 dB) AND prediction is to decrease rate,
-    // bypass hysteresis (immediate protection)
+    // Bypass 1: Critical SNR (immediate protection)
     bool emergencyDowngrade = (station->lastSnr < 5.0) && (predictedRate < currentRate);
-
-    // If SNR is excellent (>28 dB) AND stable (rssiVar < 2.0) AND prediction is to increase,
-    // reduce required streak (faster adaptation in good conditions)
-    bool fastUpgrade =
-        (station->lastSnr > 28.0) && (station->rssiVariance < 2.0) && (predictedRate > currentRate);
 
     if (emergencyDowngrade)
     {
-        NS_LOG_WARN("[PHASE 3] EMERGENCY BYPASS: SNR="
+        NS_LOG_WARN("[HYSTERESIS BYPASS] SNR="
                     << station->lastSnr << "dB (critical) - immediate downgrade "
                     << (uint32_t)currentRate << " → " << (uint32_t)predictedRate);
 
         station->ratePredictionStreak = 0;
-        station->rateStableCount = 0;
         station->lastPredictedRate = predictedRate;
-
         return predictedRate;
     }
+
+    // Bypass 2: Excellent conditions (fast upgrade)
+    bool fastUpgrade =
+        (station->lastSnr > 28.0) && (station->rssiVariance < 2.0) && (predictedRate > currentRate);
 
     if (fastUpgrade && requiredStreak > 2)
     {
         requiredStreak = 2; // Only need 2 confirmations in perfect conditions
-        NS_LOG_DEBUG("[PHASE 3] FAST UPGRADE: SNR="
-                     << station->lastSnr << "dB (excellent), rssiVar=" << station->rssiVariance
-                     << " - reduced streak to " << requiredStreak);
     }
 
     // ========================================================================
     // STANDARD HYSTERESIS CHECK
     // ========================================================================
 
-    // Require adaptive streak consecutive predictions before changing
     if (station->ratePredictionStreak >= requiredStreak)
     {
-        NS_LOG_INFO("[PHASE 3] Rate change CONFIRMED after "
-                    << station->ratePredictionStreak << "/" << requiredStreak
-                    << " consecutive predictions: " << (uint32_t)currentRate << " → "
-                    << (uint32_t)predictedRate << " (rssiVar=" << station->rssiVariance
-                    << ", intf=" << station->interferenceLevel << ")");
+        NS_LOG_INFO("[HYSTERESIS CONFIRMED] Rate change after "
+                    << station->ratePredictionStreak << "/" << requiredStreak << " confirmations: "
+                    << (uint32_t)currentRate << " → " << (uint32_t)predictedRate);
 
-        // Reset counters
         station->ratePredictionStreak = 0;
-        station->rateStableCount = 0;
         station->lastPredictedRate = predictedRate;
-
         return predictedRate;
     }
 
-    // Not enough confirmation, keep current rate
-    NS_LOG_DEBUG("[PHASE 3] Rate change SUPPRESSED (streak="
-                 << station->ratePredictionStreak << "/" << requiredStreak << "): staying at "
-                 << (uint32_t)currentRate << " (need "
-                 << (requiredStreak - station->ratePredictionStreak) << " more confirmations)");
+    // Not enough confirmation
+    NS_LOG_DEBUG("[HYSTERESIS SUPPRESSED] Streak=" << station->ratePredictionStreak << "/"
+                                                   << requiredStreak << " - staying at "
+                                                   << (uint32_t)currentRate);
 
     return currentRate;
 }
@@ -1178,6 +1100,89 @@ SmartWifiManagerRf::AdaptiveFusion(uint8_t mlRate,
                                                  << " → Final=" << finalRate);
 
     return finalRate;
+}
+
+// ---------------------------------------------------------------------------
+// 🚀 FIX #5: UNIFIED ADAPTIVE FUSION (replaces backwards logic)
+// ---------------------------------------------------------------------------
+uint32_t
+SmartWifiManagerRf::UnifiedAdaptiveFusion(uint8_t mlRate,
+                                          uint8_t ruleRate,
+                                          double mlConfidence,
+                                          SmartWifiManagerRfState* station,
+                                          const SafetyAssessment& safety) const
+{
+    NS_LOG_FUNCTION(this << (uint32_t)mlRate << (uint32_t)ruleRate << mlConfidence);
+
+    // Emergency override
+    if (safety.requiresEmergencyAction)
+    {
+        NS_LOG_WARN("[FUSION EMERGENCY] Using safe rate " << safety.recommendedSafeRate);
+        return safety.recommendedSafeRate;
+    }
+
+    // Calculate adaptive trust
+    double mlTrust = CalculateAdaptiveTrust(mlConfidence, station);
+    double confidenceThreshold = CalculateAdaptiveConfidenceThreshold(station, safety.context);
+
+    // TIER 1: HIGH TRUST - ML-LED
+    if (mlTrust >= confidenceThreshold && mlConfidence > 0.3)
+    {
+        uint32_t mlPrimary = mlRate;
+        uint32_t maxJump = (mlConfidence > 0.5) ? 3 : 2;
+        uint32_t upperBound = std::min(ruleRate + maxJump, static_cast<uint32_t>(7));
+        uint32_t lowerBound = (ruleRate > maxJump) ? ruleRate - maxJump : 0;
+
+        mlPrimary = std::max(lowerBound, std::min(upperBound, mlPrimary));
+
+        double mlWeight = 0.80 + (mlConfidence - confidenceThreshold) * 0.4;
+        mlWeight = std::min(0.95, mlWeight);
+        double ruleWeight = 1.0 - mlWeight;
+
+        double fusedRate = (mlWeight * mlPrimary) + (ruleWeight * ruleRate);
+        uint32_t finalRate = static_cast<uint32_t>(std::round(fusedRate));
+
+        NS_LOG_INFO("[FUSION T1: ML-LED] trust=" << mlTrust << " weight=" << mlWeight
+                                                 << " final=" << finalRate);
+        return finalRate;
+    }
+
+    // TIER 2: MEDIUM TRUST - BALANCED
+    if (mlTrust >= confidenceThreshold * 0.6 && mlConfidence > 0.15)
+    {
+        double mlWeight = 0.45 + (mlTrust / confidenceThreshold) * 0.15;
+        double ruleWeight = 1.0 - mlWeight;
+
+        double fusedRate = (mlWeight * mlRate) + (ruleWeight * ruleRate);
+        uint32_t finalRate = static_cast<uint32_t>(std::round(fusedRate));
+
+        uint32_t maxRate = std::max(mlRate, ruleRate) + 1;
+        finalRate = std::min(finalRate, maxRate);
+
+        NS_LOG_INFO("[FUSION T2: BALANCED] trust=" << mlTrust << " final=" << finalRate);
+        return finalRate;
+    }
+
+    // TIER 3: LOW TRUST - RULE-LED
+    if (mlConfidence > 0.10)
+    {
+        uint32_t ruleWithHint = ruleRate;
+        int rateDiff = std::abs(static_cast<int>(mlRate) - static_cast<int>(ruleRate));
+
+        if (rateDiff <= 2)
+        {
+            double mlWeight = 0.20;
+            double fusedRate = (mlWeight * mlRate) + ((1.0 - mlWeight) * ruleRate);
+            ruleWithHint = static_cast<uint32_t>(std::round(fusedRate));
+        }
+
+        NS_LOG_INFO("[FUSION T3: RULE-LED] trust=" << mlTrust << " final=" << ruleWithHint);
+        return ruleWithHint;
+    }
+
+    // TIER 4: NO TRUST - PURE RULE
+    NS_LOG_INFO("[FUSION T4: RULE-ONLY] conf=" << mlConfidence << " final=" << ruleRate);
+    return ruleRate;
 }
 
 // ============================================================================
@@ -1756,346 +1761,242 @@ SmartWifiManagerRf::GetContextSafeRate(SmartWifiManagerRfState* station,
     }
 }
 
+// ---------------------------------------------------------------------------
+// STEP 4: UNIFIED FUSION (FIX: Backwards logic + complexity)
+// ---------------------------------------------------------------------------
+
 // ============================================================================
 // 🚀 MAIN RATE DECISION ENGINE - DoGetDataTxVector (FULLY OPTIMIZED)
 // ============================================================================
+
 WifiTxVector
 SmartWifiManagerRf::DoGetDataTxVector(WifiRemoteStation* st, uint16_t allowedWidth)
 {
     NS_LOG_FUNCTION(this << st << allowedWidth);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
+    Time now = Simulator::Now();
+
     // ========================================================================
-    // 🚀 PHASE 1B: UPDATE STATION STATE WITH CURRENT GLOBALS
+    // STAGE 0: UPDATE STATION STATE
     // ========================================================================
     double currentDistance = m_benchmarkDistance.load();
     uint32_t currentInterferers = m_currentInterferers.load();
-
-    // Update distance metric (Phase 1B feature 12)
     station->distanceMetric = currentDistance;
 
-    // If station SNR is still at initialization value, recalculate from current distance
-    if (station->lastSnr > 15.0 && currentDistance > 50.0)
+    // SNR sanity check (improved logic)
+    double maxExpectedSnr = ConvertNS3ToRealisticSnr(100.0, currentDistance, 0, SOFT_MODEL) + 5.0;
+    if (station->lastSnr > maxExpectedSnr)
     {
-        // Likely stale - recalculate
         double realisticSnr =
             ConvertNS3ToRealisticSnr(100.0, currentDistance, currentInterferers, SOFT_MODEL);
         station->lastSnr = realisticSnr;
         station->snrSlow = realisticSnr;
         station->snrFast = realisticSnr;
 
-        NS_LOG_WARN("[PHASE 1B] SNR looks stale, recalculating: "
-                    << realisticSnr << " dB (distance=" << currentDistance << "m)");
+        NS_LOG_WARN("[SNR CORRECTION] Impossible SNR detected: " << station->lastSnr << " → "
+                                                                 << realisticSnr << " dB");
     }
-
-    uint32_t supportedRates = GetNSupported(st);
-    uint32_t maxRateIndex =
-        std::min(supportedRates > 0 ? supportedRates - 1 : 0, static_cast<uint32_t>(7));
 
     // ========================================================================
     // STAGE 1: SAFETY ASSESSMENT
     // ========================================================================
     SafetyAssessment safety = AssessNetworkSafety(station);
-    safety.managerRef = this;
-    safety.stationId = station->stationId;
 
     // ========================================================================
-    // STAGE 2: RULE-BASED BASELINE
+    // STAGE 2: MODEL SELECTION (BEFORE rule rate - order doesn't matter but clearer)
+    // ========================================================================
+    std::string selectedModel = SelectBestModel(station);
+
+    // ========================================================================
+    // STAGE 3: RULE-BASED BASELINE
     // ========================================================================
     uint32_t ruleRate = GetEnhancedRuleBasedRate(station, safety);
 
     // ========================================================================
-    // 🚀 PHASE 2: SCENARIO-AWARE MODEL SELECTION
-    // ========================================================================
-    std::string selectedModel = SelectBestModel(station);
-
-    // Check if model changed
-    if (selectedModel != m_currentModelName)
-    {
-        NS_LOG_INFO("[PHASE 2] MODEL SWITCH: " << m_currentModelName << " → " << selectedModel);
-        std::cout << "[PHASE 2] MODEL SWITCH: " << m_currentModelName << " → " << selectedModel
-                  << " (difficulty changed, dist=" << currentDistance
-                  << "m, intf=" << currentInterferers << ")" << std::endl;
-        m_currentModelName = selectedModel;
-    }
-
-    // ========================================================================
-    // STAGE 3: ML INFERENCE (WITH ADAPTIVE FREQUENCY + OPTIMIZATIONS)
+    // STAGE 4: ML INFERENCE (WITH PER-STATION CACHING)
     // ========================================================================
     uint32_t mlRate = ruleRate;
     double mlConfidence = 0.0;
     std::string mlStatus = "NO_ATTEMPT";
 
-    static uint64_t s_callCounter = 0;
-    ++s_callCounter;
+    // 🚀 FIX: Per-station call counter
+    station->callCounter++;
 
-    Time now = Simulator::Now();
-
-    // Check ML cache
+    // 🚀 FIX: Per-station cache check with feature validation
     bool canUseCachedMl = false;
+    if (station->mlCacheValid)
     {
-        std::lock_guard<std::mutex> lock(m_mlCacheMutex);
-        canUseCachedMl =
-            (now - m_lastMlTime) < MilliSeconds(m_mlCacheTime) && m_lastMlTime > Seconds(0);
+        // Check time validity
+        bool timeValid = (now - station->mlCache.timestamp) < MilliSeconds(m_mlCacheTime);
+
+        // 🚀 NEW: Check feature similarity (cache invalidation)
+        double snrDiff = std::abs(station->lastSnr - station->mlCache.snrAtInference);
+        double distDiff = std::abs(currentDistance - station->mlCache.distanceAtInference);
+        int intfDiff = std::abs(static_cast<int>(currentInterferers) -
+                                static_cast<int>(station->mlCache.interferersAtInference));
+
+        bool featuresUnchanged = (snrDiff < 3.0) && (distDiff < 5.0) && (intfDiff <= 1);
+
+        canUseCachedMl = timeValid && featuresUnchanged;
+
+        if (timeValid && !featuresUnchanged)
+        {
+            NS_LOG_DEBUG("[ML CACHE INVALIDATED] Features changed: SNR±"
+                         << snrDiff << "dB, dist±" << distDiff << "m, intf±" << intfDiff);
+        }
     }
 
-    // 🚀 PHASE 1B: SMARTER ADAPTIVE INFERENCE FREQUENCY
+    // Adaptive inference period
     uint32_t adaptiveInferencePeriod = m_inferencePeriod;
-
     if (currentDistance <= 30.0 && currentInterferers <= 1 && station->rssiVariance < 2.0)
     {
-        // Excellent conditions: can infer more frequently (faster adaptation)
-        adaptiveInferencePeriod = std::max(static_cast<uint32_t>(10), m_inferencePeriod / 2);
-        NS_LOG_DEBUG(
-            "[PHASE 1B] Excellent conditions → inference period: " << adaptiveInferencePeriod);
+        adaptiveInferencePeriod = std::max(10u, m_inferencePeriod / 2);
     }
     else if (currentDistance > 70.0 || currentInterferers > 3 || station->rssiVariance > 8.0)
     {
-        // Poor conditions: infer less frequently (more conservative)
-        adaptiveInferencePeriod = std::min(static_cast<uint32_t>(100), m_inferencePeriod * 2);
-        NS_LOG_DEBUG("[PHASE 1B] Poor conditions → inference period: " << adaptiveInferencePeriod);
+        adaptiveInferencePeriod = std::min(100u, m_inferencePeriod * 2);
     }
 
-    bool needNewMlInference = !safety.requiresEmergencyAction &&
-                              safety.riskLevel < m_riskThreshold && !canUseCachedMl &&
-                              (s_callCounter % adaptiveInferencePeriod) == 0;
-
-    // 🚀 OPTIMIZATION: Skip ML if last inference was too slow (graceful degradation)
-    if (needNewMlInference)
+    // Server overload check
+    bool serverOverloaded = false;
+    if (station->consecutiveMlFailures >= 4)
     {
-        std::lock_guard<std::mutex> lock(m_mlCacheMutex);
-
-        // Check if we're overwhelming the server
-        if (m_lastMlTime > Seconds(0))
-        {
-            double timeSinceLastMl = (now - m_lastMlTime).GetMilliSeconds();
-
-            // If last inference was <100ms ago AND took >100ms, skip this one
-            if (timeSinceLastMl < 100.0 && m_avgMlLatency > 100.0)
-            {
-                NS_LOG_DEBUG("[OPTIMIZATION] Server appears overloaded (latency="
-                             << m_avgMlLatency << "ms), skipping inference");
-                needNewMlInference = false;
-                mlStatus = "SKIPPED_OVERLOAD";
-            }
-        }
+        serverOverloaded = true;
+        mlStatus = "SERVER_OVERLOAD";
     }
+
+    // Determine if new inference needed
+    bool needNewMlInference = !safety.requiresEmergencyAction &&
+                              safety.riskLevel < m_riskThreshold && !serverOverloaded &&
+                              !canUseCachedMl &&
+                              (station->callCounter % adaptiveInferencePeriod) == 0;
 
     // ========================================================================
     // EXECUTE ML INFERENCE OR USE CACHE
     // ========================================================================
     if (canUseCachedMl)
     {
-        std::lock_guard<std::mutex> lock(m_mlCacheMutex);
-        mlRate = m_lastMlRate;
-        mlConfidence = m_lastMlConfidence;
+        mlRate = station->mlCache.rateIdx;
+        mlConfidence = station->mlCache.confidence;
         mlStatus = "CACHED";
-        m_mlCacheHits++;
 
-        NS_LOG_DEBUG("[ML CACHE] Using cached result: rate=" << mlRate << " conf=" << mlConfidence);
+        NS_LOG_DEBUG("[ML CACHE HIT] rate=" << mlRate << " conf=" << mlConfidence);
     }
     else if (needNewMlInference)
     {
         mlStatus = "ATTEMPTING";
 
-        // 🚀 PHASE 1B: Extract 14 features
+        // Extract features
         std::vector<double> features = ExtractFeatures(st);
 
-        // 🚀 OPTIMIZATION: Call with persistent socket (10x faster!)
+        // Call ML server
         InferenceResult result = RunMLInference(features, selectedModel);
 
         if (result.success && result.confidence > 0.05)
         {
-            // ML inference successful
+            // Success
             m_mlInferences++;
-            station->mlInferencesReceived++;
             station->mlInferencesSuccessful++;
 
-            mlRate = std::min(result.rateIdx, maxRateIndex);
+            mlRate = std::min(static_cast<uint32_t>(result.rateIdx),
+                              static_cast<uint32_t>(GetNSupported(st) - 1));
             mlConfidence = result.confidence;
 
-            // Update cache
-            {
-                std::lock_guard<std::mutex> lock(m_mlCacheMutex);
-                m_lastMlRate = mlRate;
-                m_lastMlTime = now;
-                m_lastMlConfidence = mlConfidence;
+            // 🚀 FIX: Update per-station cache with feature snapshot
+            station->mlCache.timestamp = now;
+            station->mlCache.rateIdx = mlRate;
+            station->mlCache.confidence = mlConfidence;
+            station->mlCache.modelUsed = selectedModel;
+            station->mlCache.snrAtInference = station->lastSnr;
+            station->mlCache.distanceAtInference = currentDistance;
+            station->mlCache.interferersAtInference = currentInterferers;
+            station->mlCacheValid = true;
 
-                // 🚀 OPTIMIZATION: Track average latency for overload detection
-                m_avgMlLatency = 0.8 * m_avgMlLatency + 0.2 * result.latencyMs;
-            }
+            // Reset failure counter
+            station->consecutiveMlFailures = 0;
+            station->packetsSinceMLRetry = 0;
 
             mlStatus = "SUCCESS";
 
             // Update ML performance tracking
             station->recentMLAccuracy = 0.9 * station->recentMLAccuracy + 0.1 * mlConfidence;
 
-            // Update context-specific confidence
-            int contextIdx = static_cast<int>(safety.context);
-            if (contextIdx >= 0 && contextIdx < 6)
-            {
-                station->mlContextConfidence[contextIdx] =
-                    0.8 * station->mlContextConfidence[contextIdx] + 0.2 * mlConfidence;
-                station->mlContextUsage[contextIdx]++;
-            }
-
-            NS_LOG_INFO("[ML SUCCESS] model=" << result.model << " rate=" << result.rateIdx
+            NS_LOG_INFO("[ML SUCCESS] model=" << selectedModel << " rate=" << mlRate
                                               << " conf=" << mlConfidence
-                                              << " latency=" << result.latencyMs << "ms"
-                                              << " SNR=" << station->lastSnr << "dB"
-                                              << " dist=" << currentDistance << "m");
+                                              << " latency=" << result.latencyMs << "ms");
         }
         else
         {
-            // ML inference failed - use rule-based fallback
+            // Failure
             m_mlFailures++;
+            station->consecutiveMlFailures++;
             mlRate = ruleRate;
             mlConfidence = 0.0;
             mlStatus = "FAILED";
 
-            NS_LOG_WARN("[ML FAILED] " << result.error
-                                       << " - Using rule fallback: rate=" << ruleRate);
+            NS_LOG_WARN("[ML FAILED] " << result.error << " (failure #"
+                                       << station->consecutiveMlFailures << ")");
         }
     }
 
     // ========================================================================
-    // 🚀 PHASE 4: ADAPTIVE ML FUSION
+    // 🚀 FIX: IMPROVED ML FAILURE HANDLING
     // ========================================================================
-    uint32_t fusedRate;
-    if (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context))
+    if (serverOverloaded)
     {
-        // Use adaptive fusion (Phase 4)
-        fusedRate = AdaptiveFusion(mlRate, ruleRate, mlConfidence, station);
-    }
-    else
-    {
-        // Fallback to rule-based with ML hint
-        fusedRate = FuseMLAndRuleBased(mlRate, ruleRate, mlConfidence, safety, station);
+        // Use rule-only mode
+        mlRate = ruleRate;
+        mlConfidence = 0.0;
+
+        station->packetsSinceMLRetry++;
+
+        // Retry ML after 100 packets
+        if (station->packetsSinceMLRetry > 100)
+        {
+            station->consecutiveMlFailures = 0;
+            station->packetsSinceMLRetry = 0;
+            NS_LOG_INFO("[ML RETRY] Attempting to re-enable ML inference after cooldown");
+        }
     }
 
     // ========================================================================
-    // 🚀 PHASE 3: APPLY HYSTERESIS TO PREVENT RATE THRASHING
+    // STAGE 5: UNIFIED ADAPTIVE FUSION
+    // ========================================================================
+    uint32_t fusedRate = UnifiedAdaptiveFusion(mlRate, ruleRate, mlConfidence, station, safety);
+
+    // ========================================================================
+    // STAGE 6: APPLY HYSTERESIS
     // ========================================================================
     uint32_t finalRate = ApplyHysteresis(station, station->currentRateIndex, fusedRate);
 
-    if (finalRate != mlRate)
-    {
-        NS_LOG_WARN("[HYSTERESIS SUPPRESSED] ML wanted rate "
-                    << (uint32_t)mlRate << " but staying at " << (uint32_t)finalRate << " (streak="
-                    << station->ratePredictionStreak << "/" << m_hysteresisStreak << ")");
-    }
-    else if (finalRate != station->currentRateIndex)
-    {
-        NS_LOG_INFO("[HYSTERESIS CONFIRMED] Rate change: "
-                    << (uint32_t)station->currentRateIndex << " → " << (uint32_t)finalRate
-                    << " (streak=" << station->ratePredictionStreak << " ≥ " << m_hysteresisStreak
-                    << ")");
-    }
-
     // ========================================================================
-    // STAGE 4B: ML FAILURE DETECTION AND EMERGENCY FALLBACK
+    // STAGE 7: UPDATE STATION STATE
     // ========================================================================
-    static uint32_t consecutiveMlFailures = 0;
-
-    if (mlStatus == "FAILED")
-    {
-        consecutiveMlFailures++;
-    }
-    else if (mlStatus == "SUCCESS")
-    {
-        consecutiveMlFailures = 0; // Reset on success
-    }
-
-    // 🚀 OPTIMIZATION: If ML fails repeatedly, use rule-only mode temporarily
-    if (consecutiveMlFailures >= 4)
-    {
-        NS_LOG_WARN("[EMERGENCY FALLBACK] ML failed "
-                    << consecutiveMlFailures << " consecutive times - using RULE-ONLY mode");
-
-        // Override with rule-based rate
-        finalRate = ruleRate;
-        fusedRate = ruleRate;
-        mlConfidence = 0.0;
-
-        // Reset counter after 50 packets to retry ML
-        if (consecutiveMlFailures > 50)
-        {
-            consecutiveMlFailures = 0;
-            NS_LOG_INFO("[FALLBACK RESET] Attempting to re-enable ML inference");
-        }
-    }
-
-    // ========================================================================
-    // STAGE 5: FINAL BOUNDS AND TRACKING
-    // ========================================================================
-    finalRate = std::min(finalRate, maxRateIndex);
-    finalRate = std::max(finalRate, static_cast<uint32_t>(0));
-
-    // Update station state if rate changed
     if (finalRate != station->currentRateIndex)
     {
-        bool wasMLInfluenced =
-            (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context));
-
-        if (wasMLInfluenced)
-        {
-            station->lastMLInfluencedRate = finalRate;
-            station->lastMLInfluenceTime = now;
-        }
-
         station->previousRateIndex = station->currentRateIndex;
         station->currentRateIndex = finalRate;
         station->lastRateChangeTime = now;
 
-        NS_LOG_DEBUG("[RATE CHANGE] " << station->previousRateIndex << " → " << finalRate
-                                      << " (ML-influenced: " << wasMLInfluenced << ")");
+        NS_LOG_INFO("[RATE CHANGE] " << station->previousRateIndex << " → " << finalRate
+                                     << " (model=" << selectedModel << ")");
     }
 
-    // 🚀 PHASE 1B: Update enhanced features (14 features)
+    // Update enhanced features for next iteration
     UpdateEnhancedFeatures(station);
 
     // ========================================================================
-    // LOGGING AND TELEMETRY
+    // STAGE 8: BUILD AND RETURN TX VECTOR
     // ========================================================================
-    std::string fusionType =
-        (mlConfidence >= CalculateAdaptiveConfidenceThreshold(station, safety.context))
-            ? "ML-LED"
-            : "RULE-LED";
-
-    uint64_t finalDataRate = GetSupported(st, finalRate).GetDataRate(allowedWidth);
-
-    // Enhanced logging (only if DEBUG or rate changed)
-    if (m_enableDetailedLogging || (finalRate != station->previousRateIndex))
-    {
-        NS_LOG_INFO("[DECISION] " << fusionType << " | Model=" << selectedModel << " | SNR="
-                                  << std::fixed << std::setprecision(1) << station->lastSnr << "dB"
-                                  << " | Context=" << safety.contextStr << " | Rule=" << ruleRate
-                                  << " | ML=" << mlRate << "(conf=" << std::setprecision(3)
-                                  << mlConfidence << ")"
-                                  << " | Fused=" << fusedRate << " | Final=" << finalRate
-                                  << " | Hysteresis=" << station->ratePredictionStreak << "/"
-                                  << m_hysteresisStreak << " | Rate=" << std::setprecision(1)
-                                  << (finalDataRate / 1e6) << "Mbps"
-                                  << " | Status=" << mlStatus
-                                  << " | rssiVar=" << station->rssiVariance
-                                  << " | intf=" << station->interferenceLevel
-                                  << " | dist=" << currentDistance << "m");
-    }
-
-    // Update traced value if rate actually changed
     WifiMode mode = GetSupported(st, finalRate);
     uint64_t rate = mode.GetDataRate(allowedWidth);
 
     if (m_currentRate != rate)
     {
-        NS_LOG_INFO("[RATE UPDATE] " << (m_currentRate / 1e6) << " Mbps → " << (rate / 1e6)
-                                     << " Mbps (index " << finalRate << ")");
         m_currentRate = rate;
     }
 
-    // ========================================================================
-    // RETURN TX VECTOR
-    // ========================================================================
     return WifiTxVector(
         mode,
         GetDefaultTxPowerLevel(),
@@ -2206,8 +2107,10 @@ SmartWifiManagerRf::DoReportDataOk(WifiRemoteStation* st,
     station->totalPackets++;
     station->successfulPackets++;
 
-    // 🚀 FIX: Success reduces interference estimate (channel is clear)
-    station->interferenceLevel = std::max(0.0, station->interferenceLevel * 0.95);
+    // 🚀 FIX: Success suggests SLIGHTLY lower interference, but don't decay too fast
+    // Old: * 0.95 (5% reduction per success) → too aggressive
+    // New: * 0.98 (2% reduction per success) → more realistic
+    station->interferenceLevel = std::max(0.0, station->interferenceLevel * 0.98);
 
     UpdateMetrics(st, true, realisticDataSnr);
 }
@@ -2351,53 +2254,67 @@ SmartWifiManagerRf::UpdateEnhancedFeatures(SmartWifiManagerRfState* station)
     }
 
     // ========================================================================
-    // 🚀 CRITICAL FIX #1: INTERFERENCE LEVEL CALCULATION
+    // 🚀 FIX: IMPROVED INTERFERENCE LEVEL CALCULATION
     // ========================================================================
 
-    // Method 1: Use interferer count directly (MOST RELIABLE)
     uint32_t currentInterferers = m_currentInterferers.load();
+
+    // Method 1: Ground truth from interferer count (most reliable)
     double interfererBasedLevel = std::min(1.0, currentInterferers / 3.0);
 
-    // Method 2: Use SNR degradation as interference indicator
+    // Method 2: SNR degradation proxy
     double expectedSnr =
         ConvertNS3ToRealisticSnr(100.0, m_benchmarkDistance.load(), currentInterferers, SOFT_MODEL);
     double snrDegradation = std::max(0.0, expectedSnr - station->snrSlow);
     double degradationBasedLevel = std::min(1.0, snrDegradation / 20.0);
 
-    // Method 3: Use failure rate as interference proxy
-    double failureBasedLevel = 0.0;
+    // Method 3: Recent failure rate (use last 20 packets only)
+    double recentFailureRate = 0.0;
     if (station->totalPackets > 0)
     {
-        failureBasedLevel =
-            std::min(1.0, static_cast<double>(station->failedPackets) / station->totalPackets);
+        // Weight recent failures more (use exponential weighted count)
+        recentFailureRate = std::min(1.0, station->frameErrorRate * 1.5);
     }
 
-    // Blend all three methods (60% interferer count, 25% SNR, 15% failures)
+    // Blend: 60% interferer count, 25% SNR, 15% failures
     double blendedInterference =
-        (interfererBasedLevel * 0.60) + (degradationBasedLevel * 0.25) + (failureBasedLevel * 0.15);
+        (interfererBasedLevel * 0.60) + (degradationBasedLevel * 0.25) + (recentFailureRate * 0.15);
 
-    // Apply EWMA for stability
+    // 🚀 FIX: ADAPTIVE EWMA (faster decay when improving)
+    double alpha;
+    if (blendedInterference < station->interferenceLevel)
+    {
+        // Conditions improving - faster update
+        alpha = 0.40; // 40% new, 60% old
+    }
+    else
+    {
+        // Conditions worsening - slower update (avoid false alarms)
+        alpha = 0.25; // 25% new, 75% old
+    }
+
     if (station->interferenceLevel == 0.0)
     {
         station->interferenceLevel = blendedInterference;
     }
     else
     {
-        station->interferenceLevel = 0.25 * blendedInterference + 0.75 * station->interferenceLevel;
+        station->interferenceLevel =
+            alpha * blendedInterference + (1.0 - alpha) * station->interferenceLevel;
     }
 
-    // Boost on consecutive failures
+    // Boost on consecutive failures (interference burst)
     if (station->consecutiveFailures >= 3)
     {
-        double recentBurst = std::min(1.0, station->consecutiveFailures / 10.0);
-        station->interferenceLevel = std::max(station->interferenceLevel, recentBurst);
+        double burstBoost = std::min(0.3, station->consecutiveFailures / 10.0);
+        station->interferenceLevel = std::min(1.0, station->interferenceLevel + burstBoost);
     }
 
-    station->interferenceLevel = std::min(1.0, std::max(0.0, station->interferenceLevel));
+    station->interferenceLevel = std::clamp(station->interferenceLevel, 0.0, 1.0);
 
-    NS_LOG_DEBUG("[FIX] Interference: interferers="
+    NS_LOG_DEBUG("[INTERFERENCE] Interferers="
                  << currentInterferers << " → direct=" << interfererBasedLevel
-                 << ", SNR_deg=" << degradationBasedLevel << ", failures=" << failureBasedLevel
+                 << ", SNR_deg=" << degradationBasedLevel << ", failures=" << recentFailureRate
                  << " → FINAL=" << station->interferenceLevel);
 
     // ========================================================================

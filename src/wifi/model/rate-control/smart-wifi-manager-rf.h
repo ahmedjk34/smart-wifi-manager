@@ -1,59 +1,15 @@
 /*
- * Smart WiFi Manager with 9 Safe Features - NEW PIPELINE
- * Compatible with ahmedjk34's probabilistic oracle models (9 features, 45-63% realistic accuracy)
+ * Smart WiFi Manager - PHASE 1-4 COMPLETE (FIXED HEADER)
  *
- * CRITICAL UPDATES (2025-10-02 18:03:33 UTC):
- * ============================================================================
- * WHAT WE CHANGED FROM 14-FEATURE VERSION:
- * 1. Feature count: 14 → 9 (removed 5 outcome features)
- * 2. Removed previous/current window tracking (shortSuccRatio, medSuccRatio)
- * 3. Removed packetLossRate, severity, confidence tracking
- * 4. Updated ExtractFeatures() to return 9 features (not 14)
- * 5. Model paths: root → python_files/trained_models/
- * 6. Python client integration via socket (port 8765)
- * 7. Default oracle: oracle_aggressive (62.8% test accuracy)
+ * This header includes ALL required fixes for the optimized pipeline:
+ * - Per-station ML cache (FIX #1.3)
+ * - Per-station call counter (FIX #1.2)
+ * - Per-station model tracking (FIX #2.3)
+ * - Hysteresis tracking (FIX #3.1)
+ * - Unified fusion function (FIX #5)
  *
- * WHY WE CHANGED IT:
- * - Your File 3 removed 5 outcome features due to data leakage
- * - Your trained models (File 4) expect exactly 9 features
- * - oracle_aggressive performs best (62.8% vs 45-48% for others)
- * - Python server handles ML inference (clean separation)
- * - Socket communication to localhost:8765 (your 6a server)
- *
- * NEW FEATURE LIST (9 safe features):
- * ✓ 1. lastSnr (dB)               - Most recent realistic SNR
- * ✓ 2. snrFast (dB)               - Fast-moving average (α=0.1)
- * ✓ 3. snrSlow (dB)               - Slow-moving average (α=0.01)
- * ✓ 4. snrTrendShort              - Short-term trend
- * ✓ 5. snrStabilityIndex          - Stability metric (0-10)
- * ✓ 6. snrPredictionConfidence    - Prediction confidence (0-1)
- * ✓ 7. snrVariance                - SNR variance (0-100)
- * ✓ 8. channelWidth (MHz)         - Channel bandwidth (20, 40, 80, 160)
- * ✓ 9. mobilityMetric             - Node mobility (0-50)
- *
- * REMOVED FEATURES (from 14-feature version):
- * ❌ shortSuccRatio               - Outcome-based (removed in File 3)
- * ❌ medSuccRatio                 - Outcome-based (removed in File 3)
- * ❌ packetLossRate               - Outcome-based (removed in File 3)
- * ❌ severity                     - Derived from outcomes (removed in File 3)
- * ❌ confidence                   - Derived from outcomes (removed in File 3)
- *
- * PYTHON SERVER INTEGRATION:
- * - Server: python_files/6a_ml_inference_server.py (must be running!)
- * - Port: 8765 (default, configurable via InferenceServerPort attribute)
- * - Protocol: Space-separated features + optional model name + newline
- * - Example: "25.0 25.0 25.0 0.0 0.01 0.99 0.5 20.0 0.5 oracle_aggressive\n"
- * - Response: JSON with rateIdx, confidence, latencyMs, success, model
- *
- * USAGE:
- * 1. Start Python server: python3 python_files/6a_ml_inference_server.py
- * 2. Run ns-3 simulation with SmartWifiManagerRf
- * 3. C++ sends 9 features → Python server → ML inference → C++ receives rate
- *
- * Author: ahmedjk34 (https://github.com/ahmedjk34)
- * Date: 2025-10-02 18:03:33 UTC
- * Version: 6.0 (NEW PIPELINE - 9 Features, Probabilistic Oracle)
- * License: Copyright (c) 2005,2006 INRIA
+ * Author: ahmedjk34
+ * Date: 2025-01-04
  */
 
 #ifndef SMART_WIFI_MANAGER_RF_H
@@ -71,28 +27,27 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
-#include <fcntl.h> // For fcntl, O_NONBLOCK
+#include <fcntl.h>
 #include <mutex>
 #include <string>
-#include <sys/select.h> // For select()
+#include <sys/select.h>
 #include <vector>
 
 namespace ns3
 {
 
 /**
- * Enhanced WiFi context classification for intelligent rate adaptation
- * Based on REALISTIC SNR and network conditions
+ * Enhanced WiFi context classification
  */
 enum class WifiContextType
 {
-    EMERGENCY,        // Critical network conditions - use lowest rates
-    POOR_UNSTABLE,    // Poor signal with instability
-    MARGINAL,         // Marginal signal quality
-    GOOD_UNSTABLE,    // Good signal but unstable
-    GOOD_STABLE,      // Good signal and stable
-    EXCELLENT_STABLE, // Excellent signal and very stable
-    UNKNOWN           // Unknown/unclassified state
+    EMERGENCY,
+    POOR_UNSTABLE,
+    MARGINAL,
+    GOOD_UNSTABLE,
+    GOOD_STABLE,
+    EXCELLENT_STABLE,
+    UNKNOWN
 };
 
 // Forward declarations
@@ -100,7 +55,7 @@ class SmartWifiManagerRfState;
 class SmartWifiManagerRf;
 
 /**
- * \brief Safety assessment structure for network conditions
+ * Safety assessment structure
  */
 struct SafetyAssessment
 {
@@ -110,7 +65,6 @@ struct SafetyAssessment
     bool requiresEmergencyAction;
     double confidenceInAssessment;
     std::string contextStr;
-
     SmartWifiManagerRf* managerRef;
     uint32_t stationId;
 
@@ -128,23 +82,7 @@ struct SafetyAssessment
 };
 
 /**
- * \brief NEW PIPELINE Smart Rate control algorithm using Python ML server
- * \ingroup wifi
- *
- * NEW PIPELINE VERSION (2025-10-02):
- * - 9 safe features (no temporal leakage, no outcome features)
- * - Python server integration via socket (port 8765)
- * - oracle_aggressive default (62.8% test accuracy)
- * - Models located in python_files/trained_models/
- * - Thread-safe operations
- * - Realistic SNR conversion (-30dB to +45dB)
- *
- * Key changes from 14-feature version:
- * - Removed 5 outcome features
- * - Removed previous/current window tracking
- * - Updated feature extraction to 9 features
- * - Python client integration (socket communication)
- * - Model expects exactly 9 features
+ * Smart WiFi Manager - PHASE 1-4 COMPLETE
  */
 class SmartWifiManagerRf : public WifiRemoteStationManager
 {
@@ -153,9 +91,6 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     SmartWifiManagerRf();
     ~SmartWifiManagerRf() override;
 
-    /**
-     * \brief Result structure for ML inference operations
-     */
     struct InferenceResult
     {
         uint32_t rateIdx;
@@ -176,15 +111,15 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
         }
     };
 
-    // Configuration methods (thread-safe)
+    // Configuration methods
     void SetBenchmarkDistance(double distance);
     void SetModelName(const std::string& modelName);
     void SetOracleStrategy(const std::string& strategy);
     void SetCurrentInterferers(uint32_t interferers);
     void UpdateFromBenchmarkGlobals(double distance, uint32_t interferers);
     void DebugPrintCurrentConfig() const;
+    void SetBenchmarkSpeed(double speed);
 
-    // Thread-safe getters
     double GetCurrentBenchmarkDistance() const
     {
         return m_benchmarkDistance.load();
@@ -195,12 +130,12 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
         return m_currentInterferers.load();
     }
 
-    // Station registry for safe access
+    // Station registry
     SmartWifiManagerRfState* GetStationById(uint32_t stationId) const;
     uint32_t RegisterStation(SmartWifiManagerRfState* station);
 
   private:
-    // Core WifiRemoteStationManager interface
+    // Core interface
     void DoInitialize() override;
     WifiRemoteStation* DoCreateStation() const override;
     void DoReportRxOk(WifiRemoteStation* station, double rxSnr, WifiMode txMode) override;
@@ -221,28 +156,29 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     WifiTxVector DoGetDataTxVector(WifiRemoteStation* station, uint16_t allowedWidth) override;
     WifiTxVector DoGetRtsTxVector(WifiRemoteStation* station) override;
 
-    // NEW PIPELINE: ML inference with 9 safe features via Python server
-    InferenceResult RunMLInference(const std::vector<double>& features) const;
+    // ML inference
+    InferenceResult RunMLInference(const std::vector<double>& features,
+                                   const std::string& modelName = "") const;
     std::vector<double> ExtractFeatures(WifiRemoteStation* station) const;
     void UpdateMetrics(WifiRemoteStation* station, bool success, double snr);
 
-    // NEW PIPELINE: Safe feature calculation methods (9 features only!)
+    // Feature extraction
     double GetSnrTrendShort(WifiRemoteStation* station) const;
     double GetSnrStabilityIndex(WifiRemoteStation* station) const;
     double GetSnrPredictionConfidence(WifiRemoteStation* station) const;
     double GetMobilityMetric(WifiRemoteStation* station) const;
 
-    // Enhanced SNR modeling with consistent pipeline
+    // SNR modeling
     double ConvertToRealisticSnr(double ns3Snr) const;
 
-    // Context and safety assessment
+    // Context assessment
     SafetyAssessment AssessNetworkSafety(SmartWifiManagerRfState* station);
     WifiContextType ClassifyNetworkContext(SmartWifiManagerRfState* station) const;
     std::string ContextTypeToString(WifiContextType type) const;
     double CalculateRiskLevel(SmartWifiManagerRfState* station) const;
     uint32_t GetContextSafeRate(SmartWifiManagerRfState* station, WifiContextType context) const;
 
-    // Enhanced rate decision algorithms
+    // Rate decision
     uint32_t GetEnhancedRuleBasedRate(SmartWifiManagerRfState* station,
                                       const SafetyAssessment& safety) const;
     uint32_t FuseMLAndRuleBased(uint32_t mlRate,
@@ -251,7 +187,45 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
                                 const SafetyAssessment& safety,
                                 SmartWifiManagerRfState* station) const;
 
-    // Configuration parameters
+    // 🚀 PHASE 1A: Enhanced features
+    void UpdateEnhancedFeatures(SmartWifiManagerRfState* station);
+
+    // 🚀 PHASE 2: Scenario-aware model selection
+    std::string SelectBestModel(SmartWifiManagerRfState* station) const;
+
+    // 🚀 PHASE 3: Hysteresis
+    uint8_t ApplyHysteresis(SmartWifiManagerRfState* station,
+                            uint8_t currentRate,
+                            uint8_t predictedRate) const;
+
+    // 🚀 PHASE 4: Adaptive fusion
+    double CalculateAdaptiveTrust(double mlConfidence, SmartWifiManagerRfState* station) const;
+    uint32_t AdaptiveFusion(uint8_t mlRate,
+                            uint8_t ruleRate,
+                            double mlConfidence,
+                            SmartWifiManagerRfState* station) const;
+
+    // 🚀 FIX #5: Unified adaptive fusion (replaces backwards logic)
+    uint32_t UnifiedAdaptiveFusion(uint8_t mlRate,
+                                   uint8_t ruleRate,
+                                   double mlConfidence,
+                                   SmartWifiManagerRfState* station,
+                                   const SafetyAssessment& safety) const;
+
+    // Adaptive confidence
+    double CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState* station,
+                                                WifiContextType context) const;
+
+    // Attribute accessors
+    void SetBenchmarkDistanceAttribute(double dist);
+    double GetBenchmarkDistanceAttribute() const;
+    void SetInterferersAttribute(uint32_t count);
+    uint32_t GetInterferersAttribute() const;
+    double GetBenchmarkSpeedAttribute() const;
+    uint32_t GetBenchmarkPacketSizeAttribute() const;
+    void SetBenchmarkPacketSizeAttribute(uint32_t pktSize);
+
+    // Configuration
     std::string m_modelPath;
     std::string m_scalerPath;
     std::string m_modelType;
@@ -300,69 +274,20 @@ class SmartWifiManagerRf : public WifiRemoteStationManager
     mutable std::map<uint32_t, SmartWifiManagerRfState*> m_stationRegistry;
     mutable std::atomic<uint32_t> m_nextStationId;
 
-    double CalculateAdaptiveConfidenceThreshold(SmartWifiManagerRfState* station,
-                                                WifiContextType context) const;
-
-    double GetBenchmarkSpeedAttribute() const;
-
-    // 🚀 PHASE 2: Scenario-aware selection
+    // 🚀 PHASE 2 & 3
     bool m_enableScenarioAwareSelection;
     mutable std::string m_currentModelName;
-
-    // 🚀 PHASE 3: Hysteresis configuration
     uint32_t m_hysteresisStreak;
-
-    // Add to SmartWifiManagerRf class private methods (around line 300-400):
-
-    // 🚀 PHASE 1A
-    void UpdateEnhancedFeatures(SmartWifiManagerRfState* station);
-
-    // 🚀 PHASE 2
-    std::string SelectBestModel(SmartWifiManagerRfState* station) const;
-
-    // 🚀 PHASE 3
-    uint8_t ApplyHysteresis(SmartWifiManagerRfState* station,
-                            uint8_t currentRate,
-                            uint8_t predictedRate) const;
-
-    // 🚀 PHASE 4
-    double CalculateAdaptiveTrust(double mlConfidence, SmartWifiManagerRfState* station) const;
-    uint32_t AdaptiveFusion(uint8_t mlRate,
-                            uint8_t ruleRate,
-                            double mlConfidence,
-                            SmartWifiManagerRfState* station) const;
-
-    // Update signature of RunMLInference:
-    InferenceResult RunMLInference(const std::vector<double>& features,
-                                   const std::string& modelName = "") const;
-
-    // 🚀 ATTRIBUTE SETTERS/GETTERS (for guaranteed sync)
-    void SetBenchmarkDistanceAttribute(double dist);
-    double GetBenchmarkDistanceAttribute() const;
-    void SetInterferersAttribute(uint32_t count);
-    uint32_t GetInterferersAttribute() const;
-
-    void SetBenchmarkSpeed(double speed);
-
-    uint32_t GetBenchmarkPacketSizeAttribute() const;
-    void SetBenchmarkPacketSizeAttribute(uint32_t pktSize);
 };
 
 /**
- * \brief NEW PIPELINE SmartWifiManagerRf station state (9 features)
- *
- * CRITICAL CHANGES:
- * - Removed previousShortWindow, previousMedWindow (outcome features)
- * - Removed currentShortWindow, currentMedWindow (outcome features)
- * - Removed severity, confidence (outcome features)
- * - Removed all packet tracking windows
- * - Only SNR metrics and environmental features remain
+ * 🚀 FIXED: SmartWifiManagerRfState with all per-station tracking
  */
 struct SmartWifiManagerRfState : public WifiRemoteStation
 {
     uint32_t stationId;
 
-    // NEW PIPELINE: Core SNR metrics (SAFE - pre-decision measurements)
+    // Core SNR metrics
     double lastSnr;
     double lastRawSnr;
     double snrFast;
@@ -372,36 +297,36 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     double snrPredictionConfidence;
     double snrVariance;
 
-    // Timing features (SAFE - environmental)
+    // Timing
     Time lastUpdateTime;
     Time lastInferenceTime;
     Time lastRateChangeTime;
 
-    // Network state (SAFE - environmental)
+    // Network state
     double mobilityMetric;
     Vector lastPosition;
     uint32_t currentRateIndex;
     uint32_t previousRateIndex;
 
-    // Context tracking (SAFE - assessment only)
+    // Context
     WifiContextType lastContext;
     double lastRiskLevel;
 
-    // Packet tracking (SAFE - historical only)
+    // Packet tracking
     uint32_t totalPackets;
     uint32_t lostPackets;
+    uint32_t successfulPackets;
+    uint32_t failedPackets;
 
-    // SNR history (SAFE - measurements)
+    // SNR history
     std::deque<double> snrHistory;
     std::deque<double> rawSnrHistory;
 
-    // ML interaction tracking
+    // ML tracking
     uint32_t mlInferencesReceived;
     uint32_t mlInferencesSuccessful;
     double avgMlConfidence;
     std::string preferredModel;
-
-    // ML performance tracking
     uint32_t lastMLInfluencedRate;
     Time lastMLInfluenceTime;
     double mlPerformanceScore;
@@ -411,32 +336,67 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
     double recentMLAccuracy;
     Time lastMLPerformanceUpdate;
 
-    static constexpr uint32_t WINDOW_SIZE = 50;
-
-    // 🚀 PHASE 1B: NEW FEATURE TRACKING (4 features)
-    double rssiVariance;      // RSSI variance (dB²)
-    double interferenceLevel; // Interference level (0-1)
-    double distanceMetric;    // Distance from AP (meters)
-    double avgPacketSize;     // Average packet size (bytes)
-
-    double retryRate{0.0};
-    double frameErrorRate{0.0};
-
-    uint32_t packetsSinceRateChange{0};
-    uint32_t successfulPackets{0};
-    uint32_t failedPackets{0};
+    // 🚀 PHASE 1B: Enhanced features
+    double rssiVariance;
+    double interferenceLevel;
+    double distanceMetric;
+    double avgPacketSize;
+    double retryRate;
+    double frameErrorRate;
+    uint32_t packetsSinceRateChange;
     std::deque<uint32_t> recentRateHistory;
 
     // 🚀 PHASE 3: Hysteresis tracking
-    uint32_t ratePredictionStreak{0};
-    uint8_t lastPredictedRate{3};
-    uint32_t rateStableCount{0};
+    uint32_t ratePredictionStreak;
+    uint8_t lastPredictedRate;
+    uint32_t rateStableCount;
 
-    // In SmartWifiManagerRfState struct:
-    uint32_t consecutiveFailures = 0;  // Track consecutive failures (AARF-style)
-    uint32_t consecutiveSuccesses = 0; // Track consecutive successes (AARF-style)
+    // Consecutive tracking
+    uint32_t consecutiveFailures;
+    uint32_t consecutiveSuccesses;
 
-    Time lastModelSwitchTime{Seconds(0)}; // Add this line
+    // 🚀 FIX #1.3: Per-station ML cache
+    struct MLCache
+    {
+        Time timestamp;
+        uint32_t rateIdx;
+        double confidence;
+        std::string modelUsed;
+        double snrAtInference;
+        double distanceAtInference;
+        uint32_t interferersAtInference;
+
+        MLCache()
+            : timestamp(Seconds(0)),
+              rateIdx(3),
+              confidence(0.0),
+              modelUsed("none"),
+              snrAtInference(0.0),
+              distanceAtInference(0.0),
+              interferersAtInference(0)
+        {
+        }
+    };
+
+    MLCache mlCache;
+    bool mlCacheValid;
+
+    // 🚀 FIX #1.2: Per-station call counter
+    uint64_t callCounter;
+
+    // 🚀 FIX #2.3: Per-station model tracking
+    std::string currentModelName;
+    Time lastModelSwitchTime;
+
+    // 🚀 FIX #6: Per-station ML failure tracking
+    uint32_t consecutiveMlFailures;
+    uint32_t packetsSinceMLRetry;
+
+    // Feature stability for cache invalidation
+    double lastInferenceSnr;
+    double lastInferenceDistance;
+
+    static constexpr uint32_t WINDOW_SIZE = 50;
 
     SmartWifiManagerRfState()
         : stationId(0),
@@ -459,6 +419,8 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
           lastRiskLevel(0.0),
           totalPackets(0),
           lostPackets(0),
+          successfulPackets(0),
+          failedPackets(0),
           mlInferencesReceived(0),
           mlInferencesSuccessful(0),
           avgMlConfidence(0.3),
@@ -468,7 +430,27 @@ struct SmartWifiManagerRfState : public WifiRemoteStation
           mlPerformanceScore(0.5),
           mlSuccessfulPredictions(0),
           recentMLAccuracy(0.5),
-          lastMLPerformanceUpdate(Seconds(0))
+          lastMLPerformanceUpdate(Seconds(0)),
+          rssiVariance(0.0),
+          interferenceLevel(0.0),
+          distanceMetric(20.0),
+          avgPacketSize(1200.0),
+          retryRate(0.0),
+          frameErrorRate(0.0),
+          packetsSinceRateChange(0),
+          ratePredictionStreak(0),
+          lastPredictedRate(3),
+          rateStableCount(0),
+          consecutiveFailures(0),
+          consecutiveSuccesses(0),
+          mlCacheValid(false),
+          callCounter(0),
+          currentModelName("oracle_aggressive"),
+          lastModelSwitchTime(Seconds(0)),
+          consecutiveMlFailures(0),
+          packetsSinceMLRetry(0),
+          lastInferenceSnr(0.0),
+          lastInferenceDistance(0.0)
     {
         for (int i = 0; i < 6; i++)
         {
