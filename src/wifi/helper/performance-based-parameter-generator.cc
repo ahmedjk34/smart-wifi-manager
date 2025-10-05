@@ -416,7 +416,8 @@ PerformanceBasedParameterGenerator::GenerateForceHighRateScenario(uint32_t index
 double
 PerformanceBasedParameterGenerator::CalculateDistanceForSnr(double targetSnr, uint32_t interferers)
 {
-    double adjustedSnr = targetSnr + (interferers * 2.0);
+    // FIX: Subtract interference BEFORE calculating distance
+    double adjustedSnr = targetSnr - (interferers * 2.0);
 
     double distance;
     if (adjustedSnr >= 35.0)
