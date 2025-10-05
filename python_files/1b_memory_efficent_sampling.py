@@ -39,7 +39,7 @@ NUM_RATES = 8
 # BALANCING STRATEGY - Choose one:
 STRATEGY = 'power'  # 'power', 'balanced', or 'tiered'
 POWER = 0.5         # Only used if STRATEGY='power' (0.3-0.7 recommended)
-TARGET_TOTAL = 2_812_500  # Total samples in final dataset
+TARGET_TOTAL = 750_000  # Total samples in final dataset
 
 # Tiered strategy percentages (only used if STRATEGY='tiered')
 TIERED_PERCENTAGES = {
