@@ -143,9 +143,9 @@ KNOWN_LEAKY_FEATURES = [
 
 # Data validation ranges (only for features that won't be removed)
 VALIDATION_RANGES = {
-    'lastSnr': (-10, 50),
-    'snrFast': (-10, 50),
-    'snrSlow': (-10, 50),
+    'lastSnr': (-30, 50),  # Changed from -10 to -30
+    'snrFast': (-30, 50),  # Changed from -10 to -30
+    'snrSlow': (-30, 50),  # Changed from -10 to -30
     'snrTrendShort': (-20, 20),
     'snrStabilityIndex': (0, 50),
     'snrPredictionConfidence': (0, 1),
