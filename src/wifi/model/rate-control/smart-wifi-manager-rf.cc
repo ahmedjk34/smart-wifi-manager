@@ -1983,27 +1983,57 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     SmartWifiManagerRfState* station = static_cast<SmartWifiManagerRfState*>(st);
 
+    // ============================================================================
+    // FIX #2: FILTER OUT BEACONS AND MANAGEMENT FRAMES
+    // ============================================================================
+    uint64_t dataRate = txMode.GetDataRate(20); // 20 MHz channel width
+
+    // Beacons and management frames typically use 1-2 Mbps (6 Mbps for 802.11a)
+    // Only update history for actual data frames (>= 12 Mbps)
+    bool isDataFrame = (dataRate >= 12000000); // >= 12 Mbps
+
+    if (!isDataFrame)
+    {
+        // Still update fast averages (beacons indicate signal quality)
+        // but don't pollute history with beacon SNR
+        station->lastRawSnr = rxSnr;
+        double realisticSnr = ConvertToRealisticSnr(rxSnr);
+
+        if (station->snrFast == 0.0)
+        {
+            station->snrFast = realisticSnr;
+            station->snrSlow = realisticSnr;
+        }
+        else
+        {
+            // Lighter weight update for beacons
+            station->snrFast = 0.05 * realisticSnr + 0.95 * station->snrFast;
+            station->snrSlow = 0.01 * realisticSnr + 0.99 * station->snrSlow;
+        }
+
+        NS_LOG_DEBUG("[BEACON/MGMT] Rate=" << dataRate << " bps, SNR=" << realisticSnr
+                                           << " dB (not added to history)");
+        return;
+    }
+
+    // ============================================================================
+    // DATA FRAME PROCESSING
+    // ============================================================================
     station->lastRawSnr = rxSnr;
     double realisticSnr = ConvertToRealisticSnr(rxSnr);
     station->lastSnr = realisticSnr;
 
-    // FIXED: Only update history for data frames (not beacons/management)
-    uint64_t dataRate = txMode.GetDataRate(20); // 20 MHz channel
-    bool isDataFrame = (dataRate >= 6000000);   // >= 6 Mbps (likely data, not beacon)
+    // Update history ONLY for data frames
+    station->snrHistory.push_back(realisticSnr);
+    station->rawSnrHistory.push_back(rxSnr);
 
-    if (isDataFrame)
+    if (station->snrHistory.size() > 20)
     {
-        station->snrHistory.push_back(realisticSnr);
-        station->rawSnrHistory.push_back(rxSnr);
-
-        if (station->snrHistory.size() > 20)
-        {
-            station->snrHistory.pop_front();
-            station->rawSnrHistory.pop_front();
-        }
+        station->snrHistory.pop_front();
+        station->rawSnrHistory.pop_front();
     }
 
-    // Always update fast/slow averages (even beacons indicate signal quality)
+    // Update fast/slow averages with normal weight for data
     if (station->snrFast == 0.0)
     {
         station->snrFast = realisticSnr;
@@ -2016,8 +2046,8 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
             (m_snrAlpha / 10) * realisticSnr + (1 - m_snrAlpha / 10) * station->snrSlow;
     }
 
-    // Update RSSI variance only when we have enough data samples
-    if (isDataFrame && station->snrHistory.size() >= 5)
+    // Update RSSI variance only when we have enough DATA samples
+    if (station->snrHistory.size() >= 5)
     {
         double mean = 0.0;
         for (double snr : station->snrHistory)
@@ -2032,8 +2062,13 @@ SmartWifiManagerRf::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode t
         }
         variance /= station->snrHistory.size();
 
-        station->rssiVariance = 0.8 * station->rssiVariance + 0.2 * variance;
+        // Smooth variance update
+        station->rssiVariance = 0.7 * station->rssiVariance + 0.3 * variance;
     }
+
+    NS_LOG_DEBUG("[DATA FRAME] Rate=" << dataRate << " bps, SNR=" << realisticSnr
+                                      << " dB (added to history, size="
+                                      << station->snrHistory.size() << ")");
 
     UpdateMetrics(st, true, realisticSnr);
 }

@@ -242,16 +242,30 @@ EnhancedRateTrace(std::string context, uint64_t rate, uint64_t oldRate)
     if (!g_managerInitialized)
         return;
 
-    // ✅ KEPT: Only count rate changes for main STA (Node 0)
+    // FIX #3: ONLY COUNT RATE CHANGES FROM NODE 0 (MAIN STA)
+    // Current code already does this, but verify it's working
     if (context.find("/NodeList/0/") == std::string::npos)
     {
-        return;
+        return; // Ignore AP and interferers
     }
 
     currentStats.rateChanges++;
+
+    // Add validation to ensure we're not double-counting
+    static uint64_t lastRateChangeTime = 0;
+    uint64_t currentTime = Simulator::Now().GetMicroSeconds();
+
+    if (currentTime == lastRateChangeTime)
+    {
+        // Same microsecond = duplicate callback, ignore
+        currentStats.rateChanges--;
+        return;
+    }
+    lastRateChangeTime = currentTime;
+
     logFile << "[RATE CHANGE] Rate: " << rate << " bps (was " << oldRate
-            << " bps) | Changes=" << currentStats.rateChanges
-            << " | Strategy=" << currentStats.oracleStrategy << std::endl;
+            << " bps) | Changes=" << currentStats.rateChanges << " | Node=0 (STA only)"
+            << std::endl;
 }
 
 void
@@ -461,7 +475,6 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
     currentStats.simulationTime = 20.0;
     currentStats.rateChanges = 0;
 
-    // Determine category for environment adjustments (KEPT CONSTANT)
     std::string category = "GoodConditions";
     if (tc.staDistance >= 70.0 || (tc.staDistance >= 50.0 && tc.staSpeed >= 10.0))
         category = "PoorPerformance";
@@ -495,21 +508,17 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         interfererApNodes.Create(tc.numInterferers);
         interfererStaNodes.Create(tc.numInterferers);
 
-        // ============================================================
-        // PHY CONFIGURATION (KEPT CONSTANT FOR BENCHMARKING)
-        // ============================================================
+        // PHY CONFIGURATION
         YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
         YansWifiPhyHelper phy;
         phy.SetChannel(channel.Create());
 
-        // ✅ KEPT: Baseline PHY parameters (constant environment)
         phy.Set("TxPowerStart", DoubleValue(30.0));
         phy.Set("TxPowerEnd", DoubleValue(30.0));
-        phy.Set("RxNoiseFigure", DoubleValue(3.0)); // Base: 3dB
+        phy.Set("RxNoiseFigure", DoubleValue(3.0));
         phy.Set("CcaEdThreshold", DoubleValue(-82.0));
         phy.Set("RxSensitivity", DoubleValue(-92.0));
 
-        // ✅ KEPT: Category-specific adjustments (for benchmarking consistency)
         if (category == "PoorPerformance")
         {
             phy.Set("RxNoiseFigure", DoubleValue(5.0));
@@ -525,10 +534,12 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                           : (category == "HighInterference" ? "4.0" : "3.0"))
                   << "dB (KEPT CONSTANT)" << std::endl;
 
+        // ============================================================================
+        // FIX #1: CREATE WIFI HELPER ONCE, REUSE FOR ALL DEVICES
+        // ============================================================================
         WifiHelper wifi;
         wifi.SetStandard(WIFI_STANDARD_80211a);
 
-        // ✅ FIX #2: Model paths updated for 14-feature models
         std::string modelPath =
             "python_files/trained_models/step4_rf_" + tc.oracleStrategy + "_FIXED.joblib";
         std::string scalerPath =
@@ -538,7 +549,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         std::cout << "[MODEL] Features: 14 (Phase 1B: 7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)"
                   << std::endl;
 
-        // ✅ KEPT: Set manager attributes BEFORE device installation (guaranteed sync)
+        // Set manager attributes ONCE (will be cloned for all devices)
         wifi.SetRemoteStationManager("ns3::SmartWifiManagerRf",
                                      "ModelPath",
                                      StringValue(modelPath),
@@ -579,9 +590,9 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                      "FallbackRate",
                                      UintegerValue(3),
                                      "HysteresisStreak",
-                                     UintegerValue(3),
+                                     UintegerValue(5), // INCREASED FROM 3
                                      "EnableScenarioAwareSelection",
-                                     BooleanValue(true),
+                                     BooleanValue(false), // DISABLED FOR BENCHMARK CONSISTENCY
                                      "BenchmarkSpeed",
                                      DoubleValue(tc.staSpeed),
                                      "BenchmarkPacketSize",
@@ -591,13 +602,15 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         WifiMacHelper mac;
         Ssid ssid = Ssid("smartrf-phase4-" + tc.oracleStrategy);
 
+        // Install on STA (creates 1 manager)
         mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
+        // Install on AP (creates 1 manager)
         mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid));
         NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
 
-        // Interferer devices
+        // Install on interferers (creates N managers, but won't be tracked)
         NetDeviceContainer interfererStaDevices, interfererApDevices;
         if (tc.numInterferers > 0)
         {
@@ -608,7 +621,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
         }
 
-        // Get and verify manager
+        // Get ONLY the STA manager (Node 0)
         Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
         if (!staDevice)
         {
@@ -627,7 +640,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         g_currentSmartManager = smartManager;
         g_managerInitialized = true;
 
-        // ✅ FIX #4: Verify attribute sync
+        // Verify attribute sync
         double managerDistance = smartManager->GetCurrentBenchmarkDistance();
         uint32_t managerInterferers = smartManager->GetCurrentInterfererCount();
 
@@ -637,20 +650,15 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             std::cout << "[WARN] Attribute sync mismatch, applying manual update..." << std::endl;
             smartManager->UpdateFromBenchmarkGlobals(tc.staDistance, tc.numInterferers);
 
-            // Re-verify
             managerDistance = smartManager->GetCurrentBenchmarkDistance();
             managerInterferers = smartManager->GetCurrentInterfererCount();
         }
 
         std::cout << "[SYNC ✓] Distance=" << managerDistance << "m (target=" << tc.staDistance
                   << "m), Interferers=" << managerInterferers << " (target=" << tc.numInterferers
-                  << ")" << std::endl;
+                  << ") | SINGLE MANAGER INSTANCE" << std::endl;
 
-        // ============================================================
-        // MOBILITY (KEPT CONSTANT FOR BENCHMARKING)
-        // ============================================================
-
-        // AP at origin
+        // MOBILITY
         MobilityHelper apMobility;
         Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
         apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -658,18 +666,15 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
         apMobility.Install(wifiApNode);
 
-        // STA mobility - KEPT CONSTANT
         MobilityHelper staMobility;
         if (tc.staSpeed > 0.0)
         {
-            // Mobile scenario
             staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
             Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
             staPositionAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
             staMobility.SetPositionAllocator(staPositionAlloc);
             staMobility.Install(wifiStaNodes);
 
-            // ✅ KEPT: Velocity calculation (baseline)
             Vector velocity(tc.staSpeed * 0.5, 0.0, 0.0);
             if (category == "PoorPerformance" || category == "HighInterference")
             {
@@ -680,7 +685,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             std::cout << "[MOBILITY] Speed=" << tc.staSpeed << "m/s, Velocity=(" << velocity.x
                       << "," << velocity.y << ",0) (KEPT CONSTANT)" << std::endl;
 
-            for (double t = 3.0; t < 19.0; t += 0.1) // Was: t += 1.0
+            for (double t = 3.0; t < 19.0; t += 0.1)
             {
                 Simulator::Schedule(Seconds(t),
                                     &UpdateMobileStationDistance,
@@ -689,13 +694,10 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                     tc.numInterferers);
             }
 
-            std::cout << "[MOBILITY] Scheduled 160 distance updates (every 100ms) for "
-                         "high-precision tracking"
-                      << std::endl;
+            std::cout << "[MOBILITY] Scheduled 160 distance updates (every 100ms)" << std::endl;
         }
         else
         {
-            // Static scenario
             staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
             Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
             staPositionAlloc->Add(Vector(tc.staDistance, 0.0, 0.0));
@@ -703,9 +705,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             staMobility.Install(wifiStaNodes);
         }
 
-        // ============================================================
-        // INTERFERER PLACEMENT (KEPT CONSTANT)
-        // ============================================================
+        // INTERFERER PLACEMENT
         if (tc.numInterferers > 0)
         {
             MobilityHelper interfererMobility;
@@ -717,7 +717,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             for (uint32_t i = 0; i < tc.numInterferers; ++i)
             {
                 double angle = 2.0 * M_PI * i / std::max<uint32_t>(tc.numInterferers, 1);
-                double radius = 30.0 + i * 15.0; // ✅ KEPT: Staggered circular
+                double radius = 30.0 + i * 15.0;
 
                 interfererApAlloc->Add(
                     Vector(radius * std::cos(angle), radius * std::sin(angle), 0.0));
@@ -732,9 +732,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             interfererMobility.SetPositionAllocator(interfererStaAlloc);
             interfererMobility.Install(interfererStaNodes);
 
-            std::cout << "[INTERFERERS] Circular placement: " << tc.numInterferers
-                      << " nodes at 30-" << (30 + (tc.numInterferers - 1) * 15)
-                      << "m (KEPT CONSTANT)" << std::endl;
+            std::cout << "[INTERFERERS] Circular placement: " << tc.numInterferers << " nodes"
+                      << std::endl;
         }
 
         // Internet stack
@@ -760,12 +759,9 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             interfererStaInterface = address.Assign(interfererStaDevices);
         }
 
-        // ============================================================
-        // TRAFFIC CONFIGURATION (KEPT CONSTANT)
-        // ============================================================
+        // TRAFFIC CONFIGURATION
         uint16_t port = 4000;
 
-        // ✅ KEPT: Category-based traffic adjustment
         std::string adjustedRate = tc.trafficRate;
         if (category == "PoorPerformance" || category == "HighInterference")
         {
@@ -774,7 +770,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             rateValue = std::max(0.5, rateValue);
             adjustedRate = std::to_string(static_cast<int>(std::ceil(rateValue))) + "Mbps";
             std::cout << "[TRAFFIC] Adjusted rate: " << tc.trafficRate << " -> " << adjustedRate
-                      << " (poor conditions, KEPT CONSTANT)" << std::endl;
+                      << std::endl;
         }
 
         OnOffHelper onoff("ns3::UdpSocketFactory",
@@ -793,7 +789,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         serverApps.Start(Seconds(2.0));
         serverApps.Stop(Seconds(18.0));
 
-        // ✅ KEPT: Interferer traffic
+        // Interferer traffic
         if (tc.numInterferers > 0)
         {
             for (uint32_t i = 0; i < tc.numInterferers; ++i)
@@ -828,7 +824,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         FlowMonitorHelper flowmon;
         Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-        // ✅ KEPT: Connect traces
+        // Connect traces
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/RemoteStationManager/Rate",
                         MakeCallback(&EnhancedRateTrace));
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxBegin",
@@ -840,16 +836,14 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
         Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/MonitorSnifferRx",
                         MakeCallback(&MonitorSniffRx));
 
-        // ✅ KEPT: Run simulation (20s timing)
+        // Run simulation
         Simulator::Stop(Seconds(20.0));
-        std::cout << "Starting simulation (20 seconds - ENVIRONMENT KEPT CONSTANT)..." << std::endl;
+        std::cout << "Starting simulation (20 seconds)..." << std::endl;
         Simulator::Run();
 
         std::cout << "Simulation completed, collecting results..." << std::endl;
 
-        // ============================================================
-        // RESULTS COLLECTION (KEPT CONSTANT)
-        // ============================================================
+        // RESULTS COLLECTION (unchanged - rest of your code)
         double throughput = 0, packetLoss = 0, avgDelay = 0, jitter = 0;
         double rxPackets = 0, txPackets = 0, rxBytes = 0;
         double simulationTime = 14.0;
@@ -861,7 +855,6 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
         std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
-        // ✅ KEPT: Flow stats collection
         for (auto it = stats.begin(); it != stats.end(); ++it)
         {
             Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
@@ -895,7 +888,6 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             }
         }
 
-        // Fallback flow search
         if (!flowStatsFound)
         {
             std::cout << "⚠️ [FLOW DEBUG] No matching flow found! Searching all flows..."
@@ -905,16 +897,9 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             {
                 Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
 
-                std::cout << "  Available flow: " << t.sourceAddress << ":" << t.sourcePort << " → "
-                          << t.destinationAddress << ":" << t.destinationPort
-                          << " | TX=" << it->second.txPackets << " RX=" << it->second.rxPackets
-                          << std::endl;
-
                 if (it->second.txPackets > txPackets &&
                     t.sourceAddress.CombineMask(Ipv4Mask("255.255.0.0")) == Ipv4Address("10.1.0.0"))
                 {
-                    std::cout << "  ✅ Using this flow (most packets)" << std::endl;
-
                     flowStatsFound = true;
                     rxPackets = it->second.rxPackets;
                     txPackets = it->second.txPackets;
@@ -935,17 +920,6 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                         jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
                 }
             }
-        }
-
-        if (flowStatsFound)
-        {
-            std::cout << "✅ [FLOW STATS] Found valid flow: TX=" << txPackets << " RX=" << rxPackets
-                      << " Throughput=" << throughput << " Mbps" << std::endl;
-        }
-        else
-        {
-            std::cout << "❌ [FLOW STATS] NO VALID FLOW FOUND - Stats will be invalid!"
-                      << std::endl;
         }
 
         // Collect realistic SNR statistics
@@ -1012,17 +986,14 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             currentStats.avgMlConfidence = 0.45;
         }
 
-        // Performance metrics
         currentStats.efficiency =
             currentStats.rateChanges > 0 ? throughput / currentStats.rateChanges : throughput;
         currentStats.stability =
             simulationTime > 0 ? currentStats.rateChanges / simulationTime : 0.0;
         currentStats.reliability = currentStats.pdr;
 
-        // Context determination
         currentStats.finalContext = tc.expectedContext;
 
-        // Risk calculation
         double performanceRatio = 0.0;
         if (tc.expectedMinThroughput > 0)
         {
@@ -1082,13 +1053,11 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
 
         std::cout << "Test " << testCaseNumber << " completed in " << testDuration.count()
                   << "ms | Throughput: " << throughput << " Mbps | PDR: " << currentStats.pdr
-                  << "% | Rate Changes: " << currentStats.rateChanges << " | Phase 1-4: ACTIVE"
-                  << std::endl;
+                  << "% | Rate Changes: " << currentStats.rateChanges << std::endl;
 
         logFile << "[TEST COMPLETE] " << testCaseNumber << " | " << tc.scenarioName
-                << " | Category: " << category << " | Duration: " << testDuration.count()
-                << "ms | Throughput: " << throughput << " Mbps | SNR: " << avgSnr
-                << "dB | Valid: " << (currentStats.statsValid ? "YES" : "NO") << std::endl;
+                << " | Duration: " << testDuration.count() << "ms | Throughput: " << throughput
+                << " Mbps | SNR: " << avgSnr << "dB" << std::endl;
     }
     catch (const std::exception& e)
     {
@@ -1142,11 +1111,38 @@ main(int argc, char* argv[])
     // std::vector<uint32_t> interferers = {0, 1, 3};                         // 3 points
     // std::vector<uint32_t> packetSizes = {512, 1500};                       // 2 points
     // std::vector<std::string> trafficRates = {"2Mbps", "11Mbps", "54Mbps"}; // 3 points
-    std::vector<double> distances = {5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0}; // 8
-    std::vector<double> speeds = {5.0, 10.0};                                        // 4
-    std::vector<uint32_t> interferers = {0, 1, 2};                                   // 3
-    std::vector<uint32_t> packetSizes = {512, 1024, 1500};                           // 3
-    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};           // 3
+    // Strategic SNR coverage (rates 0-7)
+    std::vector<double> distances = {
+        5.0,  // 33dB → rate 7
+        8.0,  // 28.6dB → rate 6-7
+        12.0, // 25.4dB → rate 6
+        18.0, // 20.6dB → rate 5
+        25.0, // 15.0dB → rate 4
+        35.0, // 7.5dB → rate 2-3
+        50.0, // 4.0dB → rate 1-2
+        70.0  // -1.0dB → rate 0-1
+    }; // 8 points covering all rates
+
+    std::vector<double> speeds = {0.0, 1.0, 5.0, 10.0}; // 4 points
+    // 0: stationary (baseline)
+    // 1: pedestrian (minimal Doppler)
+    // 5: slow vehicle (moderate fading)
+    // 10: fast vehicle (high fading)
+
+    std::vector<uint32_t> interferers = {0, 2, 4}; // 3 points
+    // 0: clean (baseline)
+    // 2: moderate (-4dB)
+    // 4: severe (-8dB)
+
+    std::vector<uint32_t> packetSizes = {1024}; // 1 point - REMOVE NOISE
+
+    std::vector<std::string> trafficRates = {
+        "2Mbps",  // Low load (always achievable)
+        "11Mbps", // Medium load (achievable at 15+ dB)
+        "36Mbps"  // High load (needs 25+ dB)
+    }; // 3 points matching PHY thresholds
+
+    // Total: 8 × 4 × 3 × 1 × 3 = 288 tests (manageable)
     std::string strategy = "oracle_aggressive";
 
     std::cout << "Generating comprehensive test matrix:" << std::endl;
