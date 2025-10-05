@@ -199,7 +199,7 @@ PerformanceBasedParameterGenerator::GenerateExcellentPerformanceScenario(uint32_
     params.interferers = 0;
     params.packetSize = 1500;
 
-    std::vector<std::string> trafficRates = {"40Mbps", "48Mbps", "54Mbps", "60Mbps"};
+    std::vector<std::string> trafficRates = {"48Mbps", "52Mbps", "54Mbps"}; // ✅ REMOVED 60/65
     params.trafficRate = trafficRates[index % trafficRates.size()];
 
     std::ostringstream name;
@@ -215,24 +215,27 @@ PerformanceBasedParameterGenerator::GenerateRandomChaosScenario(uint32_t index)
 {
     static std::mt19937 rng(12345 + index);
 
+    // Randomize SNR in [8, 45]
     std::uniform_real_distribution<double> snrDist(8.0, 45.0);
     double targetSnr = snrDist(rng);
     double minSnr = std::max(8.0, targetSnr - 3.0);
     double maxSnr = std::min(45.0, targetSnr + 3.0);
 
-    // Match traffic rate to SNR
-    std::string trafficRate;
-    if (targetSnr < 12.0)
-        trafficRate = "3Mbps";
-    else if (targetSnr < 18.0)
-        trafficRate = "8Mbps";
-    else if (targetSnr < 25.0)
-        trafficRate = "18Mbps";
-    else if (targetSnr < 32.0)
-        trafficRate = "35Mbps";
-    else
-        trafficRate = "54Mbps";
+    // ✅ RANDOMIZED traffic rate (no strict mapping to SNR bins)
+    std::vector<std::string> allRates = {"3Mbps",
+                                         "5Mbps",
+                                         "8Mbps",
+                                         "10Mbps",
+                                         "12Mbps",
+                                         "18Mbps",
+                                         "25Mbps",
+                                         "35Mbps",
+                                         "48Mbps",
+                                         "54Mbps"};
+    std::uniform_int_distribution<size_t> rateDist(0, allRates.size() - 1);
+    std::string trafficRate = allRates[rateDist(rng)];
 
+    // Other randomized parameters
     std::uniform_real_distribution<double> speedDist(0.0, 15.0);
     std::uniform_int_distribution<uint32_t> interfererDist(0, 5);
     std::uniform_int_distribution<uint32_t> pktDist(256, 1500);
@@ -240,7 +243,7 @@ PerformanceBasedParameterGenerator::GenerateRandomChaosScenario(uint32_t index)
     ScenarioParams params;
     params.category = "RandomChaos";
 
-    // FIXED: Time-based
+    // FIXED: Time-based (not packet-based)
     params.targetDecisions = 999999;
 
     params.targetSnrMin = minSnr;
@@ -248,13 +251,13 @@ PerformanceBasedParameterGenerator::GenerateRandomChaosScenario(uint32_t index)
     params.distance = CalculateDistanceForSnr(targetSnr, 0);
     params.speed = speedDist(rng);
     params.interferers = interfererDist(rng);
-    params.packetSize = (pktDist(rng) / 256) * 256;
+    params.packetSize = (pktDist(rng) / 256) * 256; // round to 256 bytes
     params.trafficRate = trafficRate;
 
     std::ostringstream name;
     name << "RandomChaos_" << std::setw(3) << std::setfill('0') << index << "_snr" << std::fixed
          << std::setprecision(1) << targetSnr << "_spd" << params.speed << "_if"
-         << params.interferers;
+         << params.interferers << "_" << trafficRate;
     params.scenarioName = name.str();
 
     return params;
@@ -402,7 +405,7 @@ PerformanceBasedParameterGenerator::GenerateForceHighRateScenario(uint32_t index
     params.interferers = 0;
     params.packetSize = 1500;
 
-    std::vector<std::string> trafficRates = {"54Mbps", "60Mbps", "65Mbps"};
+    std::vector<std::string> trafficRates = {"48Mbps", "52Mbps", "54Mbps"};
     params.trafficRate = trafficRates[index % trafficRates.size()];
 
     std::ostringstream name;
@@ -416,49 +419,34 @@ PerformanceBasedParameterGenerator::GenerateForceHighRateScenario(uint32_t index
 double
 PerformanceBasedParameterGenerator::CalculateDistanceForSnr(double targetSnr, uint32_t interferers)
 {
-    // ============================================================================
-    // CRITICAL FIX: Compensate for interference subtraction at runtime
-    // ============================================================================
     double compensatedSnr = targetSnr + (interferers * 2.0);
 
     double distance;
 
-    // Inverse of SOFT_MODEL branches
     if (compensatedSnr >= 35.0)
     {
-        // ✅ FIX: For SNR ≥ 35 dB, use the exact inverse formula
-        // SOFT_MODEL: realisticSnr = 35.0 - (distance * 0.8)
-        // Inverse: distance = (35.0 - realisticSnr) / 0.8
-        // For compensatedSnr = 35.0: distance = 0.0 (impossible)
-        // For compensatedSnr > 35.0: distance would be negative (impossible)
-        // Solution: Clamp to minimum realistic distance
         distance = std::max(0.5, (35.0 - compensatedSnr) / 0.8);
     }
     else if (compensatedSnr > 19.0)
     {
-        // Branch 1: distance range [1.0, 20.0]
         distance = (35.0 - compensatedSnr) / 0.8;
     }
     else if (compensatedSnr > 4.0)
     {
-        // Branch 2: realisticSnr = 19.0 - ((distance - 20.0) * 0.5)
-        // Inverse: distance = 20.0 + (19.0 - realisticSnr) / 0.5
         distance = 20.0 + (19.0 - compensatedSnr) / 0.5;
     }
-    else if (compensatedSnr > -11.0)
+    else if (compensatedSnr > 1.0)
     {
-        // Branch 3: realisticSnr = 4.0 - ((distance - 50.0) * 0.3)
-        // Inverse: distance = 50.0 + (4.0 - realisticSnr) / 0.3
-        distance = 50.0 + (4.0 - compensatedSnr) / 0.3;
+        distance = 50.0 + (4.0 - compensatedSnr) / 0.1;
     }
     else
     {
-        // Branch 4: realisticSnr = -11.0 - ((distance - 100.0) * 0.2)
-        // Inverse: distance = 100.0 + (-11.0 - realisticSnr) / 0.2
-        distance = 100.0 + (-11.0 - compensatedSnr) / 0.2;
+        // ✅ FIXED: For very low compensatedSnr, calculate but will be clamped
+        // This ensures we hit the 80m cap predictably
+        distance = 50.0 + (4.0 - compensatedSnr) / 0.1;
+        // Example: compensatedSnr = 0.0 → distance = 50 + 40 = 90m (clamped to 80)
     }
 
-    // Clamp to safe range
-    return std::clamp(distance, 0.5, 200.0);
+    return std::clamp(distance, 0.5, 80.0);
 }
 } // namespace ns3
