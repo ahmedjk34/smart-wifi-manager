@@ -101,7 +101,7 @@ np.random.seed(RANDOM_SEED)
 USE_MINMAX_SCALER = True  # Set to False to use StandardScaler (old behavior)
 
 # 🚀 PHASE 5C: Model selection
-USE_XGBOOST = False  # Set to True to use XGBoost instead of RandomForest
+USE_XGBOOST = True  # Set to True to use XGBoost instead of RandomForest
 
 # Target labels to train
 TARGET_LABELS = [
