@@ -71,6 +71,13 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers,
         distance = 1.0;
     if (distance > 200.0)
         distance = 200.0;
+
+    // ✅ FIX #1: Force unrealistic SNR beyond 80m (defense in depth)
+    if (distance > 80.0)
+    {
+        return -50.0; // Guaranteed packet loss beyond 80m
+    }
+
     if (interferers > 10)
         interferers = 10;
 
@@ -87,14 +94,14 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers,
     }
     case SOFT_MODEL: {
         if (distance <= 20.0)
-            realisticSnr = 35.0 - (distance * 0.8); // Range: 19-35 dB
+            realisticSnr = 35.0 - (distance * 0.8);
         else if (distance <= 50.0)
-            realisticSnr = 19.0 - ((distance - 20.0) * 0.5); // Range: 4-19 dB
-        else if (distance <= 80.0)                           // ✅ CHANGED: Was 100.0
-            realisticSnr = 4.0 - ((distance - 50.0) * 0.1);  // ✅ CHANGED: Was 0.3 → 0.1
-        // At 80m: 4.0 - (30 * 0.1) = 1.0 dB ✅ (rate 0-1 viable)
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 80.0)
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.1);
         else
-            realisticSnr = 1.0 - ((distance - 80.0) * 0.15); // ✅ NEW: Beyond 80m (won't be used
+            realisticSnr = 1.0 - ((distance - 80.0) * 0.15); // Won't reach here due to check above
+
         realisticSnr -= (interferers * 2.0);
         break;
     }
@@ -285,6 +292,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
             velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1);
 
         wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
+
+        std::cout << "[MOBILITY] Speed=" << tc.speed << "m/s, Velocity=(" << velocity.x << ","
+                  << velocity.y << ",0)" << std::endl;
     }
     else
     {
@@ -296,9 +306,13 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         staMobility.Install(wifiStaNodes);
     }
 
-    // ✅ GET MANAGER AND SET UP UPDATES (AFTER MOBILITY INSTALLED)
+    // ============================================================================
+    // ✅ GET MANAGER AND SET UP DISTANCE UPDATES WITH 80M BOUNDARY CHECK
+    // ============================================================================
+
     Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
     Ptr<MinstrelWifiManagerLogged> mgr;
+
     if (staDevice)
     {
         mgr = DynamicCast<MinstrelWifiManagerLogged>(staDevice->GetRemoteStationManager());
@@ -310,7 +324,7 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
                       << "m, interferers=" << tc.interferers << ", speed=" << tc.speed << " m/s"
                       << std::endl;
 
-            // ✅ SCHEDULE MOBILE UPDATES (ONLY IF MOBILE)
+            // ✅ FIX #2: SCHEDULE MOBILE UPDATES WITH BOUNDARY ENFORCEMENT
             if (tc.speed > 0.0)
             {
                 for (double t = 2.0; t < 118.0; t += 0.1)
@@ -323,16 +337,41 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
                             return;
 
                         Vector pos = staMob->GetPosition();
+
+                        // ✅ FIX: CLAMP POSITION TO 80M BOUNDARY
+                        bool clamped = false;
+                        if (std::abs(pos.x) > 80.0 || std::abs(pos.y) > 80.0)
+                        {
+                            pos.x = std::clamp(pos.x, -80.0, 80.0);
+                            pos.y = std::clamp(pos.y, -80.0, 80.0);
+                            staMob->SetPosition(pos);
+                            clamped = true;
+                        }
+
                         double currentDistance =
                             std::sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z);
 
+                        // ✅ FIX: STOP SIMULATION IF EXCEEDS 80M (defense in depth)
+                        if (currentDistance > 80.0)
+                        {
+                            NS_LOG_INFO("[BOUNDARY] Distance " << currentDistance
+                                                               << "m exceeds 80m at t=" << t
+                                                               << "s - STOPPING");
+                            Simulator::Stop();
+                            return;
+                        }
+
                         mgr->SetScenarioParameters(currentDistance, tc.interferers, tc.speed);
 
+                        // Log mobile updates every 5 seconds
                         if (static_cast<int>(t * 10) % 50 == 0)
                         {
                             std::cout << "[MOBILE UPDATE] Time=" << Simulator::Now().GetSeconds()
                                       << "s, position=(" << pos.x << "," << pos.y
-                                      << "), distance=" << currentDistance << "m" << std::endl;
+                                      << "), distance=" << currentDistance << "m";
+                            if (clamped)
+                                std::cout << " (CLAMPED AT 80M BOUNDARY)";
+                            std::cout << std::endl;
                         }
                     });
                 }
