@@ -1212,11 +1212,7 @@ SmartWifiManagerRf::ExtractFeatures(WifiRemoteStation* st) const
 // ML Inference via Python server (socket communication)
 // ============================================================================
 // ============================================================================
-// 🚀 OPTIMIZED ML INFERENCE WITH PERSISTENT CONNECTION
-// ============================================================================
-// ============================================================================
-// 🚀 SIMPLE ONE-SHOT SOCKET (NO PERSISTENCE, ALWAYS WORKS)
-// ============================================================================
+
 SmartWifiManagerRf::InferenceResult
 SmartWifiManagerRf::RunMLInference(const std::vector<double>& features,
                                    const std::string& modelName) const
