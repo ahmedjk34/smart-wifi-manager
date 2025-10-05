@@ -457,6 +457,8 @@ MinstrelWifiManagerLogged::UpdateRate(MinstrelWifiRemoteStationLogged* station)
     NS_LOG_DEBUG("DoReportDataFailed " << station << " rate " << station->m_txrate << " longRetry "
                                        << station->m_longRetry);
 
+    UpdateInterferenceTracking(station, false); // Failure
+
     if (!station->m_isSampling)
     {
         NS_LOG_DEBUG("Failed with normal rate: current="
@@ -906,10 +908,48 @@ MinstrelWifiManagerLogged::UpdateStats(MinstrelWifiRemoteStationLogged* station)
 }
 
 void
+MinstrelWifiManagerLogged::UpdateInterferenceTracking(MinstrelWifiRemoteStationLogged* st,
+                                                      bool success)
+{
+    NS_LOG_FUNCTION(this << st << success);
+
+    // ✅ MATCH SMART-RF: Update interference based on success/failure
+    if (success)
+    {
+        // Success suggests SLIGHTLY lower interference
+        // Smart-RF uses 0.98 decay (2% reduction per success)
+        st->m_recentCollisions = static_cast<uint32_t>(st->m_recentCollisions * 0.98);
+    }
+    else
+    {
+        // Failure suggests interference/collision
+        st->m_recentCollisions++;
+    }
+
+    st->m_recentTransmissions++;
+
+    // Keep window size = 50 (matches Smart-RF)
+    if (st->m_recentTransmissions > 50)
+    {
+        st->m_recentCollisions = static_cast<uint32_t>(st->m_recentCollisions * 0.98);
+        st->m_recentTransmissions = 50;
+    }
+}
+
+void
 MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, WifiMode txMode)
 {
     NS_LOG_FUNCTION(this << st << rxSnr << txMode);
     auto station = static_cast<MinstrelWifiRemoteStationLogged*>(st);
+
+    // ============================================================================
+    // ✅ FIX: FILTER OUT BEACONS AND MANAGEMENT FRAMES (MATCH SMART-RF)
+    // ============================================================================
+    uint64_t dataRate = txMode.GetDataRate(20); // 20 MHz channel width
+
+    // Beacons and management frames typically use 6-12 Mbps for 802.11a
+    // Only update history for actual data frames (>= 12 Mbps)
+    bool isDataFrame = (dataRate >= 12000000); // >= 12 Mbps
 
     // Get CURRENT distance (not static scenario distance)
     double currentDistance = m_scenarioDistance; // Fallback
@@ -943,7 +983,36 @@ MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, Wif
     double variation = std::fmod(std::abs(rxSnr), 12.0) - 6.0;
     realisticSnr += variation * 0.4;
 
-    // EWMA smoothing
+    // ✅ MATCH SMART-RF: If NOT a data frame, only update fast averages
+    if (!isDataFrame)
+    {
+        // Still update fast averages (beacons indicate signal quality)
+        // but don't pollute history with beacon SNR
+        const double kAlphaFast = 0.30;
+        const double kAlphaSlow = 0.05;
+
+        if (station->m_fastEwmaSnr == 0.0 && station->m_slowEwmaSnr == 0.0)
+        {
+            station->m_fastEwmaSnr = realisticSnr;
+            station->m_slowEwmaSnr = realisticSnr;
+        }
+        else
+        {
+            // Lighter weight update for beacons (matches Smart-RF)
+            station->m_fastEwmaSnr = 0.05 * realisticSnr + 0.95 * station->m_fastEwmaSnr;
+            station->m_slowEwmaSnr = 0.01 * realisticSnr + 0.99 * station->m_slowEwmaSnr;
+        }
+
+        NS_LOG_DEBUG("[BEACON/MGMT] Rate=" << dataRate << " bps, SNR=" << realisticSnr
+                                           << " dB (not added to history)");
+        return; // ✅ EARLY EXIT - DON'T UPDATE HISTORY
+    }
+
+    // ============================================================================
+    // DATA FRAME PROCESSING (only reached for data frames)
+    // ============================================================================
+
+    // EWMA smoothing (normal weights for data)
     const double kAlphaFast = 0.30;
     const double kAlphaSlow = 0.05;
 
@@ -962,25 +1031,26 @@ MinstrelWifiManagerLogged::DoReportRxOk(WifiRemoteStation* st, double rxSnr, Wif
                 kAlphaSlow * realisticSnr + (1.0 - kAlphaSlow) * station->m_slowEwmaSnr;
         }
         station->m_lastSnr = realisticSnr;
+
+        // ✅ ONLY UPDATE HISTORY FOR DATA FRAMES
         station->m_snrHistory.push_back(realisticSnr);
-        if (station->m_snrHistory.size() > 200)
+        if (station->m_snrHistory.size() > 20) // ✅ Changed from 200
         {
             station->m_snrHistory.pop_front();
         }
     }
 
-    // PHASE 1B: Track RSSI history for variance calculation
+    // PHASE 1B: Track RSSI history for variance calculation (DATA ONLY)
     double rssi = realisticSnr;
     station->m_rssiHistory.push_back(rssi);
-    if (station->m_rssiHistory.size() > 10)
+    if (station->m_rssiHistory.size() > 20) // ✅ Changed from 10
     {
         station->m_rssiHistory.pop_front();
     }
 
-    NS_LOG_DEBUG("DoReportRxOk: Raw SNR=" << rxSnr << " -> Realistic SNR=" << realisticSnr
-                                          << " dB (dist=" << m_scenarioDistance
-                                          << "m, intf=" << m_scenarioInterferers
-                                          << ", variation=" << (variation * 0.4) << ")");
+    NS_LOG_DEBUG("[DATA FRAME] Rate=" << dataRate << " bps, SNR=" << realisticSnr
+                                      << " dB (added to history, size="
+                                      << station->m_snrHistory.size() << ")");
 }
 
 void
@@ -1029,16 +1099,13 @@ MinstrelWifiManagerLogged::DoReportDataFailed(WifiRemoteStation* st)
     station->m_framesFailed++;
     station->m_framesRetried += station->m_longRetry;
 
-    // PHASE 1B: Track collisions for interference level
-    station->m_recentCollisions++;
-    station->m_recentTransmissions++;
-
-    // Keep window size = 50
-    if (station->m_recentTransmissions > 50)
-    {
-        station->m_recentCollisions = static_cast<uint32_t>(station->m_recentCollisions * 0.98);
-        station->m_recentTransmissions = 50;
-    }
+    // ❌ DELETED THESE LINES (now handled by UpdateInterferenceTracking):
+    // station->m_recentCollisions++;
+    // station->m_recentTransmissions++;
+    // if (station->m_recentTransmissions > 50) {
+    //     station->m_recentCollisions = static_cast<uint32_t>(station->m_recentCollisions * 0.98);
+    //     station->m_recentTransmissions = 50;
+    // }
 
     // Track in current window
     station->m_currentShortWindow.push_back(false);
@@ -1046,7 +1113,7 @@ MinstrelWifiManagerLogged::DoReportDataFailed(WifiRemoteStation* st)
     station->m_currentWindowPackets++;
     UpdateWindowState(station);
 
-    UpdateRate(station);
+    UpdateRate(station); // ✅ This calls UpdateInterferenceTracking(false)
     LogSafeFeatures(station, station->m_txrate, false);
 
     station->m_packetsSinceRateChange++;
@@ -1103,10 +1170,6 @@ MinstrelWifiManagerLogged::DoReportDataOk(WifiRemoteStation* st,
     // PHASE 1B: Track packet size
     uint32_t packetSize = m_pktLen; // Default from attribute
     station->m_packetSizeHistory.push_back(packetSize);
-    if (station->m_packetSizeHistory.size() > 10)
-    {
-        station->m_packetSizeHistory.pop_front();
-    }
 
     // Track in current window
     station->m_currentShortWindow.push_back(true);
@@ -1117,6 +1180,7 @@ MinstrelWifiManagerLogged::DoReportDataOk(WifiRemoteStation* st,
     UpdatePacketCounters(station);
     UpdateRetry(station);
     UpdateStats(station);
+    UpdateInterferenceTracking(station, true); // Success
 
     LogSafeFeatures(station, station->m_txrate, true);
 
@@ -1251,7 +1315,7 @@ MinstrelWifiManagerLogged::CalculateSnrStability(MinstrelWifiRemoteStationLogged
     if (st->m_snrHistory.size() < 2)
         return 0.0;
 
-    uint32_t window = std::min<uint32_t>(10, st->m_snrHistory.size());
+    uint32_t window = std::min<uint32_t>(20, st->m_snrHistory.size()); // ✅ CHANGED FROM 10
     uint32_t start = st->m_snrHistory.size() - window;
 
     double mean = 0.0;
@@ -1569,28 +1633,35 @@ MinstrelWifiManagerLogged::LogSafeFeatures(MinstrelWifiRemoteStationLogged* st,
 double
 MinstrelWifiManagerLogged::CalculateInterferenceLevel(MinstrelWifiRemoteStationLogged* st)
 {
-    uint32_t currentInterferers = m_scenarioInterferers; // Use scenario ground truth
+    uint32_t currentInterferers = m_scenarioInterferers; // Ground truth
 
     // Method 1: Ground truth (60% weight)
     double interfererBasedLevel = std::min(1.0, currentInterferers / 3.0);
 
     // Method 2: SNR degradation (25% weight)
-    double expectedSnr = ConvertNS3ToRealisticSnr(100.0, m_scenarioDistance, 0, SOFT_MODEL);
+    // ✅ CRITICAL FIX: Use currentInterferers in expected SNR (matches Smart-RF)
+    double expectedSnr = ConvertNS3ToRealisticSnr(100.0,
+                                                  m_scenarioDistance,
+                                                  currentInterferers, // ✅ CHANGED FROM 0
+                                                  SOFT_MODEL);
     double snrDegradation = std::max(0.0, expectedSnr - st->m_slowEwmaSnr);
     double degradationBasedLevel = std::min(1.0, snrDegradation / 20.0);
 
-    // Method 3: Failures (15% weight)
+    // Method 3: Recent failures (15% weight)
+    // ✅ MATCH SMART-RF: Use frameErrorRate instead of raw failures
     double recentFailureRate = 0.0;
     if (st->m_framesSent > 0)
     {
-        recentFailureRate =
-            std::min(1.0, static_cast<double>(st->m_framesFailed) / st->m_framesSent * 1.5);
+        double frameErrorRate =
+            std::min(1.0, static_cast<double>(st->m_framesFailed) / st->m_framesSent);
+        recentFailureRate = std::min(1.0, frameErrorRate * 1.5);
     }
 
-    // Blend (match SmartRF exactly)
+    // Blend (60% interferers, 25% SNR, 15% failures)
     double blendedInterference =
         (interfererBasedLevel * 0.60) + (degradationBasedLevel * 0.25) + (recentFailureRate * 0.15);
 
+    // ✅ MATCH SMART-RF: Direct assignment, NO EWMA smoothing
     return std::clamp(blendedInterference, 0.0, 1.0);
 }
 
@@ -1617,18 +1688,7 @@ MinstrelWifiManagerLogged::GetDistanceMetric() const
 double
 MinstrelWifiManagerLogged::CalculateAvgPacketSize(MinstrelWifiRemoteStationLogged* st) const
 {
-    if (st->m_packetSizeHistory.empty())
-    {
-        return 1200.0; // Default MTU
-    }
-
-    uint64_t sum = 0;
-    for (uint32_t size : st->m_packetSizeHistory)
-    {
-        sum += size;
-    }
-
-    return static_cast<double>(sum) / st->m_packetSizeHistory.size();
+    return static_cast<double>(m_pktLen);
 }
 
 // ============================================================================

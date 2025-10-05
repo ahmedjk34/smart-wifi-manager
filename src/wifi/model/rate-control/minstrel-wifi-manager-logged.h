@@ -226,6 +226,8 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     void CheckInit(MinstrelWifiRemoteStationLogged* station);
     void InitSampleTable(MinstrelWifiRemoteStationLogged* station);
 
+    void UpdateInterferenceTracking(MinstrelWifiRemoteStationLogged* st, bool success);
+
     /**
      * PHASE 1B: Set scenario parameters (distance, interferers)
      */
