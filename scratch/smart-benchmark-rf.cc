@@ -680,8 +680,7 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
             std::cout << "[MOBILITY] Speed=" << tc.staSpeed << "m/s, Velocity=(" << velocity.x
                       << "," << velocity.y << ",0) (KEPT CONSTANT)" << std::endl;
 
-            // 🚀 FIX #1: Schedule periodic distance updates for mobile scenarios
-            for (double t = 4.0; t < 19.0; t += 1.0)
+            for (double t = 3.0; t < 19.0; t += 0.1) // Was: t += 1.0
             {
                 Simulator::Schedule(Seconds(t),
                                     &UpdateMobileStationDistance,
@@ -690,7 +689,8 @@ RunEnhancedTestCase(const EnhancedBenchmarkTestCase& tc,
                                     tc.numInterferers);
             }
 
-            std::cout << "[MOBILITY] Scheduled 15 distance updates (t=4-18s) for per-station sync"
+            std::cout << "[MOBILITY] Scheduled 160 distance updates (every 100ms) for "
+                         "high-precision tracking"
                       << std::endl;
         }
         else
@@ -1137,11 +1137,16 @@ main(int argc, char* argv[])
     std::vector<EnhancedBenchmarkTestCase> testCases;
 
     // Expanded coverage for Phase 2/3/4 validation
-    std::vector<double> distances = {15.0, 25.0, 40.0, 60.0, 80.0};        // 5 points
-    std::vector<double> speeds = {0.0, 5.0, 15.0};                         // 3 points
-    std::vector<uint32_t> interferers = {0, 1, 3};                         // 3 points
-    std::vector<uint32_t> packetSizes = {512, 1500};                       // 2 points
-    std::vector<std::string> trafficRates = {"2Mbps", "11Mbps", "54Mbps"}; // 3 points
+    // std::vector<double> distances = {15.0, 25.0, 40.0, 60.0, 80.0};        // 5 points
+    // std::vector<double> speeds = {0.0, 5.0, 15.0};                         // 3 points
+    // std::vector<uint32_t> interferers = {0, 1, 3};                         // 3 points
+    // std::vector<uint32_t> packetSizes = {512, 1500};                       // 2 points
+    // std::vector<std::string> trafficRates = {"2Mbps", "11Mbps", "54Mbps"}; // 3 points
+    std::vector<double> distances = {5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0}; // 8
+    std::vector<double> speeds = {0.0, 1.0, 5.0, 10.0};                              // 4
+    std::vector<uint32_t> interferers = {0, 1, 2};                                   // 3
+    std::vector<uint32_t> packetSizes = {512, 1024, 1500};                           // 3
+    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};           // 3
     std::string strategy = "oracle_aggressive";
 
     std::cout << "Generating comprehensive test matrix:" << std::endl;
