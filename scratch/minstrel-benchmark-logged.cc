@@ -614,9 +614,88 @@ main(int argc, char* argv[])
         std::cout << "\n✅ Created balanced-results/ directory for CSV exports" << std::endl;
     }
 
-    // Generate test cases
+    // ============================================================================
+    // SNR VALIDATION TEST (before generating scenarios)
+    // ============================================================================
+
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "SNR CALCULATION VALIDATION TEST" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
+    PerformanceBasedParameterGenerator testGen;
+
+    // ✅ FIX: Renamed to avoid collision with scenario testCases below
+    std::vector<std::tuple<double, uint32_t, std::string>> validationTests = {
+        {-5.0, 3, "Extreme negative (your case)"},
+        {0.0, 2, "Zero SNR"},
+        {5.0, 1, "Low positive"},
+        {8.5, 1, "Poor performance"},
+        {15.0, 0, "Medium (no intf)"},
+        {22.0, 1, "Good"},
+        {35.0, 0, "Excellent"},
+        {-10.0, 5, "Very extreme"}};
+
+    bool allPassed = true;
+
+    for (const auto& [targetSnr, intf, description] : validationTests) // ✅ CHANGED
+    {
+        double distance = testGen.CalculateDistanceForSnr(targetSnr, intf);
+
+        // Simulate what happens at runtime
+        double runtimeSnr = 0.0;
+
+        // Apply SOFT_MODEL (matching your ConvertNS3ToRealisticSnr)
+        if (distance <= 20.0)
+            runtimeSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            runtimeSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 100.0)
+            runtimeSnr = 4.0 - ((distance - 50.0) * 0.3);
+        else
+            runtimeSnr = -11.0 - ((distance - 100.0) * 0.2);
+
+        // Subtract interference (as runtime does)
+        runtimeSnr -= (intf * 2.0);
+
+        double error = std::abs(runtimeSnr - targetSnr);
+
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << "Test: " << description << std::endl;
+        std::cout << "  Target SNR: " << targetSnr << " dB | Interferers: " << intf << std::endl;
+        std::cout << "  Calculated Distance: " << distance << " m" << std::endl;
+        std::cout << "  Runtime SNR: " << runtimeSnr << " dB" << std::endl;
+        std::cout << "  Error: " << error << " dB ";
+
+        if (error < 0.5)
+        {
+            std::cout << "✅ PASS" << std::endl;
+        }
+        else
+        {
+            std::cout << "❌ FAIL" << std::endl;
+            allPassed = false;
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << std::string(80, '=') << std::endl;
+
+    if (!allPassed)
+    {
+        std::cerr << "❌ VALIDATION FAILED - FIX CalculateDistanceForSnr() BEFORE CONTINUING!"
+                  << std::endl;
+        return 1;
+    }
+
+    std::cout << "✅ ALL VALIDATION TESTS PASSED - PROCEEDING WITH BENCHMARK" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
+    // ============================================================================
+    // Generate test scenarios (now no name collision)
+    // ============================================================================
+
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(350);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(350); // ✅ OK NOW
 
     std::cout << "\n📊 Generated " << testCases.size() << " performance-based scenarios"
               << std::endl;
