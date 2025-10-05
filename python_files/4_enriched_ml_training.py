@@ -20,17 +20,17 @@ WHAT WAS WRONG BEFORE:
 ❌ Post-training 5-fold CV misleadingly included training data
 
 WHAT'S FIXED NOW:
-✅ 15 features (67% more information → EXPECTED 75-80% accuracy!)
+✅ 14 features (56% more information → EXPECTED 73-78% accuracy!)
 ✅ MinMaxScaler preserves SNR ranges (5-30 dB → 0.0-1.0, keeps ordering)
-✅ Enhanced RF hyperparameters (deeper trees, more trees for 15 features)
+✅ Enhanced RF hyperparameters (deeper trees, more trees for 14 features)
 ✅ XGBoost option (gradient boosting alternative)
 ✅ Class weights capped at 10.0x (handles 20x imbalance)
 ✅ Temporal weighting REMOVED (equal weights for all samples)
 ✅ Post-training CV REMOVED (only train/val/test splits reported)
 
 EXPECTED IMPACT:
-- Model accuracy: 62.8% → 75-80% (Phase 1A + 5)
-- Rare classes (0-3): 7-34% → 40-60% recall (Phase 1A + better weights)
+- Model accuracy: 62.8% → 73-78% (Phase 1B + 5)
+- Rare classes (0-3): 7-34% → 40-60% recall (Phase 1B + better weights)
 - Training: Simpler (no conflicting weight schemes)
 - Metrics: Honest (no inflated CV scores)
 - Interpretability: Better (MinMaxScaler preserves SNR meaning)
@@ -46,7 +46,7 @@ FIXES APPLIED:
 ✅ Issue H3: Post-training CV removed
 ✅ Issue M2: Scaling documented
 ✅ Issue M3: Class weight limitation documented
-✅ Issue C3: Now uses 15 features (was 9)
+✅ Issue C3: Now uses 14 features (was 9)
 ✅ Phase 5A: MinMaxScaler option
 ✅ Phase 5B: Enhanced hyperparameters
 ✅ Phase 5C: XGBoost support
@@ -111,52 +111,32 @@ TARGET_LABELS = [
     "oracle_aggressive"           # Aggressive oracle strategy
 ]
 
-# 🔧 FIXED: Safe features (12 features after removing rate-dependent)
-# 🚀 PHASE 1A: 12 features (not 15 - removed 3 leaky ones)
-# 🚀 PHASE 1A + FIXED: Safe features (12 features, RATE-DEPENDENT REMOVED!)
 # 🚀 PHASE 1B: Safe features (14 features, no temporal leakage)
 SAFE_FEATURES = [
     # SNR features (7)
     "lastSnr", "snrFast", "snrSlow", "snrTrendShort",
     "snrStabilityIndex", "snrPredictionConfidence", "snrVariance",
-    
-    # Network state (1 - removed channelWidth, always 20)
+    # Network state (1)
     "mobilityMetric",
-    
-    # 🚀 PHASE 1A: SAFE ONLY (2 features - removed channelBusyRatio, always 0)
-    "retryRate",          # ✅ Past retry rate (not current)
-    "frameErrorRate",     # ✅ Past error rate (not current)
-    # ❌ REMOVED: channelBusyRatio (always 0 in ns-3, no variance)
-    
-    # 🚀 PHASE 1B: NEW FEATURES (4)
-    "rssiVariance",       # ✅ RSSI variance (signal stability)
-    "interferenceLevel",  # ✅ Interference level (collision tracking)
-    "distanceMetric",     # ✅ Distance metric (from scenario)
-    "avgPacketSize",      # ✅ Average packet size (traffic characteristic)
-    
-    # ❌ REMOVED: recentRateAvg (LEAKAGE - includes current rate)
-    # ❌ REMOVED: rateStability (LEAKAGE - includes current rate)
-    # ❌ REMOVED: sinceLastChange (LEAKAGE - tells if rate changed)
+    # Phase 1A SAFE ONLY (2 features)
+    "retryRate",
+    "frameErrorRate",
+    # Phase 1B NEW FEATURES (4)
+    "rssiVariance",
+    "interferenceLevel",
+    "distanceMetric",
+    "avgPacketSize",
 ]  # TOTAL: 14 features (7 SNR + 1 network + 2 Phase 1A + 4 Phase 1B)
-
-# 🚨 CRITICAL: These 3 features exist in CSV but are EXCLUDED from training:
-# - recentRateAvg (LEAKAGE - includes current rate in average)
-# - rateStability (LEAKAGE - includes current rate in variance calculation)
-# - sinceLastChange (LEAKAGE - tells model if rate just changed)
-# File 4 will extract ONLY the 14 SAFE_FEATURES for training
 
 TEST_SIZE = 0.10     # 10% for final test
 VAL_SIZE = 0.111     # 11.1% of remaining (10% of total)
-# Final: 80% train, 10% val, 10% test
 
-
-# 🚀 PHASE 5: Updated performance thresholds for 15 features
-# 🚀 PHASE 1A + FIXED: Updated performance thresholds (12 features, not 15)
+# 🚀 PHASE 1B + FIXED: Updated performance thresholds (14 features, not 15)
 PERFORMANCE_THRESHOLDS = {
-    'excellent': 0.72,   # >72% is excellent for 14 features (Phase 1B target!)
-    'good': 0.68,        # 68-72% is good
-    'acceptable': 0.63,  # 63-68% is acceptable
-    'needs_improvement': 0.62  # <63% needs work (worse than baseline 62.8%)
+    'excellent': 0.73,   # >73% is excellent for 14 features (Phase 1B target!)
+    'good': 0.68,
+    'acceptable': 0.63,
+    'needs_improvement': 0.62
 }
 
 USER = "ahmedjk34"
@@ -166,10 +146,10 @@ def setup_logging(target_label: str):
     """Setup comprehensive logging for specific target"""
     LOG_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = LOG_DIR / f"training_{target_label}_{timestamp}.log"
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -178,7 +158,7 @@ def setup_logging(target_label: str):
             logging.StreamHandler(sys.stdout)
         ]
     )
-    
+
     logger = logging.getLogger(__name__)
     logger.info("="*80)
     logger.info(f"ML MODEL TRAINING PIPELINE - PHASE 1-5 COMPLETE")
@@ -187,14 +167,16 @@ def setup_logging(target_label: str):
     logger.info(f"👤 Author: {USER}")
     logger.info(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"🔧 Random Seed: {RANDOM_SEED}")
-    logger.info(f"🛡️ Safe Features: {len(SAFE_FEATURES)} (no outcome/rate-dependent features)")    
-    logger.info(f"🚀 Phase 1A: ENHANCED from 9 to 15 features (+67% information!)")
+    logger.info(f"🛡️ Safe Features: {len(SAFE_FEATURES)} (no outcome/rate-dependent features)")
+    logger.info(f"🚀 Phase 1B: 14 features (9 baseline + 5 removed + 4 added = 14 total)")
+    logger.info(f"   Removed: channelWidth, channelBusyRatio, recentRateAvg, rateStability, sinceLastChange")
+    logger.info(f"   Added: rssiVariance, interferenceLevel, distanceMetric, avgPacketSize")
     logger.info(f"🚀 Phase 5A: MinMaxScaler = {USE_MINMAX_SCALER} (preserves SNR ranges)")
     logger.info(f"🚀 Phase 5C: XGBoost = {USE_XGBOOST and XGBOOST_AVAILABLE}")
     logger.info(f"💻 Device: CPU (no GPU required)")
     logger.info("="*80)
     logger.info("FIXES APPLIED:")
-    logger.info("  ✅ Phase 1B: 14 features (10 → 14)")  # Update this line
+    logger.info("  ✅ Phase 1B: 14 features (9 → 14, +56% information!)")
     logger.info("  ✅ Phase 5A: MinMaxScaler (preserves physical meaning)")
     logger.info("  ✅ Phase 5B: Enhanced hyperparameters")
     logger.info("  ✅ Phase 5C: XGBoost support")
@@ -205,7 +187,7 @@ def setup_logging(target_label: str):
     logger.info("  ✅ Issue M3: Class weight limitation documented")
     logger.info("="*80)
     logger.info("="*80)
-    
+
     return logger
 
 # ================== LOAD HYPERPARAMETERS ==================
@@ -215,28 +197,26 @@ def load_optimized_hyperparameters(target_label: str, logger) -> Dict:
     Handles ultra_fast, quick, full, or custom names
     """
     logger.info(f"📂 Looking for hyperparameter files in: {HYPERPARAMS_FILE.parent}")
-    
+
     hyperparams_dir = BASE_DIR / "hyperparameter_results"
-    
+
     if not hyperparams_dir.exists():
         logger.warning(f"⚠️ Hyperparameter directory not found: {hyperparams_dir}")
         logger.warning(f"   Please run Step 3c (hyperparameter tuning) first")
         logger.warning(f"   Falling back to default parameters...")
         return get_default_hyperparameters()
-    
-    # Find all JSON files with FIXED suffix (prioritize fixed versions)
+
     json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*_FIXED.json"))
-    
+
     if len(json_files) == 0:
-        # Try without FIXED suffix
         json_files = list(hyperparams_dir.glob("hyperparameter_tuning_*.json"))
-    
+
     if len(json_files) == 0:
         logger.warning(f"⚠️ No hyperparameter JSON files found!")
         logger.warning(f"   Expected pattern: hyperparameter_tuning_*_FIXED.json")
         logger.warning(f"   Please run Step 3c first")
         return get_default_hyperparameters()
-    
+
     if len(json_files) > 1:
         logger.error(f"❌ Multiple hyperparameter files found:")
         for f in json_files:
@@ -244,34 +224,32 @@ def load_optimized_hyperparameters(target_label: str, logger) -> Dict:
         logger.error(f"   Please keep only ONE file (delete others or move to backup)")
         logger.error(f"   Recommended: hyperparameter_tuning_ultra_fast_FIXED.json (most recent)")
         sys.exit(1)
-    
-    # Use the single JSON file found
+
     hyperparam_file = json_files[0]
     logger.info(f"✅ Found hyperparameter file: {hyperparam_file.name}")
-    
+
     try:
         with open(hyperparam_file, 'r') as f:
             all_hyperparams = json.load(f)
-        
+
         if target_label not in all_hyperparams:
             logger.warning(f"⚠️ No hyperparameters found for {target_label}")
             logger.warning(f"   Available targets: {list(all_hyperparams.keys())}")
             return get_default_hyperparameters()
-        
-        # Extract best parameters
+
         target_results = all_hyperparams[target_label]
         best_params = target_results['best_params']
         best_score = target_results.get('best_score', 0.0)
-        
+
         logger.info(f"✅ Loaded optimized hyperparameters for {target_label}")
         logger.info(f"   CV Score: {best_score:.4f} ({best_score*100:.1f}%)")
         logger.info(f"   Parameters:")
         for param, value in best_params.items():
             logger.info(f"     {param}: {value}")
-        
+
         best_params['source'] = f'optimized_{hyperparam_file.stem}'
         return best_params
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to load hyperparameters: {str(e)}")
         logger.warning(f"   Falling back to default parameters...")
@@ -279,14 +257,14 @@ def load_optimized_hyperparameters(target_label: str, logger) -> Dict:
 
 def get_default_hyperparameters() -> Dict:
     """
-    🚀 PHASE 5B: Default hyperparameters optimized for 15 features
+    🚀 PHASE 5B: Default hyperparameters optimized for 14 features
     """
     return {
-        'n_estimators': 300,       # More trees for 15 features (was 200)
-        'max_depth': 25,           # Deeper for 15 features (was 15)
-        'min_samples_split': 10,   # Keep (good balance)
-        'min_samples_leaf': 5,     # Keep (good balance)
-        'max_features': 'sqrt',    # sqrt(15) ≈ 4 features per split
+        'n_estimators': 300,
+        'max_depth': 25,
+        'min_samples_split': 10,
+        'min_samples_leaf': 5,
+        'max_features': 'sqrt',
         'class_weight': 'balanced',
         'source': 'default_phase5_enhanced'
     }
@@ -294,36 +272,45 @@ def get_default_hyperparameters() -> Dict:
 def get_xgboost_hyperparameters(rf_params: Dict) -> Dict:
     """
     🚀 PHASE 5C: Convert RF hyperparameters to XGBoost equivalents
-    
-    Note: XGBoost doesn't need separate hyperparameter tuning!
-    We can map RF hyperparameters to XGBoost equivalents:
-    
-    RF n_estimators → XGBoost n_estimators (same)
-    RF max_depth → XGBoost max_depth (same)
-    RF min_samples_split → XGBoost min_child_weight (similar)
-    RF min_samples_leaf → XGBoost min_child_weight (similar)
-    RF max_features → XGBoost colsample_bytree (similar concept)
-    
-    This is why you DON'T need to re-run File 3c for XGBoost!
     """
-    # Map RF hyperparameters to XGBoost
+    n_estimators = rf_params.get('n_estimators', 300)
+    # Adaptive learning rate (fix)
+    if n_estimators <= 100:
+        learning_rate = 0.5
+    elif n_estimators <= 300:
+        learning_rate = 0.2
+    elif n_estimators <= 500:
+        learning_rate = 0.1
+    else:
+        learning_rate = 0.05
+
     xgb_params = {
-        'n_estimators': rf_params.get('n_estimators', 300),
-        'max_depth': min(rf_params.get('max_depth', 25), 10),  # XGBoost prefers shallower trees
-        'learning_rate': 0.1,  # Standard learning rate
-        'subsample': 0.8,  # Row sampling (80%)
-        'colsample_bytree': 0.8,  # Column sampling (similar to max_features)
-        'reg_alpha': 0.1,  # L1 regularization
-        'reg_lambda': 1.0,  # L2 regularization
-        'min_child_weight': rf_params.get('min_samples_leaf', 5),  # Similar to min_samples_leaf
-        'gamma': 0,  # Minimum loss reduction
+        'n_estimators': n_estimators,
+        'max_depth': min(rf_params.get('max_depth', 25), 10),
+        'learning_rate': learning_rate,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'reg_alpha': 0.1,
+        'reg_lambda': 1.0,
+        'min_child_weight': rf_params.get('min_samples_leaf', 5),
+        'gamma': 0,
         'random_state': RANDOM_SEED,
         'n_jobs': -1,
         'verbosity': 0,
+        'tree_method': 'hist',  # XGBoost-specific optimization
+        'max_bin': 256,         # XGBoost-specific optimization
+        'eval_metric': 'mlogloss',
         'source': f"mapped_from_{rf_params.get('source', 'rf')}"
     }
-    
     return xgb_params
+
+def compute_xgb_sample_weights(y_train, class_weights):
+    """Compute properly scaled sample weights for XGBoost"""
+    sample_weights = np.array([class_weights.get(y, 1.0) for y in y_train])
+    N = len(y_train)
+    sample_weights = sample_weights * (N / sample_weights.sum())
+    return sample_weights
+
 
 # ================== SCENARIO-AWARE SPLITTING ==================
 def scenario_aware_stratified_split(df: pd.DataFrame, target_label: str, logger) -> Tuple:
@@ -637,15 +624,11 @@ def train_and_evaluate_model(X_train_scaled, y_train, X_val_scaled, y_val,
     # 🚀 PHASE 5C: Choose model (RandomForest or XGBoost)
     if USE_XGBOOST and XGBOOST_AVAILABLE:
         logger.info("🚀 Using XGBoost (gradient boosting)")
-        
-        # Convert RF hyperparameters to XGBoost equivalents
         xgb_params = get_xgboost_hyperparameters(hyperparams)
-        
-        # Convert class weights to sample weights for XGBoost
-        sample_weights = np.array([class_weights.get(y, 1.0) for y in y_train])
-        
+        sample_weights = compute_xgb_sample_weights(y_train, class_weights)  # FIXED
+
         model = XGBClassifier(**xgb_params)
-        
+
         logger.info(f"📊 XGBoost configuration:")
         logger.info(f"   n_estimators: {xgb_params['n_estimators']}")
         logger.info(f"   max_depth: {xgb_params['max_depth']}")
@@ -657,12 +640,21 @@ def train_and_evaluate_model(X_train_scaled, y_train, X_val_scaled, y_val,
         logger.info(f"   Sample weights: custom (from class_weights, capped at 10.0)")
         logger.info(f"   Hyperparameters source: {xgb_params['source']}")
         logger.info(f"   ℹ️ Note: XGBoost hyperparams mapped from RF (no separate tuning needed!)")
-        
-        # Train model with sample weights
+
         logger.info(f"\n🚀 Training XGBoost on {len(X_train_scaled):,} samples...")
         start_time = time.time()
-        model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
+        eval_set = [(X_val_scaled, y_val)]  # FIXED: add early stopping
+
+        model.fit(
+            X_train_scaled, y_train,
+            sample_weight=sample_weights,
+            eval_set=eval_set,
+            eval_metric='mlogloss',
+            early_stopping_rounds=20,  # FIXED: early stopping
+            verbose=False
+        )
         training_time = time.time() - start_time
+        logger.info(f"✅ XGBoost stopped at tree {model.best_iteration}/{xgb_params['n_estimators']}")
         
     else:
         logger.info("🌲 Using RandomForest")
@@ -980,7 +972,6 @@ def check_if_already_trained(target_label: str, logger) -> bool:
 
 # ================== MAIN PIPELINE ==================
 def main():
-    """Main training pipeline - trains all oracle models with Phase 1-5 enhancements"""
     print("="*80)
     print("ML MODEL TRAINING PIPELINE - PHASE 1-5 COMPLETE")
     print("="*80)
@@ -989,7 +980,7 @@ def main():
     print(f"Device: CPU")
     print("="*80)
     print("PHASES APPLIED:")
-    print("  ✅ Phase 1A: 15 features (9 → 15, +67% information)")
+    print("  ✅ Phase 1B: 14 features (9 → 14, +56% information!)")
     print(f"  ✅ Phase 5A: MinMaxScaler = {USE_MINMAX_SCALER}")
     print("  ✅ Phase 5B: Enhanced hyperparameters")
     print(f"  ✅ Phase 5C: XGBoost = {USE_XGBOOST and XGBOOST_AVAILABLE}")
@@ -1000,110 +991,85 @@ def main():
     print("  ✅ Issue H3: Post-training CV REMOVED")
     print("="*80)
     print("EXPECTED RESULTS:")
-    print("  - Model accuracy: 75-80% (up from 62.8%)")
+    print("  - Model accuracy: 73-78% (up from 62.8%)")
     print("  - Rare classes: Better recall (40-60%)")
     print("  - MinMaxScaler: SNR 5-30 dB → 0.0-1.0")
     print("  - XGBoost (if enabled): +5-8% over RF")
     print("="*80)
-    
-    # Check XGBoost availability
+
     if USE_XGBOOST and not XGBOOST_AVAILABLE:
         print("\n⚠️ WARNING: XGBoost requested but not installed!")
         print("   Install with: pip install xgboost")
         print("   Falling back to RandomForest...")
         print()
-    
-    # Load data once
+
     print(f"\n📂 Loading data from: {CSV_FILE}")
-    
+
     if not CSV_FILE.exists():
         print(f"❌ Input file not found: {CSV_FILE}")
-        print(f"   Please run Files 2 → 3 first to generate enriched data with 15 features")
+        print(f"   Please run Files 2 → 3 first to generate enriched data with 14 features")
         return False
-    
+
     df = pd.read_csv(CSV_FILE)
     print(f"✅ Loaded {len(df):,} rows, {len(df.columns)} columns")
-    
-    # Check if 15 features exist
+
     missing_features = [f for f in SAFE_FEATURES if f not in df.columns]
     if missing_features:
         print(f"\n❌ ERROR: {len(missing_features)} features missing from data!")
         print(f"   Missing: {missing_features}")
-        print(f"   Please re-run File 2 (Phase 1A) to add these features!")
+        print(f"   Please re-run File 2 (Phase 1B) to add these features!")
         return False
-    
-    print(f"✅ All {len(SAFE_FEATURES)} features found (Phase 1A)")
-    
-    # Track results for all models
+
+    print(f"✅ All {len(SAFE_FEATURES)} features found (Phase 1B)")
+
     all_results = {}
     pipeline_start = time.time()
-    
-    # Train each target
+
     for target_idx, target_label in enumerate(TARGET_LABELS, 1):
         print(f"\n{'#'*80}")
         print(f"# MODEL {target_idx}/{len(TARGET_LABELS)}: {target_label}")
         print(f"{'#'*80}")
-        
-        # Setup logging for this target
+
         logger = setup_logging(target_label)
-        
+
         try:
-            # Check checkpoint
             if check_if_already_trained(target_label, logger):
                 continue
-            
-            # Load optimized hyperparameters
             hyperparams = load_optimized_hyperparameters(target_label, logger)
-            
-            # Scenario-aware split
             split_result = scenario_aware_stratified_split(df, target_label, logger)
             (X_train, X_val, X_test, y_train, y_val, y_test,
              train_scenarios, val_scenarios, test_scenarios) = split_result
-            
-            # Scale features AFTER splitting (Phase 5A: MinMaxScaler option)
             X_train_scaled, X_val_scaled, X_test_scaled, scaler = scale_features_after_split(
                 X_train, X_val, X_test, logger
             )
-            
-            # Compute class weights from train set only
             class_weights = compute_class_weights_from_train(y_train, target_label, logger)
-            
-            # Train and evaluate (Phase 5C: XGBoost option)
             model, results = train_and_evaluate_model(
                 X_train_scaled, y_train, X_val_scaled, y_val,
                 X_test_scaled, y_test, hyperparams, class_weights,
                 target_label, logger
             )
-            
-            # Per-scenario evaluation
             scenario_results = evaluate_per_scenario(
                 model, scaler, df, test_scenarios, target_label, logger
             )
-            
-            # Save everything
             save_model_and_results(model, scaler, results, scenario_results, target_label, logger)
-            
-            # Store results
             all_results[target_label] = results
-            
+
             logger.info(f"\n✅ Completed training for {target_label}")
             print(f"\n✅ {target_label}: Test Accuracy = {results['test_accuracy']*100:.1f}% ({results['model_type']})")
-            
         except Exception as e:
             logger.error(f"❌ Training failed for {target_label}: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
             continue
-    
-    # Final summary
+
     total_time = time.time() - pipeline_start
-    
+
     print(f"\n{'='*80}")
     print(f"TRAINING COMPLETE FOR ALL MODELS (PHASE 1-5)")
     print(f"{'='*80}")
     print(f"Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
     print(f"Models trained: {len(all_results)}/{len(TARGET_LABELS)}")
-    
+
     if all_results:
         print(f"\n📊 Final Results Summary:")
         for target, results in all_results.items():
@@ -1112,16 +1078,16 @@ def main():
             print(f"  Test: {results['test_accuracy']*100:.1f}%")
             print(f"  Time: {results['training_time_seconds']:.1f}s")
             print(f"  Scaler: {results['scaler_type']}")
-    
+
     print(f"\n📁 Models saved to: {OUTPUT_DIR}")
     print(f"✅ Training pipeline completed successfully!")
     print(f"\n📊 PHASE 1-5 IMPACT:")
-    print(f"  ✅ Accuracy: Expected 70-75% (up from 62.8%)")  # Down from 75-80%
-    print(f"  ✅ Features: 12 (removed 3 rate-dependent from 15)")  # NEW LINE
-    print(f"  ✅ Top feature: lastSnr (not recentRateAvg)")  # NEW LINE
+    print(f"  ✅ Accuracy: Expected 73-78% (up from 62.8%)")
+    print(f"  ✅ Features: 14 (removed leaky features from 15)")
+    print(f"  ✅ Top feature: lastSnr (not recentRateAvg)")
     print(f"  ✅ Scaler: MinMaxScaler preserves SNR meaning")
     print(f"  ✅ XGBoost: {'+5-8% bonus if enabled' if XGBOOST_AVAILABLE else 'Not installed'}")
-        
+
     return True
 
 if __name__ == "__main__":
