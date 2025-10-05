@@ -289,15 +289,44 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
 
     // ADD THIS:
     Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
+    Ptr<MinstrelWifiManagerLogged> mgr;
     if (staDevice)
     {
-        Ptr<MinstrelWifiManagerLogged> mgr =
-            DynamicCast<MinstrelWifiManagerLogged>(staDevice->GetRemoteStationManager());
+        mgr = DynamicCast<MinstrelWifiManagerLogged>(staDevice->GetRemoteStationManager());
         if (mgr)
         {
-            mgr->SetScenarioParameters(tc.distance, tc.interferers);
+            mgr->SetScenarioParameters(tc.distance, tc.interferers, tc.speed);
+            mgr->SetStationNode(wifiStaNodes.Get(0));
             std::cout << "[CONFIG] ✅ Set Minstrel parameters: distance=" << tc.distance
-                      << "m, interferers=" << tc.interferers << std::endl;
+                      << "m, interferers=" << tc.interferers << ", speed=" << tc.speed << " m/s"
+                      << std::endl;
+
+            // --- FIX FOR MOBILE SCENARIOS ---
+            if (tc.speed > 0.0)
+            {
+                // Schedule periodic updates of scenario parameters for mobility
+                double interval = 2.0; // seconds
+                for (double t = 2.0; t < 118.0; t += interval)
+                {
+                    Simulator::Schedule(Seconds(t), [mgr, wifiStaNodes, wifiApNode, tc]() {
+                        // Get current distance from AP to STA
+                        Ptr<Node> staNode = wifiStaNodes.Get(0);
+                        Ptr<MobilityModel> staMob = staNode->GetObject<MobilityModel>();
+                        Ptr<Node> apNode = wifiApNode.Get(0);
+                        Ptr<MobilityModel> apMob = apNode->GetObject<MobilityModel>();
+                        double distance = 0.0;
+                        if (staMob && apMob)
+                        {
+                            distance = staMob->GetDistanceFrom(apMob);
+                        }
+                        // Update scenario parameters with latest distance
+                        mgr->SetScenarioParameters(distance, tc.interferers, tc.speed);
+                        // Optionally, log update to console
+                        std::cout << "[MOBILE UPDATE] Time=" << Simulator::Now().GetSeconds()
+                                  << "s, distance=" << distance << "m" << std::endl;
+                    });
+                }
+            }
         }
         else
         {
