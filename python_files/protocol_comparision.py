@@ -1337,7 +1337,7 @@ def main():
     
     protocol_mapping = {
         'aarf': 'aarf-benchmark-environment-matched.csv',
-        'smartrf': 'smartrf-fixed-expanded-benchmark-results.csv',
+        'smartrf': 'smartrf-phase4-optimized-benchmark-results.csv',
         'smartrf-old': 'smartrf-newpipeline-benchmark-results.csv',
     }
     
