@@ -226,10 +226,14 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     void CheckInit(MinstrelWifiRemoteStationLogged* station);
     void InitSampleTable(MinstrelWifiRemoteStationLogged* station);
 
+    void UpdateInterferenceTracking(MinstrelWifiRemoteStationLogged* st, bool success);
+
     /**
      * PHASE 1B: Set scenario parameters (distance, interferers)
      */
-    void SetScenarioParameters(double distance, uint32_t interferers);
+
+    void SetStationNode(Ptr<Node> node);
+    void SetScenarioParameters(double distance, uint32_t interferers, double speed = 0.0);
 
     /**
      * FIXED: Issue #33 - Update window state
@@ -293,12 +297,11 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
 
     double CalculateSeverity(MinstrelWifiRemoteStationLogged* st) const;
     double CalculateConfidence(MinstrelWifiRemoteStationLogged* st) const;
-    double CalculateMobilityMetric(MinstrelWifiRemoteStationLogged* st) const;
-
+    double CalculateMobilityMetric(MinstrelWifiRemoteStationLogged* st); // Remove const
     // PHASE 1B: NEW FEATURE CALCULATIONS
     double CalculateRssiVariance(MinstrelWifiRemoteStationLogged* st) const;
-    double CalculateInterferenceLevel(MinstrelWifiRemoteStationLogged* st) const;
     double GetDistanceMetric() const; // returns scenario distance metric
+    double CalculateInterferenceLevel(MinstrelWifiRemoteStationLogged* st); // Remove const
     double CalculateAvgPacketSize(MinstrelWifiRemoteStationLogged* st) const;
 
     // Stratified logging probability (for balanced dataset)
@@ -345,8 +348,10 @@ class MinstrelWifiManagerLogged : public WifiRemoteStationManager
     // Station ID counter
     mutable uint32_t m_nextStationId;
 
-    double m_scenarioDistance;      ///< Current scenario distance (meters)
-    uint32_t m_scenarioInterferers; ///< Current scenario interferer count
+    double m_scenarioDistance;
+    uint32_t m_scenarioInterferers;
+    double m_scenarioSpeed;
+    Ptr<Node> m_stationNode; // For SetStationNode
 };
 
 } // namespace ns3

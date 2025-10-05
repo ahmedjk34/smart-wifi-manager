@@ -137,17 +137,17 @@ QUICK_GRID = {
 
 # 🚀 PHASE 5C: FULL GRID (for production - OVERNIGHT RUN)
 FULL_GRID = {
-    'n_estimators': [100, 200, 300, 400],
+    'n_estimators': [150, 200, 250, 300],
     'max_depth': [15, 20, 25, 30],
-    'min_samples_split': [5, 10, 15, 20],
-    'min_samples_leaf': [2, 5, 8, 10],
-    'max_features': ['sqrt', 'log2', None],
+    'min_samples_split': [10, 15],
+    'min_samples_leaf': [5, 8],
+    'max_features': ['sqrt', 'log2'],
     'class_weight': ['balanced']
 }
-# This creates 4×4×4×4×3 = 768 combinations (~8-12 hours with 5-fold CV)
+# 128 combos, 4 targets, 5 folds = 2,560 fits (should finish in 4–8 hours based on your timing)
 
 # ⚡ CHANGE THIS TO SWITCH MODES
-USE_MODE = 'ultra_fast'  # Options: 'quick', 'ultra_fast', 'full'
+USE_MODE = 'full'  # Options: 'quick', 'ultra_fast', 'full'
 
 PARAM_GRID = {
     'quick': QUICK_GRID,

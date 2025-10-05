@@ -425,7 +425,9 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     std::cout << "Starting simulation (20 seconds - ENVIRONMENT MATCHED)..." << std::endl;
     Simulator::Run();
 
-    // Collect results
+    // ============================================================
+    // COLLECT FLOW STATISTICS - FIXED (SMARTRF METHOD)
+    // ============================================================
     double throughput = 0, packetLoss = 0, avgDelay = 0, jitter = 0;
     double rxPackets = 0, txPackets = 0, rxBytes = 0;
     double simulationTime = 14.0;
@@ -436,11 +438,20 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
+    // PRIMARY DETECTION: Network mask matching (handles multiple managers)
     for (auto it = stats.begin(); it != stats.end(); ++it)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
-        if (t.sourceAddress == staInterface.GetAddress(0) &&
-            t.destinationAddress == apInterface.GetAddress(0))
+
+        // Accept ANY flow on the main network (10.1.3.x) to port 4000
+        bool isMainFlow =
+            (t.sourceAddress.CombineMask(Ipv4Mask("255.255.255.0")) == Ipv4Address("10.1.3.0") &&
+             t.destinationAddress.CombineMask(Ipv4Mask("255.255.255.0")) ==
+                 Ipv4Address("10.1.3.0") &&
+             t.destinationPort == port);
+
+        // Take the flow with the MOST packets
+        if (isMainFlow && it->second.txPackets > txPackets)
         {
             flowStatsFound = true;
             rxPackets = it->second.rxPackets;
@@ -448,19 +459,79 @@ RunTestCase(const BenchmarkTestCase& tc, std::ofstream& csv, uint32_t testCaseNu
             rxBytes = it->second.rxBytes;
             droppedPackets = it->second.lostPackets;
             retransmissions = it->second.timesForwarded;
-            throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
-            packetLoss = txPackets > 0 ? 100.0 * (txPackets - rxPackets) / txPackets : 0.0;
-            avgDelay = it->second.rxPackets > 0
-                           ? it->second.delaySum.GetSeconds() / it->second.rxPackets
-                           : 0.0;
-            jitter = it->second.rxPackets > 1
-                         ? it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1)
-                         : 0.0;
-            break;
+
+            if (simulationTime > 0)
+                throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
+
+            if (txPackets > 0)
+                packetLoss = 100.0 * (txPackets - rxPackets) / txPackets;
+
+            if (it->second.rxPackets > 0)
+                avgDelay = it->second.delaySum.GetSeconds() / it->second.rxPackets;
+
+            if (it->second.rxPackets > 1)
+                jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
         }
     }
 
-    // MATCHED: Same SNR calculation
+    // FALLBACK DETECTION: Any flow on 10.1.x.x with most packets
+    if (!flowStatsFound)
+    {
+        std::cout << "WARNING [FLOW DEBUG] Primary detection failed. Scanning all flows..."
+                  << std::endl;
+
+        for (auto it = stats.begin(); it != stats.end(); ++it)
+        {
+            Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(it->first);
+
+            std::cout << "  Available flow: " << t.sourceAddress << ":" << t.sourcePort << " -> "
+                      << t.destinationAddress << ":" << t.destinationPort
+                      << " | TX=" << it->second.txPackets << " RX=" << it->second.rxPackets
+                      << std::endl;
+
+            // Take ANY flow on 10.1.x.x with the most packets
+            bool isTestNetwork =
+                (t.sourceAddress.CombineMask(Ipv4Mask("255.255.0.0")) == Ipv4Address("10.1.0.0"));
+
+            if (isTestNetwork && it->second.txPackets > txPackets)
+            {
+                std::cout << "  -> Using this flow (most TX packets)" << std::endl;
+
+                flowStatsFound = true;
+                rxPackets = it->second.rxPackets;
+                txPackets = it->second.txPackets;
+                rxBytes = it->second.rxBytes;
+                droppedPackets = it->second.lostPackets;
+                retransmissions = it->second.timesForwarded;
+
+                if (simulationTime > 0)
+                    throughput = (rxBytes * 8.0) / (simulationTime * 1e6);
+
+                if (txPackets > 0)
+                    packetLoss = 100.0 * (txPackets - rxPackets) / txPackets;
+
+                if (it->second.rxPackets > 0)
+                    avgDelay = it->second.delaySum.GetSeconds() / it->second.rxPackets;
+
+                if (it->second.rxPackets > 1)
+                    jitter = it->second.jitterSum.GetSeconds() / (it->second.rxPackets - 1);
+            }
+        }
+    }
+
+    // VERIFICATION LOGGING
+    if (flowStatsFound)
+    {
+        std::cout << "SUCCESS [FLOW STATS] Valid flow found: TX=" << txPackets
+                  << " RX=" << rxPackets << " Throughput=" << std::fixed << std::setprecision(2)
+                  << throughput << " Mbps" << std::endl;
+    }
+    else
+    {
+        std::cout << "ERROR [FLOW STATS] NO VALID FLOW FOUND - Stats will be invalid!" << std::endl;
+    }
+
+    // MATCHED: Same SNR calculation as before
     double avgSnr = ConvertNS3ToRealisticSnr(100.0, tc.staDistance, tc.numInterferers, SOFT_MODEL);
     currentStats.avgSNR = avgSnr;
     currentStats.minSNR = avgSnr - 3.0;
@@ -492,13 +563,18 @@ main(int argc, char* argv[])
 {
     std::vector<BenchmarkTestCase> testCases;
 
-    // Same test matrix as before
-    std::vector<double> distances = {10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0};
-    std::vector<double> speeds = {0.0, 5.0, 10.0, 15.0};
-    std::vector<uint32_t> interferers = {0, 1, 2, 3};
-    std::vector<uint32_t> packetSizes = {256, 1500};
-    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};
+    // ============================================================================
+    // 🚀 MATCHED TEST MATRIX (IDENTICAL to SmartRF benchmark)
+    // ============================================================================
+    std::vector<double> distances = {5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0}; // 8
+    std::vector<double> speeds = {0.0, 1.0, 5.0, 10.0};                              // 4
+    std::vector<uint32_t> interferers = {0, 1, 2};                                   // 3
+    std::vector<uint32_t> packetSizes = {512, 1024, 1500};                           // 3
+    std::vector<std::string> trafficRates = {"1Mbps", "11Mbps", "54Mbps"};           // 3
 
+    // ============================================================================
+    // 🚀 MATCHED FILTERS (IDENTICAL to SmartRF benchmark)
+    // ============================================================================
     for (double d : distances)
     {
         for (double s : speeds)
@@ -509,11 +585,16 @@ main(int argc, char* argv[])
                 {
                     for (const std::string& r : trafficRates)
                     {
-                        if (s >= 10.0 && d >= 60.0)
+                        // FILTER 1: Skip unrealistic high-mobility + long-distance
+                        if (s >= 10.0 && d >= 45.0) // ✅ CHANGED: was 60.0
                             continue;
-                        if (r == "1Mbps" && p == 1500 && d >= 70.0)
+
+                        // FILTER 2: Skip low offered load + large packets at poor SNR
+                        if (r == "1Mbps" && p == 1500 && d >= 45.0) // ✅ CHANGED: was 70.0
                             continue;
-                        if (i >= 3 && s >= 15.0)
+
+                        // FILTER 3: Skip high mobility + high interference
+                        if (s >= 10.0 && i >= 2) // ✅ CHANGED: was i >= 3 && s >= 15.0
                             continue;
 
                         std::ostringstream name;
@@ -534,26 +615,138 @@ main(int argc, char* argv[])
         }
     }
 
-    std::cout << "AARF Baseline Benchmark v3.0 (ENVIRONMENT MATCHED TO MINSTREL)" << std::endl;
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "AARF Baseline Benchmark v3.1 (FULLY MATCHED TO SMARTRF)" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
     std::cout << "Total test cases: " << testCases.size() << std::endl;
     std::cout << "Physical environment: MATCHED (PHY, mobility, interferers, traffic)" << std::endl;
+    std::cout << "Test matrix: MATCHED (distances, speeds, interferers, filters)" << std::endl;
     std::cout << "Category-based adjustments: ENABLED" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
 
+    // ============================================================================
+    // 🚀 ADD: Test Distribution Validation (IDENTICAL to SmartRF)
+    // ============================================================================
+    std::map<std::string, int> speedDist;
+    std::map<std::string, int> distanceDist;
+    std::map<std::string, int> categoryDist;
+
+    for (const auto& tc : testCases)
+    {
+        std::string speedBucket;
+        if (tc.staSpeed == 0.0)
+            speedBucket = "stationary";
+        else if (tc.staSpeed <= 5.0)
+            speedBucket = "low_mobility";
+        else
+            speedBucket = "high_mobility";
+        speedDist[speedBucket]++;
+
+        std::string distBucket;
+        if (tc.staDistance <= 15.0)
+            distBucket = "close";
+        else if (tc.staDistance <= 30.0)
+            distBucket = "medium";
+        else
+            distBucket = "far";
+        distanceDist[distBucket]++;
+
+        std::string category = DetermineCategory(tc.staDistance, tc.numInterferers, tc.staSpeed);
+        categoryDist[category]++;
+    }
+
+    std::cout << "\n=== Test Distribution Analysis ===" << std::endl;
+
+    std::cout << "\nBy Mobility:" << std::endl;
+    for (const auto& [spd, cnt] : speedDist)
+    {
+        std::cout << "  " << spd << ": " << cnt << " (" << std::fixed << std::setprecision(1)
+                  << (100.0 * cnt / testCases.size()) << "%)" << std::endl;
+    }
+
+    std::cout << "\nBy Distance:" << std::endl;
+    for (const auto& [dst, cnt] : distanceDist)
+    {
+        std::cout << "  " << dst << ": " << cnt << " (" << (100.0 * cnt / testCases.size()) << "%)"
+                  << std::endl;
+    }
+
+    std::cout << "\nBy Category:" << std::endl;
+    for (const auto& [cat, cnt] : categoryDist)
+    {
+        std::cout << "  " << cat << ": " << cnt << " (" << (100.0 * cnt / testCases.size()) << "%)"
+                  << std::endl;
+    }
+    std::cout << std::string(50, '=') << std::endl << std::endl;
+
+    if (testCases.empty())
+    {
+        std::cerr << "FATAL: No valid test cases generated" << std::endl;
+        return 1;
+    }
+
+    // ============================================================================
+    // Run Tests
+    // ============================================================================
     std::ofstream csv("aarf-benchmark-environment-matched.csv");
     csv << "Scenario,Distance,Speed,Interferers,PacketSize,TrafficRate,Throughput(Mbps),"
         << "PacketLoss(%),AvgDelay(s),Jitter(s),RxPackets,TxPackets,AvgSNR,StatsValid\n";
 
     uint32_t testCaseNumber = 1;
+    uint32_t successfulTests = 0;
+    uint32_t failedTests = 0;
+
+    std::cout << "Starting benchmark execution..." << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
     for (const auto& tc : testCases)
     {
-        std::cout << "\nStarting Test " << testCaseNumber << "/" << testCases.size() << ": "
-                  << tc.scenarioName << std::endl;
-        RunTestCase(tc, csv, testCaseNumber);
+        std::cout << "\nTest " << testCaseNumber << "/" << testCases.size() << " (" << std::fixed
+                  << std::setprecision(1) << (100.0 * testCaseNumber / testCases.size()) << "%)"
+                  << std::endl;
+
+        try
+        {
+            RunTestCase(tc, csv, testCaseNumber);
+
+            if (currentStats.statsValid)
+            {
+                successfulTests++;
+                std::cout << "Test " << testCaseNumber << " COMPLETED SUCCESSFULLY" << std::endl;
+            }
+            else
+            {
+                failedTests++;
+                std::cout << "Test " << testCaseNumber << " COMPLETED WITH ISSUES" << std::endl;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            failedTests++;
+            std::cout << "Test " << testCaseNumber << " FAILED: " << e.what() << std::endl;
+        }
+        catch (...)
+        {
+            failedTests++;
+            std::cout << "Test " << testCaseNumber << " FAILED: Unknown error" << std::endl;
+        }
+
         testCaseNumber++;
     }
 
     csv.close();
-    std::cout << "\nAll tests complete. Results in aarf-benchmark-environment-matched.csv\n";
-    std::cout << "Environment now IDENTICAL to Minstrel baseline for fair comparison.\n";
-    return 0;
+
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "BENCHMARK COMPLETED" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+    std::cout << "Total: " << testCases.size() << " | Success: " << successfulTests
+              << " | Failed: " << failedTests << std::endl;
+    std::cout << "Results saved to: aarf-benchmark-environment-matched.csv" << std::endl;
+    std::cout << "\n✅ Environment now IDENTICAL to SmartRF benchmark for fair comparison."
+              << std::endl;
+    std::cout << "✅ Test matrix MATCHED: " << testCases.size() << " identical scenarios"
+              << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
+    return (successfulTests > 0) ? 0 : 1;
 }

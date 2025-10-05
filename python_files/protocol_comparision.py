@@ -1336,8 +1336,8 @@ def main():
     args = parser.parse_args()
     
     protocol_mapping = {
-        'aarf': 'aarf-benchmark-fixed-expanded.csv',
-        'smartrf': 'smartrf-fixed-expanded-benchmark-results.csv',
+        'aarf': 'aarf-benchmark-environment-matched.csv',
+        'smartrf': 'smartrf-phase4-optimized-benchmark-results.csv',
         'smartrf-old': 'smartrf-newpipeline-benchmark-results.csv',
     }
     

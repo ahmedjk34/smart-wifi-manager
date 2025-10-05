@@ -87,14 +87,14 @@ ConvertNS3ToRealisticSnr(double ns3Value, double distance, uint32_t interferers,
     }
     case SOFT_MODEL: {
         if (distance <= 20.0)
-            realisticSnr = 35.0 - (distance * 0.8);
+            realisticSnr = 35.0 - (distance * 0.8); // Range: 19-35 dB
         else if (distance <= 50.0)
-            realisticSnr = 19.0 - ((distance - 20.0) * 0.5);
-        else if (distance <= 100.0)
-            realisticSnr = 4.0 - ((distance - 50.0) * 0.3);
+            realisticSnr = 19.0 - ((distance - 20.0) * 0.5); // Range: 4-19 dB
+        else if (distance <= 80.0)                           // ✅ CHANGED: Was 100.0
+            realisticSnr = 4.0 - ((distance - 50.0) * 0.1);  // ✅ CHANGED: Was 0.3 → 0.1
+        // At 80m: 4.0 - (30 * 0.1) = 1.0 dB ✅ (rate 0-1 viable)
         else
-            realisticSnr = -11.0 - ((distance - 100.0) * 0.2);
-
+            realisticSnr = 1.0 - ((distance - 80.0) * 0.15); // ✅ NEW: Beyond 80m (won't be used
         realisticSnr -= (interferers * 2.0);
         break;
     }
@@ -211,63 +211,33 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     interfererStaNodes.Create(tc.interferers);
 
     // --- PHY and Channel ---
-    // --- PHY and Channel (FIXED for 802.11a) ---
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
-    // FIXED: More permissive settings for 802.11a to work at longer distances
-    phy.Set("TxPowerStart", DoubleValue(30.0)); // ✅ Increased from 20.0
+    phy.Set("TxPowerStart", DoubleValue(30.0));
     phy.Set("TxPowerEnd", DoubleValue(30.0));
-    phy.Set("RxNoiseFigure", DoubleValue(3.0));    // ✅ Decreased from 5.0-7.0
-    phy.Set("CcaEdThreshold", DoubleValue(-82.0)); // ✅ More sensitive (default -82)
-    phy.Set("RxSensitivity", DoubleValue(-92.0));  // ✅ More sensitive (default -92)
+    phy.Set("RxNoiseFigure", DoubleValue(3.0));
+    phy.Set("CcaEdThreshold", DoubleValue(-82.0));
+    phy.Set("RxSensitivity", DoubleValue(-92.0));
 
-    // channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
-    //                            "Exponent",
-    //                            DoubleValue(3.0), // Path loss exponent
-    //                            "ReferenceDistance",
-    //                            DoubleValue(1.0),
-    //                            "ReferenceLoss",
-    //                            DoubleValue(46.6677)); // Loss at 1m
-
-    // // Optional: Add Nakagami fading for realism
-    // channel.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
-    //                            "m0",
-    //                            DoubleValue(1.5), // Fading parameter
-    //                            "m1",
-    //                            DoubleValue(0.75),
-    //                            "m2",
-    //                            DoubleValue(0.75));
-
-    // FIXED: Adjust based on category for realistic conditions
     if (tc.category == "PoorPerformance")
-    {
-        phy.Set("RxNoiseFigure", DoubleValue(5.0)); // ✅ Still lower than before (was 7.0)
-    }
+        phy.Set("RxNoiseFigure", DoubleValue(5.0));
     else if (tc.category == "HighInterference")
-    {
-        phy.Set("RxNoiseFigure", DoubleValue(4.0)); // ✅ Lower (was 6.0)
-    }
-    else
-    {
-        phy.Set("RxNoiseFigure", DoubleValue(3.0)); // ✅ Best case
-    }
+        phy.Set("RxNoiseFigure", DoubleValue(4.0));
 
     WifiHelper wifi;
-    wifi.SetStandard(WIFI_STANDARD_80211a); // FIXED: 802.11a (8 rates: 0-7)
+    wifi.SetStandard(WIFI_STANDARD_80211a);
 
-    // FIXED: Proper log path with scenario naming (Issue #4)
     std::string logPath = "balanced-results/" + tc.scenarioName + "_detailed.csv";
 
-    // FIXED: Correct attribute names for MinstrelWifiManagerLogged
     wifi.SetRemoteStationManager("ns3::MinstrelWifiManagerLogged",
                                  "UpdateStatistics",
-                                 TimeValue(MilliSeconds(100)), // FIXED: Not EwmaLevel
+                                 TimeValue(MilliSeconds(100)),
                                  "LookAroundRate",
                                  UintegerValue(10),
                                  "EWMA",
-                                 UintegerValue(75), // FIXED: Not EwmaLevel
+                                 UintegerValue(75),
                                  "SampleColumn",
                                  UintegerValue(10),
                                  "PacketLength",
@@ -275,9 +245,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
                                  "PrintStats",
                                  BooleanValue(false),
                                  "LogFilePath",
-                                 StringValue(logPath), // FIXED: Ensure file export
+                                 StringValue(logPath),
                                  "ScenarioFileName",
-                                 StringValue(tc.scenarioName)); // FIXED: Issue #4
+                                 StringValue(tc.scenarioName));
 
     std::cout << "[CONFIG] Log file will be written to: " << logPath << std::endl;
 
@@ -287,17 +257,86 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid));
     NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
-    // ADD THIS:
+    // ============================================================================
+    // ✅ MOBILITY SETUP - SINGLE UNIFIED BLOCK
+    // ============================================================================
+
+    // AP mobility (always static)
+    MobilityHelper apMobility;
+    Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
+    apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
+    apMobility.SetPositionAllocator(apPositionAlloc);
+    apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    apMobility.Install(wifiApNode);
+
+    // STA mobility (mobile or static)
+    MobilityHelper staMobility;
+    if (tc.speed > 0.0)
+    {
+        // ✅ MOBILE SCENARIO
+        staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
+        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+        staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
+        staMobility.SetPositionAllocator(staPositionAlloc);
+        staMobility.Install(wifiStaNodes);
+
+        Vector velocity(tc.speed * 0.5, 0.0, 0.0);
+        if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
+            velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1);
+
+        wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
+    }
+    else
+    {
+        // ✅ STATIC SCENARIO
+        staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
+        staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
+        staMobility.SetPositionAllocator(staPositionAlloc);
+        staMobility.Install(wifiStaNodes);
+    }
+
+    // ✅ GET MANAGER AND SET UP UPDATES (AFTER MOBILITY INSTALLED)
     Ptr<WifiNetDevice> staDevice = DynamicCast<WifiNetDevice>(staDevices.Get(0));
+    Ptr<MinstrelWifiManagerLogged> mgr;
     if (staDevice)
     {
-        Ptr<MinstrelWifiManagerLogged> mgr =
-            DynamicCast<MinstrelWifiManagerLogged>(staDevice->GetRemoteStationManager());
+        mgr = DynamicCast<MinstrelWifiManagerLogged>(staDevice->GetRemoteStationManager());
         if (mgr)
         {
-            mgr->SetScenarioParameters(tc.distance, tc.interferers);
+            mgr->SetScenarioParameters(tc.distance, tc.interferers, tc.speed);
+            mgr->SetStationNode(wifiStaNodes.Get(0));
             std::cout << "[CONFIG] ✅ Set Minstrel parameters: distance=" << tc.distance
-                      << "m, interferers=" << tc.interferers << std::endl;
+                      << "m, interferers=" << tc.interferers << ", speed=" << tc.speed << " m/s"
+                      << std::endl;
+
+            // ✅ SCHEDULE MOBILE UPDATES (ONLY IF MOBILE)
+            if (tc.speed > 0.0)
+            {
+                for (double t = 2.0; t < 118.0; t += 0.1)
+                {
+                    Simulator::Schedule(Seconds(t), [mgr, wifiStaNodes, tc, t]() {
+                        Ptr<Node> staNode = wifiStaNodes.Get(0);
+                        Ptr<MobilityModel> staMob = staNode->GetObject<MobilityModel>();
+
+                        if (!staMob)
+                            return;
+
+                        Vector pos = staMob->GetPosition();
+                        double currentDistance =
+                            std::sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z);
+
+                        mgr->SetScenarioParameters(currentDistance, tc.interferers, tc.speed);
+
+                        if (static_cast<int>(t * 10) % 50 == 0)
+                        {
+                            std::cout << "[MOBILE UPDATE] Time=" << Simulator::Now().GetSeconds()
+                                      << "s, position=(" << pos.x << "," << pos.y
+                                      << "), distance=" << currentDistance << "m" << std::endl;
+                        }
+                    });
+                }
+            }
         }
         else
         {
@@ -319,41 +358,9 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
         interfererApDevices = wifi.Install(phy, mac, interfererApNodes);
     }
 
-    // --- Mobility ---
-    MobilityHelper apMobility;
-    Ptr<ListPositionAllocator> apPositionAlloc = CreateObject<ListPositionAllocator>();
-    apPositionAlloc->Add(Vector(0.0, 0.0, 0.0));
-    apMobility.SetPositionAllocator(apPositionAlloc);
-    apMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    apMobility.Install(wifiApNode);
-
-    MobilityHelper staMobility;
-    if (tc.speed > 0.0)
-    {
-        // Mobile scenario
-        staMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
-        staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
-        staMobility.SetPositionAllocator(staPositionAlloc);
-        staMobility.Install(wifiStaNodes);
-
-        Vector velocity(tc.speed * 0.5, 0.0, 0.0);
-        if (tc.category == "PoorPerformance" || tc.category == "HighInterference")
-            velocity.y = tc.speed * 0.05 * ((tc.distance > 50) ? 1 : -1);
-
-        wifiStaNodes.Get(0)->GetObject<ConstantVelocityMobilityModel>()->SetVelocity(velocity);
-    }
-    else
-    {
-        // Static scenario
-        staMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-        Ptr<ListPositionAllocator> staPositionAlloc = CreateObject<ListPositionAllocator>();
-        staPositionAlloc->Add(Vector(tc.distance, 0.0, 0.0));
-        staMobility.SetPositionAllocator(staPositionAlloc);
-        staMobility.Install(wifiStaNodes);
-    }
-
-    // Interferer positioning
+    // ============================================================================
+    // INTERFERER MOBILITY
+    // ============================================================================
     if (tc.interferers > 0)
     {
         MobilityHelper interfererMobility;
@@ -462,19 +469,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
     // --- Connect traces ---
-    // try
-    // {
-    //     Config::ConnectWithoutContext(
-    //         "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/"
-    //         "RemoteStationManager/$ns3::MinstrelWifiManagerLogged/RateChange",
-    //         MakeCallback(&RateTrace));
-    // }
-    // catch (...)
-    // {
-    //     std::cout << "[WARN] Could not connect to RateChange trace" << std::endl;
-    // }
-
-    // Try to connect TX trace
     try
     {
         Config::ConnectWithoutContext("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
@@ -500,7 +494,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
     std::cout << "[SIM] Simulation completed" << std::endl;
 
     // After Simulator::Run() in your benchmark:
-    // After Simulator::Run() in your benchmark:
     std::cout << "\n=== DIAGNOSTIC INFO ===" << std::endl;
     std::cout << "Simulation time: " << Simulator::Now().GetSeconds() << "s" << std::endl;
 
@@ -519,7 +512,6 @@ RunTestCase(const ScenarioParams& tc, uint32_t& collectedDecisions)
             std::getline(checkFile, firstLine);
             std::cout << "First line: " << firstLine << std::endl;
 
-            // ✅ PHASE 1B: Count commas to verify 24 features + metadata
             int commaCount = std::count(firstLine.begin(), firstLine.end(), ',');
             std::cout << "Feature count: " << commaCount
                       << " (expected: 28 for 24 features + 4 metadata)" << std::endl;
@@ -622,9 +614,113 @@ main(int argc, char* argv[])
         std::cout << "\n✅ Created balanced-results/ directory for CSV exports" << std::endl;
     }
 
-    // Generate test cases
+    // ============================================================================
+    // SNR VALIDATION TEST (before generating scenarios)
+    // ============================================================================
+
+    std::cout << "\n" << std::string(80, '=') << std::endl;
+    std::cout << "SNR CALCULATION VALIDATION TEST" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
+    PerformanceBasedParameterGenerator testGen;
+
+    // ✅ FIX: Renamed to avoid collision with scenario testCases below
+    std::vector<std::tuple<double, uint32_t, std::string>> validationTests = {
+        // Extreme negative (tests 80m cap)
+        {-5.0, 3, "Extreme negative (80m cap)"},
+        {-9.0, 5, "Very extreme (max interferers)"}, // ✅ Will show clamping
+
+        // Zero crossing
+        {0.0, 2, "Zero SNR"},
+        {1.0, 0, "Minimum positive (80m)"},
+
+        // Low positive (50-80m range)
+        {2.0, 1, "Low positive (near 80m)"},
+        {5.0, 1, "Low positive (mid-range)"},
+
+        // Poor performance (20-50m)
+        {8.5, 1, "Poor performance"},
+        {12.0, 2, "Poor with interference"},
+
+        // Medium (20-50m, higher end)
+        {15.0, 0, "Medium (no intf)"},
+        {18.0, 1, "Medium-high"},
+
+        // Good (0.5-20m)
+        {22.0, 1, "Good"},
+        {28.0, 0, "Good-high"},
+
+        // Excellent (edge case)
+        {35.0, 0, "Excellent (edge case)"},
+        {34.0, 0, "Near-excellent"}};
+    bool allPassed = true;
+
+    for (const auto& [targetSnr, intf, description] : validationTests)
+    {
+        double distance = testGen.CalculateDistanceForSnr(targetSnr, intf);
+
+        double runtimeSnr = 0.0;
+        if (distance <= 20.0)
+            runtimeSnr = 35.0 - (distance * 0.8);
+        else if (distance <= 50.0)
+            runtimeSnr = 19.0 - ((distance - 20.0) * 0.5);
+        else if (distance <= 80.0)
+            runtimeSnr = 4.0 - ((distance - 50.0) * 0.1);
+        else
+            runtimeSnr = 1.0 - ((distance - 80.0) * 0.15);
+
+        runtimeSnr -= (intf * 2.0);
+
+        double error = std::abs(runtimeSnr - targetSnr);
+
+        // ✅ ADDED: Check if distance was clamped
+        double compensatedSnr = targetSnr + (intf * 2.0);
+        bool isClamped = (distance == 80.0 && compensatedSnr < 1.0);
+
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << "Test: " << description << std::endl;
+        std::cout << "  Target SNR: " << targetSnr << " dB | Interferers: " << intf << std::endl;
+        std::cout << "  Calculated Distance: " << distance << " m";
+        if (isClamped)
+            std::cout << " (clamped)";
+        std::cout << std::endl;
+        std::cout << "  Runtime SNR: " << runtimeSnr << " dB" << std::endl;
+        std::cout << "  Error: " << error << " dB ";
+
+        // ✅ RELAXED: Accept 1.5 dB error for clamped cases, 0.5 dB for normal
+        if (error < 0.5 || (isClamped && error < 1.5))
+        {
+            std::cout << "✅ PASS";
+            if (isClamped)
+                std::cout << " (edge case at 80m cap)";
+            std::cout << std::endl;
+        }
+        else
+        {
+            std::cout << "❌ FAIL" << std::endl;
+            allPassed = false;
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << std::string(80, '=') << std::endl;
+
+    if (!allPassed)
+    {
+        std::cerr << "❌ VALIDATION FAILED - FIX CalculateDistanceForSnr() BEFORE CONTINUING!"
+                  << std::endl;
+        return 1;
+    }
+
+    std::cout << "✅ ALL VALIDATION TESTS PASSED - PROCEEDING WITH BENCHMARK" << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
+    // ============================================================================
+    // Generate test scenarios (now no name collision)
+    // ============================================================================
+
     PerformanceBasedParameterGenerator generator;
-    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(350);
+    std::vector<ScenarioParams> testCases = generator.GenerateStratifiedScenarios(700);
 
     std::cout << "\n📊 Generated " << testCases.size() << " performance-based scenarios"
               << std::endl;
